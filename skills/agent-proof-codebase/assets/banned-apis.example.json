@@ -1,0 +1,14 @@
+{
+  "rules": [
+    {
+      "paths": ["lib/core/*", "src/domain/*", "src/core/*"],
+      "forbid": [
+        "DateTime\\.now", "\\bRandom\\(", "Date\\.now", "new Date\\(\\)", "Math\\.random",
+        "time\\.time\\(", "datetime\\.now", "random\\.random", "System\\.currentTimeMillis",
+        "SystemTime::now", "Instant::now", "time\\.Now\\(", "rand\\.Intn",
+        "import .*dart:io", "import .*package:flutter", "import .*sqflite", "require\\(['\"]fs['\"]\\)"
+      ],
+      "why": "the core must be pure and deterministic: inject Clock, Random and Storage"
+    }
+  ]
+}

@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# Single entry point for every gate. CI and agents both call this, so each gate has exactly one definition.
+# Copy to scripts/gates.sh, replace every `TODO(adapt)`, keep it fast at low tiers.
+#   ./scripts/gates.sh t0   # seconds: format, lint, types, banned APIs
+#   ./scripts/gates.sh t1   # minutes: + tests, properties, spec traceability, referee checks
+#   ./scripts/gates.sh t2   # + diff-scoped mutation, fail-to-pass (set CLASS=bugfix), ratchets
+set -euo pipefail
+TIER="${1:-t1}"
+BASE="${BASE_REF:-origin/main}"
+SEED="${SEED:-$RANDOM$RANDOM}"
+export GATE_SEED="$SEED"                # tests must read this seed and print it on failure
+here="$(cd "$(dirname "$0")" && pwd)"
+
+step() { printf '\n== %s ==\n' "$*"; }
+fail() { printf '\nFAIL %s\n' "$*" >&2; exit 1; }
+
+# ---- t0 ---------------------------------------------------------------------------------
+step "G01 format + lint + strict types"
+# TODO(adapt): e.g. dart analyze --fatal-infos | tsc --noEmit && eslint . | ruff check . && mypy . | cargo clippy -- -D warnings
+true
+
+step "G03 banned APIs in core"
+python3 "$here/banned_apis_check.py" --config .gates/banned-apis.json || fail "G03 banned APIs"
+
+[[ "$TIER" == "t0" ]] && { echo "t0 ok"; exit 0; }
+
+# ---- t1 ---------------------------------------------------------------------------------
+step "G07 protected paths"
+python3 "$here/protected_paths_check.py" --base "$BASE" ${APPROVED:+--approved} || fail "G07 protected paths (referee edited)"
+
+step "G08 test-weakening tripwire"
+python3 "$here/test_weakening_check.py" --base "$BASE" || fail "G08 test weakening"
+
+step "G04 unit + property tests (seed $SEED)"
+# TODO(adapt): run the suite; print the seed on failure, e.g. SEED=$SEED <test command>
+true
+
+step "G05 spec traceability"
+python3 "$here/spec_trace_check.py" --spec SPEC.md --tests test || fail "G05 spec traceability"
+
+[[ "$TIER" == "t1" ]] && { echo "t1 ok (seed $SEED)"; exit 0; }
+
+# ---- t2 ---------------------------------------------------------------------------------
+step "G06 diff-scoped mutation"
+# TODO(adapt): mutate only changed lines; fail on surviving non-equivalent mutants.
+# No mature tool? use: python3 "$here/manual_mutation_runner.py" --mutants .gates/mutants.json --test-cmd "<test cmd>"
+true
+
+if [[ "${CLASS:-}" == "bugfix" ]]; then
+  step "G09 fail-to-pass"
+  bash "$here/fail_to_pass_check.sh" "$BASE" "TODO(adapt) test command" || fail "G09 fail-to-pass"
+fi
+
+step "G10 ratchets"
+# TODO(adapt): produce metrics.json (coverage, mutation score, size, benchmarks), then:
+# python3 "$here/ratchet_check.py" --baseline .gates/ratchet-baseline.json --current metrics.json || fail "G10 ratchet"
+true
+
+echo "t2 ok (seed $SEED)"

@@ -1,0 +1,98 @@
+# Tiered, hermetic gate pipeline skeleton. Replace every `TODO(adapt)` with your stack's commands.
+# Principles: cheap gates first; referee scripts come from the TRUSTED base checkout, not the PR;
+# pin third-party actions by commit SHA in real use; never use pull_request_target to run PR code.
+name: gates
+on:
+  pull_request:
+  schedule:
+    - cron: "0 3 * * *"   # nightly deep tier
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gates-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fast:
+    name: T1 fast gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: pr
+          fetch-depth: 0
+      - uses: actions/checkout@v4          # trusted copy of the referee scripts from the base branch
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          path: trusted
+      - name: Protected paths (referee edits need human approval)
+        if: github.event_name == 'pull_request'
+        working-directory: pr
+        run: |
+          python3 ../trusted/scripts/protected_paths_check.py \
+            --base origin/${{ github.base_ref }} --patterns ../trusted/.gates/protected-paths.txt
+      - name: Test-weakening tripwire
+        if: github.event_name == 'pull_request'
+        working-directory: pr
+        run: python3 ../trusted/scripts/test_weakening_check.py --base origin/${{ github.base_ref }}
+      - name: Banned APIs in core
+        working-directory: pr
+        run: python3 ../trusted/scripts/banned_apis_check.py --config ../trusted/.gates/banned-apis.json
+      - name: Format, lint, strict types
+        working-directory: pr
+        run: echo "TODO(adapt)"          # e.g. dart analyze / tsc --noEmit + eslint / ruff + mypy / cargo clippy
+      - name: Unit and property tests (seed is logged on failure)
+        working-directory: pr
+        run: |
+          echo "TODO(adapt)"
+      - name: Spec traceability
+        working-directory: pr
+        run: python3 ../trusted/scripts/spec_trace_check.py --spec SPEC.md --tests test
+
+  deep:
+    name: T2 deep gates
+    needs: fast
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: pr
+          fetch-depth: 0
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: trusted
+      - name: Fail-to-pass (bugfix PRs only)
+        if: contains(github.event.pull_request.labels.*.name, 'class:bugfix')
+        working-directory: pr
+        run: bash ../trusted/scripts/fail_to_pass_check.sh origin/${{ github.base_ref }} "echo TODO(adapt test command)"
+      - name: Diff-scoped mutation testing
+        working-directory: pr
+        run: |
+          echo "TODO(adapt): mutate only changed lines; fail on surviving mutants"
+      - name: Metrics and ratchets
+        working-directory: pr
+        run: |
+          echo "TODO(adapt): write metrics.json (coverage, mutation score, size, bench numbers)"
+          # python3 ../trusted/scripts/ratchet_check.py --baseline ../trusted/.gates/ratchet-baseline.json --current metrics.json
+
+  nightly:
+    name: T3 nightly deep soak
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - name: Full mutation, long fuzz, simulation soak, crash-consistency
+        run: |
+          echo "TODO(adapt)"
+      - name: Red-team corpus recall
+        run: python3 scripts/redteam_runner.py --gate-cmd "./scripts/gates.sh t1"
+      - name: Dependency and secret scans
+        run: |
+          echo "TODO(adapt): osv-scanner / gitleaks / ecosystem audit"

@@ -1,0 +1,13 @@
+{
+  "metrics": {
+    "branch_coverage_core": {"value": 0.85, "direction": "higher_is_better", "tolerance": 0.0},
+    "mutation_score_core": {"value": 0.70, "direction": "higher_is_better", "tolerance": 0.0},
+    "analyzer_warnings": {"value": 0, "direction": "lower_is_better", "tolerance": 0},
+    "lint_suppressions": {"value": 12, "direction": "lower_is_better", "tolerance": 0},
+    "core_loc": {"value": 9000, "direction": "lower_is_better", "tolerance": 0},
+    "direct_dependencies": {"value": 24, "direction": "lower_is_better", "tolerance": 0},
+    "artifact_size_bytes": {"value": 31000000, "direction": "lower_is_better", "tolerance": 100000},
+    "bench_queue_build_p95_ms": {"value": 18.0, "direction": "lower_is_better", "tolerance": 1.5},
+    "bench_peak_rss_mb": {"value": 140, "direction": "lower_is_better", "tolerance": 5}
+  }
+}

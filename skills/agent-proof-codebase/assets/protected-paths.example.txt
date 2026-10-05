@@ -1,0 +1,15 @@
+# One fnmatch glob per line. '*' crosses '/'. Copy to .gates/protected-paths.txt
+SPEC.md
+GATES.md
+CODEOWNERS
+.gates/*
+redteam/*
+scripts/*
+.github/*
+AGENTS.md
+CLAUDE.md
+analysis_options.yaml
+tsconfig*.json
+pyproject.toml
+stryker.conf*
+test/fixtures/frozen/*

@@ -1,0 +1,20 @@
+# The referee: changes here need a human owner's approval, no exceptions.
+# Replace @your-handle with real maintainers. Keep this file itself protected.
+/CODEOWNERS                 @your-handle
+/SPEC.md                    @your-handle
+/GATES.md                   @your-handle
+/.gates/                    @your-handle
+/redteam/                   @your-handle
+/scripts/                   @your-handle
+/.github/                   @your-handle
+/AGENTS.md                  @your-handle
+/CLAUDE.md                  @your-handle
+# Tooling configs that define what "passing" means
+/analysis_options.yaml      @your-handle
+/tsconfig*.json             @your-handle
+/pyproject.toml             @your-handle
+/Cargo.toml                 @your-handle
+/.eslintrc*                 @your-handle
+/stryker.conf*              @your-handle
+# Frozen fixtures used by migration/golden tests
+/test/fixtures/frozen/      @your-handle
