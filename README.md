@@ -21,7 +21,6 @@ Or copy the folder you want into wherever your agent reads skills from
 |---|---|
 | **[mobile-app-to-web-demo](./skills/mobile-app-to-web-demo/SKILL.md)** | Putting a real mobile app into a web page as an interactive demo — and specifically when someone says the demo "doesn't look like the app" |
 | **[agent-proof-codebase](./skills/agent-proof-codebase/SKILL.md)** | Hardening a repo so an accepted change is high-signal: invariant specs, tests that can actually fail, mutation testing, ratchets, protected referee files |
-| **[cliproxy-integration](./skills/cliproxy-integration/SKILL.md)** | Wiring an OpenAI-compatible gateway (CLIProxyAPI / OmniRoute / any `/v1`) into OpenCode or Codex, and diagnosing the errors that block model selection |
 
 ## What the first two have in common
 
@@ -49,11 +48,6 @@ skills/
     references/   # one file per concern, loaded on demand
     scripts/      # assess_repo.py, ratchet/mutation/protected-path checks
     assets/       # templates to copy, not rewrite
-  cliproxy-integration/
-    SKILL.md
-    references/   # one file per failure class
-    scripts/
-    FIELD-NOTES.md, TROUBLESHOOTING.md
 ```
 
 References are split out so a model loads one concern when it reaches that step,
@@ -61,9 +55,15 @@ instead of carrying every detail in the entrypoint.
 
 ## History
 
-These were separate repositories, one skill each. Consolidating them means one
-place to install from and one place to keep consistent — a skill repo per skill
-scales badly past a handful.
+These were separate repositories, one skill each. Consolidating open skills into
+one means a single place to install from and a single place to keep conventions
+consistent — a repo per skill does not scale past a handful.
+
+Skills that stay private keep their own repo. Nothing is duplicated here, so
+there is no second copy to drift and no visibility change nobody asked for.
+
+Skills that stay private keep their own repo. Nothing is duplicated here, so
+there is no second copy to drift and no visibility change nobody asked for.
 
 ## Licence
 
