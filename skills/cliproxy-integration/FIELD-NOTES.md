@@ -127,6 +127,57 @@ rejected. The symptom pointed at the VPN; the cause was a DNS config file.
 service reports "no network", read its logs for the actual parse error rather than the summary
 status. And any fix applied to an auto-generated file needs a durable variant, or it silently
 reverts on the next renewal.
+## Snapshot before you edit, or you cannot diff
+
+A catalog comparison after adding two models reported `+3`, then `+5 / -2` — both wrong.
+The "before" list had been retyped from earlier output instead of being captured to a file.
+Recovering took a second copy of the gateway on another port with a patched config and a
+copied auth directory, launched purely to produce a trustworthy baseline: eight calls to
+answer a question one `curl > file` before the first edit would have answered for free.
+
+The instinct to build the control was sound — a measured delta beats a remembered one.
+The timing was not. It came *after* the edit, when the only way to recover the prior state
+was to reconstruct it, and reconstruction is where the error entered.
+
+Two more costs in the same session, both from not using what was already there:
+
+- The skill shipped `probe-models.sh` for list-and-probe in one call. Hand-rolled `curl`
+  loops duplicated it at both hops.
+- `yq` wasn't installed and Python had no `yaml`. Both were invoked before a `command -v`
+  check, costing a failed call each, then a detour to extract a YAML line as JSON to
+  validate it with `jq`.
+
+**Rules:** capture `/v1/models` to a file *before* the first edit — a diff needs two real
+snapshots, and one of them is destroyed by the act of working. Run the scripts the skill
+ships rather than re-deriving them; they exist because the derivation has already been
+paid for. Check `command -v` before reaching for a non-POSIX tool.
+
+A related near-miss: a `jq` program appeared broken, producing empty output. The program
+was fine — the fixture it was tested against was a zero-byte file, because the command
+meant to create it had failed silently upstream. Debugging the tool instead of the input
+cost several calls. **Check the input is non-empty before debugging the tool.**
+
+## Display names are the one safe place to be generous
+
+Fifteen models in a picker, most sharing a vendor name and a version number. The
+distinguishing question isn't which provider serves them — the provider block says that —
+it's how much context each gets before compaction.
+
+A `_1M` suffix answers it in two characters, and it is safe precisely because `name` is
+display-only. The model **key** is the wire format; the name is what gets drawn. Editing
+one cannot break routing, editing the other can. That asymmetry belongs in the config,
+because the two fields sit adjacent and invite the same careless treatment.
+
+Proof that a rename stayed cosmetic is cheap: diff the config twice with `.name` stripped
+from both sides. Identical means only labels moved. `label-models.py` bakes that assertion
+into the script so it can't be skipped by accident.
+
+Two details needed deciding rather than deriving. Rounding to 2 significant digits means
+1000000 and 1048576 both read `1M` — the gateway doesn't distinguish them and the label
+shouldn't imply it does. And five entries had no `name` field at all, so the picker fell
+back to the model key; labelling the key was right, inventing marketing names for models
+nothing was known about would not be.
+
 ## Assert on artifacts, not on return values
 
 A config-writing function reported success while never saving the file. The message said

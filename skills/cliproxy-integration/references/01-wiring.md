@@ -65,6 +65,37 @@ A model works end-to-end only when both sides carry the identical ID. "It's in t
 but not in `/model`" means step 2 is missing. "It's in `/model` but errors" means step 1
 is missing or wrong. Diagnose which side is absent before touching either file.
 
+## `name` is the display, the key is the wire
+
+Inside a model entry the two fields have opposite risk profiles, and they sit adjacent
+enough to invite the same treatment:
+
+```jsonc
+"tokenharbor/deepseek-v4-flash:free": {     // key: sent to the gateway. Verbatim upstream ID.
+  "name": "TokenHarbor DeepSeek V4 Flash Free_1M",  // name: drawn in the picker. Cosmetic.
+  "limit": { "context": 1000000, "output": 384000 }
+}
+```
+
+Rewrite the `name` freely — append a context label, drop a redundant vendor prefix, fix a
+typo. Nothing about routing depends on it. **Never rewrite the key to match a rename**; the
+key is the wire format and a changed key is a `model_not_found` at the gateway.
+
+`name` is also optional. When it's absent the picker falls back to the model key, so an
+entry can look unlabelled while being perfectly valid. When adding a label to such an entry,
+label the key rather than inventing a display name for a model whose upstream name you
+don't know.
+
+To prove a batch of renames stayed cosmetic, diff the config against itself with `name`
+removed from both sides:
+
+```bash
+strip() { jq -S 'walk(if type=="object" then del(.name) else . end)' "$1"; }
+diff <(strip before.json) <(strip after.json)   # empty output: only labels moved
+```
+
+`scripts/label-models.py` does the labelling and runs this assertion itself.
+
 ## The slash trap — read this twice
 
 OpenCode splits the full model ID at the **first** slash: provider before, model after.

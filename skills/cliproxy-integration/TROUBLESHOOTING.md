@@ -15,6 +15,9 @@ carry the full reasoning.
 | `model_not_found` after a base-url change | `base-url` already contains the path the gateway appends (doubled URL in gateway log) | use the upstream root as `base-url`; an empty-keys group's `base-url` is not evidence |
 | Probe returns `content: null` + `finish_reason: max_tokens` | budget truncated a thinking model — inconclusive, not failure | re-probe with `max_tokens` 30–100; parse full JSON, never truncate before parsing |
 | Models appear twice | `prefix` **and** `alias` both set | use one; `alias` alone for a custom name |
+| Model errors after you "just renamed it" | you changed the model key, not `name` | keys are the wire format and must stay the verbatim upstream ID; only `name` is cosmetic (see wiring ref) |
+| Picker entry shows a raw model ID like `gemini-3.8-flash` | that entry has no `name` field | harmless — the picker falls back to the key; `label-models.py` labels the key |
+| Catalog delta after an edit looks wrong (`+3` for 2 models) | the "before" list was reconstructed, not captured | `curl … /v1/models > before.txt` *before* editing; never retype it from memory |
 | One provider works, sibling provider empty | API-key groups need an explicit `models:` list | enumerate IDs; no auto-discovery exists for them |
 
 ## Namespacing by upstream (`provider/source/model`)

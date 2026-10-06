@@ -1,6 +1,6 @@
 ---
 name: cliproxy-integration
-version: 1.2.3
+version: 1.3.0
 description: Wire an OpenAI-compatible AI gateway (CLIProxyAPI / OmniRoute / any /v1 gateway) into OpenCode and Codex CLI correctly - discover real model IDs instead of guessing, register providers that resolve, source model limits instead of inventing them, attribute models to their upstream, and diagnose the gateway errors that block model selection. Use whenever someone asks to add models to OpenCode, connect OpenCode or Codex to a gateway/proxy/relay, fix "unknown provider for model", "model_not_found", 401/403 from an upstream gateway, missing models in the /model picker, wrong context/output limits, model routing or credential-pool behaviour, quota/429 exhaustion on pooled accounts, or WARP/proxy egress setup for API traffic.
 ---
 
@@ -118,6 +118,40 @@ cap is the one that matters: it becomes max tokens upstream, so it directly cont
 TPM burn and 429 frequency. Differentiate free from premium per provider, never
 blanket-wide.
 
+### 3b. Label display names with the context window
+
+**Do this by default.** A picker listing fifteen models is a wall of similar strings; the
+question you actually have is "how much context before this compacts?". A two-character
+suffix answers it without a trip to the config file:
+
+```
+AgentRouter Claude Opus 5_1M
+CodeCraft GPT-5.6 Sol_1.1M
+Antigravity Claude Sonnet 4.6_1M
+```
+
+```bash
+scripts/label-models.py --provider cliproxy            # writes
+scripts/label-models.py --provider cliproxy --dry-run  # preview
+```
+
+2 significant digits, trailing `.0` stripped: 1000000 and 1048576 both read `1M` rather
+than implying precision the gateway never claimed. Run it after `sync-limits.py`, and
+re-run it freely — it strips a prior label before re-applying, so a limit change yields
+`_1.1M`, never `_1M_1.1M`.
+
+**The `name` field is display-only; the model key is the wire format.** Renaming is safe,
+rewriting a key is not — the key is what the gateway receives. `label-models.py` only ever
+touches `name`, and a diff with the names stripped proves it:
+
+```bash
+diff <(jq -S 'walk(if type=="object" then del(.name) else . end)' before.json) \
+     <(jq -S 'walk(if type=="object" then del(.name) else . end)' after.json)
+```
+
+Some entries have no `name` at all, in which case the picker falls back to the model key.
+Label the key — don't invent a marketing name for a model you know nothing about.
+
 ### 4. Verify — the part everyone skips
 
 For **each** model: a completion through the gateway (`max_tokens` 30–100, see rule 4 for
@@ -173,6 +207,8 @@ logs already answer — that path costs turns and produces weaker evidence.
   Use for discovery when `/v1/models` is unavailable, and after every config change.
 - `scripts/sync-limits.py` — re-source `limit.context` / `limit.output` from a live gateway
   into an OpenCode config. Idempotent; touches only limits; never adds or removes models.
+- `scripts/label-models.py` — append a compact context label (`_1M`) to display names.
+  Idempotent; touches only `name`; never touches keys or limits. Run after `sync-limits.py`.
 - `scripts/onboard-keys.py` — onboard a messy file of API keys: validates each key, keeps
   only the working ones, writes a provider group, registers models in the client, backs up
   both files. Dry-run by default. See `references/06-key-dump-onboarding.md`.
@@ -184,5 +220,5 @@ to check:
 
 | The user says | Do this |
 | --- | --- |
-| "here's a gateway URL and key, add models X and Y" | `probe-models.sh` to confirm X and Y answer → add the provider block (both twins) → `sync-limits.py` if limits are published |
+| "here's a gateway URL and key, add models X and Y" | `probe-models.sh` to confirm X and Y answer → add the provider block (both twins) → `sync-limits.py` if limits are published → `label-models.py` |
 | "here's a file of 100 keys, some dead, add model Z" | `onboard-keys.py --keys-file … --model Z` (dry run first) |
