@@ -119,6 +119,70 @@ Copy from `assets/` rather than writing from scratch: `SPEC.template.md`,
 `banned-apis.example.json`, `redteam-case.template.md`,
 `PULL_REQUEST_TEMPLATE.md`, `CODEOWNERS.example`, `AGENTS.snippet.md`.
 
+## Quick reference
+
+**Evidence by change class**
+
+| Class | Proof CI must verify |
+|---|---|
+| bugfix | test fails on base code, passes on change (`scripts/fail_to_pass_check.sh`, use `EXPECT_PATTERN`) |
+| perf | before/after beyond noise + differential test vs old implementation |
+| refactor | no test files edited, mutation score not lower, equivalence evidence |
+| feature | spec updated first, properties for new invariants |
+| test-only | kills a named survivor or raises a ratchet |
+| dependency | written reason, scan, size/startup delta |
+| gate-change / spec-change | separate PR, human approval, red-team recall not reduced |
+
+**Gate tiers:** T0 seconds (format, lint, types, banned APIs) | T1 minutes (tests, properties, traceability, referee checks)
+| T2 tens of minutes (diff-scoped mutation, fail-to-pass, perf, migrations) | T3 nightly (full mutation, fuzz, simulation,
+red-team recall, audits) | T4 release (real devices, upgrade-from-every-version).
+
+**Tests that can fail:** property (laws, not examples), model-based (simple reference model in lockstep), differential
+(independent oracle), round trip, crash-consistency (fail at every write boundary, reopen, check invariants), fuzz, simulation.
+
+## Bundled scripts (Python 3 standard library or bash; each script documents its options in its header)
+
+| Script | Purpose |
+|---|---|
+| `scripts/assess_repo.py` | Fast repo scan and suggested gate maturity (L0 to L5) |
+| `scripts/protected_paths_check.py` | Fail when referee files change without human approval |
+| `scripts/test_weakening_check.py` | Tripwire for removed assertions, new skips and suppressions |
+| `scripts/fail_to_pass_check.sh` | Prove a bug-fix test fails on old code and passes on the fix |
+| `scripts/ratchet_check.py` | Monotone metrics against a committed baseline (tighten only) |
+| `scripts/spec_trace_check.py` | Every INV in SPEC.md has a test, and tests cite only real INVs |
+| `scripts/banned_apis_check.py` | Keep clocks, randomness, I/O and UI imports out of the pure core |
+| `scripts/manual_mutation_runner.py` | Hand-picked mutants when no mature mutation tool exists |
+| `scripts/redteam_runner.py` | Run the red-team corpus against the gates and report recall |
+
+These are building blocks. Copy the ones you need into the target repo's `scripts/` and protect that folder.
+They do not replace the project's own linters, test runners or mutation tools (`references/13-ecosystem-map.md`).
+
+## Reference index (read when you reach that step)
+
+| File | Read when |
+|---|---|
+| `01-principles-and-threat-model.md` | You need the why, the gaming-pattern catalogue (G1 to G20), or must explain limits to the user |
+| `02-assess-and-plan.md` | Orienting, tiering risk, planning phases, retrofitting legacy code, scaling to project size |
+| `03-spec-and-invariants.md` | Writing or reviewing SPEC.md, mining invariants, traceability |
+| `04-testable-architecture.md` | Carving the pure core, determinism seams, storage/migration design, enforcement |
+| `05-test-strategies.md` | Choosing and writing property/model/differential/crash tests; grading existing tests |
+| `06-mutation-testing.md` | Adopting mutation testing, triaging survivors, using it to drive agent test-writing |
+| `07-evidence-contract.md` | Defining PR classes and the proof each needs; reviewing PRs |
+| `08-ratchets-and-budgets.md` | Baselines, performance measurement method, synthetic datasets, size/dependency budgets |
+| `09-protect-the-referee.md` | CODEOWNERS, protected paths, hermetic CI, agent boundaries, gate-change process |
+| `10-ci-and-feedback.md` | Tiering CI, flakiness policy, writing failure output agents can act on, health metrics |
+| `11-red-team-corpus.md` | Building the corpus, gate-breaker sessions, recall tracking |
+| `12-contributor-protocol.md` | Working inside a gated repo (mode C); reporting honestly |
+| `13-ecosystem-map.md` | Picking tools per language and platform |
+
+## Honest limits (tell the user)
+
+Gates verify conformance to the spec, not the truth of the spec; the spec stays human-owned. Agents will optimize
+any visible metric, so use several independent signals and keep growing the red-team corpus. Over-tight gates stall
+legitimate work, so start ratchets at today's values. Taste and product judgment are not gateable. Gate maintenance is
+real work; budget for it and delete gates that stop paying. Where proofs of optimality are impossible (for example
+empirically fitted models), prove invariants and measure calibration instead, and do not claim more than you verified.
+
 ## Why these gates exist
 
 The failure mode they target is specific: an agent that optimises the reward it can

@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.zip
+
+# local gate artifacts produced when the scripts are run inside a target repo
+.gates/runs/
+.gates/mutations/
