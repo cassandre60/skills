@@ -1,0 +1,32 @@
+# Verifies every skill in this repo is internally consistent.
+#
+# This repo's entire value is that its skills stay correct: a skill that points at
+# a file which does not exist, or whose frontmatter name disagrees with its
+# folder, fails silently for whoever installs it. Hand-checking found a real break
+# once already, which is why it is a workflow.
+name: Check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate the skills
+        run: python3 scripts/check_skills.py
+
+      - name: No credential-shaped strings are committed
+        run: python3 scripts/check_secrets.py

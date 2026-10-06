@@ -216,7 +216,7 @@ ships stale screenshots.
     git clone --depth 1 --branch $APP_BRANCH \
       "https://x-access-token:${{ secrets.APP_TOKEN }}@github.com/${{ vars.APP_REPO }}.git" ../app
     ( cd ../app && <install> && <codegen> )     # generated sources are gitignored
-    sh scripts/build-demo.sh --app ../app
+    sh <path-to-build-demo.sh> --app ../app
 ```
 
 Gotchas, each of which cost a failed deploy:
