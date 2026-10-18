@@ -20,6 +20,12 @@ carry the full reasoning.
 | Catalog delta after an edit looks wrong (`+3` for 2 models) | the "before" list was reconstructed, not captured | `curl … /v1/models > before.txt` *before* editing; never retype it from memory |
 | One provider works, sibling provider empty | API-key groups need an explicit `models:` list | enumerate IDs; no auto-discovery exists for them |
 
+## Streaming assertion / chunk misordering
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| `OpenAI Chat received content after the finish reason` | Upstream relay emits `finish_reason: "stop"` before trailing text deltas finish flushing (buffer race) | Switch CLIProxyAPI upstream to `claude:` protocol (`/v1/messages`). Most multi-protocol relays have clean Anthropic streams; CLIProxyAPI re-serializes the stream strictly in order for OpenCode. |
+
 ## Namespacing by upstream (`provider/source/model`)
 
 The gateway sees `source/model` and treats `source` as a credential prefix. To namespace:

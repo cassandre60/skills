@@ -228,3 +228,41 @@ picker). Check the conflict surface before adopting one:
   auditing a picker.
 
 Read the plugin's source before trusting its claims; these are small enough to read.
+
+## Relay streaming protocol substitution (`openai-compatibility` vs `claude`)
+
+Many third-party AI gateways and relay vendors natively speak the Anthropic wire protocol
+(`/v1/messages`) and provide an OpenAI compatibility layer (`/v1/chat/completions`) as an
+afterthought.
+
+A common failure mode in these secondary OpenAI translation layers is an **asynchronous buffer flush race**:
+the relay signals a terminal choice (`{"finish_reason": "stop"}` + usage stats) while a few
+remaining output tokens are still buffered in its pipeline, flushing the trailing text delta
+in a subsequent SSE chunk immediately after the finish chunk.
+
+OpenCode's OpenAI stream consumer enforces strict completion state: receiving any content delta
+after a non-empty `finish_reason` raises:
+```
+Error: OpenAI Chat received content after the finish reason
+```
+
+### The Fix
+Do not attempt to modify OpenCode or write a proxy if the relay also exposes `/v1/messages`.
+Instead, switch CLIProxyAPI's upstream provider from `openai-compatibility` to `claude`:
+
+```yaml
+api-keys:
+  claude:
+    - name: "vendor-claude-gateway"
+      base-url: "https://relay.example.com"  # note: root URL; CLIProxyAPI appends /v1/messages
+      keys:
+        - api-key: "sk-..."
+      models:
+        - name: "upstream-model-name"
+          alias: "vendor/upstream-model-name"
+```
+
+CLIProxyAPI's internal Anthropic-to-OpenAI translator consumes the relay's native Anthropic stream
+and re-emits a spec-compliant OpenAI SSE stream to OpenCode:
+`content deltas` → `finish_reason` → `usage` → `[DONE]`. OpenCode's client configuration, model
+aliases, and rotation pools remain unchanged.
