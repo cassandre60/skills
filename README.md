@@ -59,8 +59,8 @@ skills/
     LICENSE
     README.md
     assets/     # 5 files
-    references/ # 6 files
-    scripts/    # 3 files
+    references/ # 7 files
+    scripts/    # 6 files
   cliproxy-integration/
     SKILL.md
     FIELD-NOTES.md

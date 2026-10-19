@@ -40,6 +40,10 @@ Adapters per stack are in the SKILL.md Stack Adapters table.
 | feature | Spec updated first in a spec-change PR; properties for new invariants |
 | gate/spec-change | Separate PR, human approval, red-team recall not reduced |
 
+Every proof is base-relative: record the full sha of the base the red/green pair ran
+against, and re-run it on fresh `origin/main` if main moved since (Reference 07). A
+proof against a base nobody will merge is not evidence.
+
 ## Roles
 
 - **Breaker:** Never patches `lib/`/`src/`. Produces an Issue with a failing test + invariant citation.

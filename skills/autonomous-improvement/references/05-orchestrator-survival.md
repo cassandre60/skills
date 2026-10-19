@@ -80,6 +80,9 @@ mid-flight queue behind the current turn).
 
 - Health check = worktree forensics only: dirty files present (working), local
   commits appearing (checkpointing), nothing for >3h (suspect; see below).
+- If tabs are in flight, one `git ls-remote` per wake compares main against each tab's
+  recorded base (Reference 07) — cheap, no interruption; it tells the sentinel a premise
+  recheck will be due at completion.
 - Orchestration sizing keeps the total turn budget dominated by wake handlers and
   sentinel reviews, not by polling.
 

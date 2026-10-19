@@ -89,6 +89,8 @@ at merge). Instruct workers:
 
 ## Sentinel-review checklist (per worker PR)
 
+0. Fresh fetch + premise recheck on current origin/main first (Reference 07) — a premise
+   that died mid-flight turns the review into a supersede-and-close, not a polish.
 1. Files touched == the ownership map grant (no `lib/` for Breakers, no generated
    files staged, `lib/l10n/**` never, protected referee files only with a documented
    gate-change class).

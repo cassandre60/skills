@@ -191,3 +191,4 @@ Load on demand; don't carry every detail in the entrypoint.
 | `references/04-workflow-and-roles.md` | Full per-task protocol, worktree discipline, PR evidence contract |
 | `references/05-orchestrator-survival.md` | Multi-day unattended mode: the zero-pending-jobs invariant, staggered wake beats, external watchdog, throttle recovery, relaunch protocol |
 | `references/06-fleet-and-quota-operations.md` | Parallel tabs on free models: model rotation, quota-aware workers, file-ownership map, cross-fleet coexistence, attribution footers |
+| `references/07-moving-main.md` | Working on a repo that keeps merging: per-wake drift checks, the completion-gate premise recheck, base-relative audits, merge-wave measurement traps |
