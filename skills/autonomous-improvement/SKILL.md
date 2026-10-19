@@ -123,7 +123,7 @@ For multi-day runs on free models, an orchestrator keeps itself alive with three
 detailed in **Reference 05**: (1) a staggered grid of background `sleep` beats armed
 *first* in every turn (they burn no quota, so a frozen turn cannot take the wake chain
 down); (2) an out-of-session watchdog (systemd `--user` timer, `assets/watchdog.sh`)
-that nudges a stale session headlessly via `opencode run -s <sessionID>`; (3) a
+that nudges a stale session headlessly via `opencode run --auto -s <sessionID>`; (3) a
 quota-aware worker protocol (Reference 06): local progress commits, PARTIAL PRs instead
 of silent death, explicit scope ceilings. Running tabs are never reprompted mid-flight;
 their health is checked via worktree forensics only. Workers create PRs and issues but

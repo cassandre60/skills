@@ -36,7 +36,7 @@ if pgrep -f "opencode" >/dev/null 2>&1; then
     if [ "$AGE" -gt "$MAX_AGE" ]; then
       echo "$(date -Is) stale heartbeat (${AGE}s) -> headless nudge to $SID" >> "$LOG"
       touch "$HB"
-      opencode run -s "$SID" "$NUDGE_MSG" >> "$LOG" 2>&1
+      opencode run --auto -s "$SID" "$NUDGE_MSG" >> "$LOG" 2>&1
     fi
   else
     echo "heartbeat missing; process alive; creating it" >> "$LOG"
@@ -45,5 +45,5 @@ if pgrep -f "opencode" >/dev/null 2>&1; then
 else
   echo "$(date -Is) opencode process DEAD -> headless revive of $SID" >> "$LOG"
   touch "$HB"
-  setsid nohup opencode run -s "$SID" "$NUDGE_MSG" >> "$LOG" 2>&1 &
+  setsid nohup opencode run --auto -s "$SID" "$NUDGE_MSG" >> "$LOG" 2>&1 &
 fi
