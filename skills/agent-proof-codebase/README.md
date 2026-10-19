@@ -5,10 +5,10 @@ change high-signal, even when written by weak or sloppy agents. Entry point: `SK
 
 ## Install
 
-From the consolidated [`mansourvery-hub/skills`](https://github.com/mansourvery-hub/skills) repo:
+From the consolidated [`cassandre60/skills`](https://github.com/cassandre60/skills) repo:
 
 ```sh
-npx skills@latest add mansourvery-hub/skills
+npx skills@latest add cassandre60/skills
 ```
 
 Or copy this folder into wherever your agent reads skills from (folder name must stay `agent-proof-codebase`):
