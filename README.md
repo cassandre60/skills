@@ -72,8 +72,8 @@ skills/
     SKILL.md
     LICENSE
     README.md
-    assets/     # 1 file
-    scripts/    # 1 file
+    assets/  # 1 file
+    scripts/ # 1 file
   mobile-app-to-web-demo/
     SKILL.md
 ```
