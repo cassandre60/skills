@@ -117,6 +117,18 @@ For teams running multiple agents, the ledger and worktrees act as the message b
 - **Builder:** Isolated worktree, proves red on `origin/main`, minimal fix, `gates.sh t1`, gated PR.
 - **Sentinel:** Read-only diff + CI inspection — no protected-file edits, no weakened tests, no fake abstractions.
 
+## Unattended operation (owner away)
+
+For multi-day runs on free models, an orchestrator keeps itself alive with three layers —
+detailed in **Reference 05**: (1) a staggered grid of background `sleep` beats armed
+*first* in every turn (they burn no quota, so a frozen turn cannot take the wake chain
+down); (2) an out-of-session watchdog (systemd `--user` timer, `assets/watchdog.sh`)
+that nudges a stale session headlessly via `opencode run -s <sessionID>`; (3) a
+quota-aware worker protocol (Reference 06): local progress commits, PARTIAL PRs instead
+of silent death, explicit scope ceilings. Running tabs are never reprompted mid-flight;
+their health is checked via worktree forensics only. Workers create PRs and issues but
+never merge — the owner's return is the merge queue.
+
 ## Work Ledger
 
 Each repo keeps `docs/AUTONOMOUS_WORK_LEDGER.md` (or equivalent) with one row per completed audit:
@@ -155,6 +167,8 @@ Copy from `assets/` and `scripts/` into the target repo; protect them with `CODE
 | `scripts/autonomous/orchestrator.py` | Worktree lifecycle + `gates.sh t1` helper |
 | `assets/AUTONOMOUS_WORK_LEDGER.template.md` | Starter ledger table |
 | `assets/protected-paths.fragment.txt` | Lines to append to a protected-paths file for these assets |
+| `assets/watchdog.sh` | Out-of-session revive loop: stale-heartbeat nudge + dead-process revival for a multi-day unattended orchestrator (see Reference 05) |
+| `assets/opencode-watchdog.service` / `assets/opencode-watchdog.timer` | systemd `--user` units that run the watchdog every 20 min |
 
 Mutations are regex-based, not AST-based. Every surviving mutant must be triaged — many are equivalent mutants or hit string literals. Promotion to a blocking gate requires two green runs without false positives on that repo.
 
@@ -175,3 +189,5 @@ Load on demand; don't carry every detail in the entrypoint.
 | `references/02-ledger-and-dedup.md` | Ledger schema, hash choice, merge contention, PR collision avoidance |
 | `references/03-streams-and-triage.md` | Deep dive on all four streams, triage checklists, promotion criteria |
 | `references/04-workflow-and-roles.md` | Full per-task protocol, worktree discipline, PR evidence contract |
+| `references/05-orchestrator-survival.md` | Multi-day unattended mode: the zero-pending-jobs invariant, staggered wake beats, external watchdog, throttle recovery, relaunch protocol |
+| `references/06-fleet-and-quota-operations.md` | Parallel tabs on free models: model rotation, quota-aware workers, file-ownership map, cross-fleet coexistence, attribution footers |

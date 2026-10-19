@@ -1,0 +1,9 @@
+[Unit]
+Description=Run the orchestrator watchdog every 20 minutes
+
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=20min
+
+[Install]
+WantedBy=timers.target

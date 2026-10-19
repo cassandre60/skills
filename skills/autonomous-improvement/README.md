@@ -47,9 +47,9 @@ Four laws: fail-to-pass, content-hash dedup, worktree isolation, machine budget.
 
 ```
 SKILL.md            laws, streams, quick start, workflow, references index
-references/         4 deep dives, read on demand
+references/         6 deep dives, read on demand
 scripts/            3 building blocks (Python stdlib only): mutation_engine, ledger, orchestrator
-assets/             ledger template + protected-paths fragment
+assets/             ledger template + protected-paths fragment + watchdog units (unattended mode)
 ```
 
 ## Why this skill exists
