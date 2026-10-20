@@ -1,6 +1,8 @@
 ---
 name: autonomous-improvement
-description: Run falsifiable, high-signal improvement cycles on a codebase instead of cosmetic churn: mutation testing to find tests that don't actually protect behavior, and adversarial audits of existing tests (vacuous assertions, flaky sleeps, over-mocking). Use when asked to "improve the repo", "audit the tests", "find weak or flaky tests", "improve test quality, not just coverage", "run mutation testing", or when "tests pass but I don't trust them" — or when an agent has spare budget and needs work that can be proven real (fails without the fix, not already done at this file's content, cheap enough to run locally). Do not use for feature work, refactors, or one-off bugfixes.
+description: Run falsifiable, high-signal improvement cycles on a codebase instead of cosmetic churn: mutation testing to find tests that don't actually protect behavior, and adversarial audits of existing tests (vacuous assertions, flaky sleeps, over-mocking). Use when asked to "improve the repo", "audit the tests", "find weak or flaky tests", "improve test quality, not just coverage", "run mutation testing", or when "tests pass but I don't trust them" — or when an agent has spare budget and needs work that can be proven real (fails without the fix, not already done at this file's content, cheap enough to run locally). Given as a session's only prompt, it turns that
+session into an orchestrator that dispatches worker subagents instead of
+building itself (references/04-workflow-and-roles.md). Do not use for feature work, refactors, or one-off bugfixes.
 ---
 
 # Autonomous Improvement
@@ -14,6 +16,14 @@ prose, or checkbox tests. Two streams are active:
 
 Each round produces at most one small, evidence-backed PR. If there is no
 falsifiable gap, stop; that is a valid result.
+
+## Who runs the round
+
+An explicit task ask runs the per-task protocol directly (`04`). When this
+skill is a session's **only** instruction, that session is the Orchestrator
+instead: it dispatches and supervises worker subagents — at most 3 at a
+time — and merges their PRs on green CI, building nothing in its own turns.
+See "Roles" in `04`; the unattended stack that keeps it alive is in `05`.
 
 ## The four laws
 
