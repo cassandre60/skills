@@ -33,12 +33,18 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
-EXIT_OK = 0
-EXIT_NEGATIVE = 1
-EXIT_USAGE = 2
-EXIT_ENV = 3
+from common import (
+    EXIT_ENV,
+    EXIT_NEGATIVE,
+    EXIT_OK,
+    EXIT_USAGE,
+    EnvError,
+    Fatal,
+    UsageError,
+    git as _git,
+)
 
 RULES_DIR = Path(__file__).resolve().parent / "mutation_rules"
 LANG_ALIASES = {
@@ -66,18 +72,6 @@ EXTENSION_LANG = {
 }
 
 _active_pgid: Optional[int] = None
-
-
-class UsageError(Exception):
-    pass
-
-
-class EnvError(Exception):
-    pass
-
-
-class Fatal(Exception):
-    pass
 
 
 @dataclass
@@ -299,18 +293,6 @@ def parse_line_filter(value: Optional[str]) -> Optional[Set[int]]:
     return lines
 
 
-def _git(args: Sequence[str], cwd: Optional[Path] = None) -> subprocess.CompletedProcess:
-    try:
-        return subprocess.run(
-            ["git"] + list(args),
-            cwd=None if cwd is None else str(cwd),
-            capture_output=True,
-            text=True,
-        )
-    except FileNotFoundError:
-        raise EnvError("required tool not found: git")
-
-
 def repo_root_for(path: Path) -> Optional[Path]:
     proc = _git(["rev-parse", "--show-toplevel"], cwd=path.parent if path.parent.exists() else Path.cwd())
     if proc.returncode != 0:
@@ -484,6 +466,8 @@ def _run_test_cmd(
         )
     except FileNotFoundError:
         raise EnvError(f"required tool not found: {argv[0]}")
+    # Assign immediately so the signal handler can kill the child's process
+    # group if SIGTERM arrives during communicate().
     _active_pgid = proc.pid
     try:
         try:
@@ -707,7 +691,10 @@ def build_parser() -> argparse.ArgumentParser:
         description="Regex-based mutation engine with per-language rule packs (triage required)"
     )
     parser.add_argument("--source", required=True, help="source file to mutate")
-    parser.add_argument("--test-cmd", required=True, help="targeted test command (parsed with shlex; no shell)")
+    parser.add_argument("--test-cmd", required=True,
+                        help="targeted test command (parsed with shlex; no shell). "
+                             "Quote inner arguments as you would in a shell: "
+                             "\"pytest -k 'test_foo and test_bar'\".")
     parser.add_argument("--lang", help="rule pack language (default: from file extension)")
     parser.add_argument("--max-mutants", type=int, default=30, help="maximum mutants to evaluate")
     parser.add_argument("--seed", type=int, default=0, help="sampling seed (recorded in JSON)")

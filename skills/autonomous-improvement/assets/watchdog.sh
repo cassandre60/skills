@@ -18,6 +18,10 @@
 # Harness-specific: the default resume command is for opencode. Read your
 # harness docs for its headless resume-session flags; do not copy these flags
 # to a different harness.
+#
+# Security note: ORCH_RESUME_CMD is passed to bash -c with SID and NUDGE_MSG
+# as positional arguments ($1, $2). Never source ORCH_RESUME_CMD or the
+# session-id file from untrusted input.
 
 set -u
 
