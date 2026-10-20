@@ -258,6 +258,24 @@ rotates the **model**, it never re-dispatches the one that just failed.
 6. **When every pool is dry**, beats alone keep the loop alive and the
    snapshot accumulator keeps the state legible; do not spin workers against
    dead pools, and do not pretend the fleet is progressing.
+7. **A dead pool is a fleet event, not a tab event.** Workers pinned to
+   different models are a good way to spread load, and they turn one pool's
+   exhaustion into a fleet-wide stop. So: **dispatch unpinned by default** — a
+   subagent inherits the session's model, and the session's pool is the one you
+   can see is alive. Pin only with a reason, and when a pinned pool dies,
+   re-dispatch that task unpinned before you call the fleet idle.
+8. **Never park a task because of a pool.** A task is either re-dispatched on
+   a live model, or reported as blocked-with-reason. "No capacity" is true
+   only when every pool is dead — and that is a statement for the owner, not
+   a reason to go quiet. A wake that ends with zero dispatched work and no
+   owner-facing explanation is a failed wake, even when every technical check
+   passes.
+9. **An exhausted target list is a signal to look wider, not to idle.** When
+   the tracked targets are all audited, the next candidates come from the code
+   that has no ledger row yet (the ledger is the registry of what has been
+   covered, so "not in the ledger" is a work list). A finite catalogue is a
+   starting point; treating it as the whole codebase is how a 24/7 fleet
+   goes quiet while the repo still has hundreds of uncovered files.
 
 On free models, a focused file conversion or a mutation shard can take 1.5–4
 hours. That is normal. Health-check by worktree forensics (dirty files, local

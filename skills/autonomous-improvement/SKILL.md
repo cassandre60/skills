@@ -44,6 +44,10 @@ text, and the Orchestrator lands the rows in one separate ledger PR per
 wave — so a protected-file gate costs one owner decision per wave, not one
 per PR.
 
+A dead pool never parks a task: the task is re-dispatched on a live model —
+the session's own, dispatched unpinned, first — and when the tracked targets
+run out, the next candidates are the files with no ledger row yet.
+
 ## The five laws
 
 | Law | Rule |
