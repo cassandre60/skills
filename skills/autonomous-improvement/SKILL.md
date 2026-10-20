@@ -39,6 +39,11 @@ diff back to green, re-asks the owner per item when a protected-path gate
 needs a label, and merges only on green **for the current head sha**. The
 loop is in "The CI green loop" in `04`.
 
+Audit-ledger bookkeeping is batched, not bundled: workers report the row
+text, and the Orchestrator lands the rows in one separate ledger PR per
+wave — so a protected-file gate costs one owner decision per wave, not one
+per PR.
+
 ## The five laws
 
 | Law | Rule |
