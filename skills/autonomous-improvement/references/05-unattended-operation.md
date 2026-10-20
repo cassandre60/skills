@@ -291,13 +291,23 @@ while the orchestrator was frozen.
 
 0. Fresh fetch + premise recheck on current `origin/main` (see
    `07-moving-main.md`). A dead premise means close/supersede, not polish.
-1. Files touched match the ownership grant. No generated files, no referee edits
+1. Checks are green **on the current head sha** — compare the sha the run
+   reported with `gh pr view <n> --json headRefOid`. A green run for an older
+   sha, or a head sha that never received a run, is not a verdict. A red check
+   inside the diff is fixed and re-pushed (see "The CI green loop" in `04`),
+   not waived.
+2. Files touched match the ownership grant. No generated files, no referee edits
    without a gate-change class.
-2. Evidence matches `04-workflow-and-roles.md`: red/green or survivor proof,
+3. Evidence matches `04-workflow-and-roles.md`: red/green or survivor proof,
    full-file result, base sha.
-3. PARTIAL is honest-but-incomplete: check the remaining count and re-dispatch.
+4. PARTIAL is honest-but-incomplete: check the remaining count and re-dispatch.
    No partial ships with a broken build or weakened assertion.
-4. For this repo's policies, footers/comments applied as required; PR left open.
+5. For this repo's policies, footers/comments applied as required; PR left open.
+
+Per-wake duty, on top of the checklist: every open PR carries a state line
+(`PR# | head sha | checks | owner-ask pending? | iterations`). A red PR is
+either being fixed, or it is an owner ask — and an owner ask is re-asked every
+wake until it is answered.
 
 ## Failure anatomy and relaunch
 

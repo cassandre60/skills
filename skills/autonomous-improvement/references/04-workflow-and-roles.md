@@ -94,9 +94,13 @@ The Orchestrator:
   model — never the provider/model that just failed — and the dead model is
   recorded on the journal's dead-pool list. When every pool is dry, it reports
   that plainly instead of spinning workers against dead pools;
-- passes each finished PR through the Sentinel check, and merges only when
-  the PR's checks are green per the repo's merge policy. Workers open PRs
-  and never merge; the merge decision stays with the orchestrator/owner.
+- **owns every PR from creation to merge**: it reads that PR's checks on every
+  wake, drives a red check that sits inside the diff back to green (re-dispatch
+  the fix to the same worker session, or to a fresh worker on a live model),
+  re-asks the owner per item when a protected-path gate needs a label, and
+  merges only when the checks are green **on the current head sha**. Workers
+  open PRs and never merge; the merge decision stays with the
+  orchestrator/owner.
 
 The three roles a worker (or a solo run) plays:
 
@@ -105,6 +109,42 @@ The three roles a worker (or a solo run) plays:
 - **Builder:** worktree-isolated, proves red/green, minimal change, gated PR.
 - **Sentinel:** read-only diff and CI inspection. Checks evidence, file
   ownership, test weakening, and scope. Does not polish.
+
+## The CI green loop
+
+A PR is not done when it is created; it is done when it is merged. The gate
+"merge only when green" is a stop sign, not a process — without a loop, PRs
+sit red and the fleet looks busy while nothing converges.
+
+1. **Worker, after opening the PR:** read the checks once
+   (`gh pr checks <n> -R <repo>`).
+   - Red for a reason *inside the diff* (test failure, formatting, analyze, a
+     weakening tripwire) → fix it, re-push, re-read the checks. Up to **two**
+     iterations.
+   - Red for a protected-path/referee gate → **stop and report it to the
+     orchestrator**. A worker never tries to make a referee gate pass.
+2. **Orchestrator, every wake:** for each open PR, read the checks.
+   - Red and fixable → dispatch the fix to the same worker session (resume it
+     by session id) or to a fresh worker on a live model, with the failing log
+     excerpt attached. The fix is a normal task: same worktree, same branch.
+   - Red on a protected-path gate → ask the owner per item **and re-ask on
+     every subsequent wake until answered**. An ask that is never repeated is
+     an ask that never lands.
+   - Green → Sentinel (evidence, ownership, no weakening) → merge.
+3. **Green means green on the head sha.** Compare the sha the run reported with
+   `gh pr view <n> --json headRefOid`. A green run for an *older* sha, or a
+   head sha that never received a run, is not a verdict — it is a different
+   commit's verdict. (Verified 2026-10-20: a PR whose head carried a second
+   commit had exactly one green run, for the first commit.)
+4. **Iteration cap:** two fix iterations, then escalate to the owner with the
+   failing log excerpt. Do not spin a third, fourth or fifth attempt.
+5. **Per-PR state line**, kept in the journal or state dir:
+   `PR# | head sha | checks | owner-ask pending? | iterations`. A frozen or
+   restarted session reads this list instead of guessing, and a PR whose line
+   says `owner-ask pending` is re-asked, not forgotten.
+6. **Nothing red goes quiet.** If a PR has been red for two wakes without an
+   owner answer, say so in the owner report — in plain terms, with what the
+   red check is and what the owner is being asked to accept.
 
 ## Git discipline
 
