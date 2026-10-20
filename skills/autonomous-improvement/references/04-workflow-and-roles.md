@@ -89,6 +89,11 @@ The Orchestrator:
   re-checks both immediately before each dispatch (main moves; see `07`);
 - dispatches at most 3 worker subagents at a time (tune to capacity), each
   running the per-task protocol above in its own isolated worktree;
+- **rotates the model pool on quota failures**: a worker that dies with a
+  rate-limit, 429 or "$0 balance" error is re-dispatched on a different live
+  model — never the provider/model that just failed — and the dead model is
+  recorded on the journal's dead-pool list. When every pool is dry, it reports
+  that plainly instead of spinning workers against dead pools;
 - passes each finished PR through the Sentinel check, and merges only when
   the PR's checks are green per the repo's merge policy. Workers open PRs
   and never merge; the merge decision stays with the orchestrator/owner.

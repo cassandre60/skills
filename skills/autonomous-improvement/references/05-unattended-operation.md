@@ -105,21 +105,41 @@ foreground path sidesteps the cgroup problem entirely.
 - `opencode_session_id` — the session to nudge.
 - `watchdog.log` — append-only log.
 - `watchdog.lock` — flock file.
+- `model_failures` — `model timestamp` per quota-failed model (cooldown list).
+- `last_nudge` — timestamp of the last nudge round (storm protection).
 
 The nudge command is `ORCH_RESUME_CMD`, a `bash` snippet where `$1` is the
-session id and `$2` the message. It is run as
-`bash -c "$ORCH_RESUME_CMD" _ "$SID" "$NUDGE_MSG"` — never via `eval` of
-interpolated user text.
+session id, `$2` the message and `$3` the model for this attempt (`""` = the
+session's default model). It is run as
+`bash -c "$ORCH_RESUME_CMD" _ "$SID" "$NUDGE_MSG" "$MODEL"` — never via `eval`
+of interpolated user text.
 
 **Default (opencode-specific):**
 
 ```sh
-opencode run --auto -s "$1" "$2"
+opencode run --auto -s "$1" ${3:+-m "$3"} "$2"
 ```
 
 `-s` continues a specific session; `--auto` avoids a headless stall on the first
 permission prompt. For another harness, read its docs for the headless
 resume-session flags and set `ORCH_RESUME_CMD`; do not copy opencode flags.
+
+### Model ladder
+
+`ORCH_MODEL_LADDER` is a space-separated list of model ids, most-preferred
+first. The watchdog walks it **within one tick**: a nudge whose output carries
+a quota/balance signature (`rate limit`, `429`, `quota`, `insufficient
+balance`, `balance is at $0`, `overloaded`) marks that model in
+`model_failures` and immediately retries the next one, up to
+`ORCH_NUDGE_MODELS` (default 3). A failed model is skipped for
+`ORCH_MODEL_COOLDOWN` seconds (default 3600). `ORCH_MIN_INTERVAL` (default
+600) is the minimum spacing between nudge rounds.
+
+Set the ladder so that **every entry has quota independent of the others**,
+and verify each is actually free before relying on it — a paid gateway with a
+$0 balance fails like an exhausted pool, just slower. An empty ladder means
+"session default only": the watchdog then cannot rotate, and a freeze on that
+model will not lift on its own.
 
 ### Install / uninstall
 
@@ -214,6 +234,31 @@ Put this in every dispatch prompt:
    with the remaining count. Never silently die.
 4. **Report quota episodes** so the orchestrator can rotate models.
 
+## Model rotation
+
+A quota error is a routing decision, not a retry decision. The orchestrator
+rotates the **model**, it never re-dispatches the one that just failed.
+
+1. **Enumerate live models** (opencode: `tools.opencode.models`). A model
+   listed as active may still be quota-exhausted — the list is a catalogue,
+   not a health check. Probe cheaply before committing a task to a pool.
+2. **Rotate on failure, not on schedule.** A worker that dies with "Rate limit
+   exceeded", a "$0 balance" gateway, or a 429 is re-dispatched immediately on
+   a different model. Prefer a different *provider* first (a different quota
+   bucket), then a different model inside the same provider.
+3. **Keep a dead-pool ledger** in the journal: model, provider, error, date.
+   Never re-pick a model from that list until it is probed alive again.
+4. **A "$0 balance" gateway is not a free pool.** A paid route with no credit
+   fails exactly like an exhausted free quota, only slower. Keep such routes
+   out of the ladder unless the owner funds them.
+5. **The resume that revives a frozen session must name a live model.** If the
+   session's default model is the one that died, the nudge is a no-op. The
+   watchdog's ladder (`ORCH_MODEL_LADDER`) exists for this: it retries the
+   next model within the same tick on a quota signature.
+6. **When every pool is dry**, beats alone keep the loop alive and the
+   snapshot accumulator keeps the state legible; do not spin workers against
+   dead pools, and do not pretend the fleet is progressing.
+
 On free models, a focused file conversion or a mutation shard can take 1.5–4
 hours. That is normal. Health-check by worktree forensics (dirty files, local
 commits, no progress for >3h), never by prompting a tab mid-flight.
@@ -279,3 +324,15 @@ When a fleet is cancelled (rate limits, harness restart):
   flush only when the pool returns (7x identical burst after a ~9 h freeze).
   Knock rate-limiting plus a tiered `-m` cross-pool fallback bound one window
   to one queued nudge and let the first open window serve the wake.
+- [2026-10-20] A nudge that resumes the session on the **same model whose quota
+  just died** is a no-op, and no amount of staleness depth fixes it: the
+  watchdog's tier-1 "plain nudge" used the session default, so seven
+  consecutive nudges all answered "Rate limit exceeded" and the session stayed
+  frozen for ~8 h while another free model (minimax) was alive the whole time.
+  The failure signature is a stronger wake signal than the heartbeat age —
+  rotate the model the moment you see one. The ladder's second entry was a
+  "free" gateway that answered "Your Token Harbor balance is at $0": a paid
+  pool with no credit is not a free pool, and it must not sit in a ladder.
+  Verified by: a fake-`opencode` harness where model A always answers
+  "Rate limit exceeded" and model B succeeds — the nudge rotated to B in the
+  same tick, A was marked failed, B was not.
