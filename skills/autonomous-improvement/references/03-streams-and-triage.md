@@ -1,53 +1,87 @@
-# Streams and Triage Checklists
+# Streams and Triage
 
-## Stream A — Mutation Testing
+Two streams are available. Two more are planned and must not be promised to a
+user or started as busywork.
 
-1. Pick a file from the active target list (R0/R1 first).
-2. Run the engine:
+## Stream A — mutation testing
+
+1. `ledger.py next --stream A` selects the next source file with a mapped test
+   that is not audited at its current composite hash. Priority paths from config
+   come first. (Risk tiers such as R0/R1 are project-defined and optional; see
+   `gates-and-vocabulary.md`.)
+2. Run the engine with a targeted command for the mapped test:
    ```bash
    python3 scripts/autonomous/mutation_engine.py \
-     --source <file> \
+     --source src/app.py \
      --test-cmd "<targeted test command>" \
-     --max-mutants 20 \
+     --max-mutants 20 --seed 0 \
+     --output-json .autonomous-last-run.json \
      --output-issue docs/tasks/mutant_issue.md
    ```
-3. Triage every survivor (see `01-mutation-engine.md`). For each non-equivalent gap:
-   - Write a test that **fails on the mutant, passes on clean code**.
-   - Cite the invariant it defends (`// SPEC INV-xxx` or equivalent).
-   - Keep the PR to one file + one test file.
+3. Triage every `SURVIVED` mutant (see `01-mutation-engine.md`). For each real
+   gap:
+   - State the behavior the mutant breaks.
+   - Write a test that is **red with the mutant applied** and **green on clean
+     source**. It passes on `origin/main` by construction.
+   - Cite the invariant it defends if the repo has one.
+   - Keep the PR to one test file plus at most one fixture.
+4. Record the audit as `COMPLETED` (with the PR) or `SOUND` (no PR needed).
+   Include the seed and scope in the summary.
 
-## Stream B — Adversarial Test Audit
+Do not mutate generated files (`*.g.dart`, `*.freezed.dart`, build output).
+Exclude them in config rather than adding engine special cases.
 
-Pick a test file and ask:
+## Stream B — adversarial test audit
 
-**Can it actually fail?**
-- Does it read back real state, or only assert that a write didn't throw?
-- Would it still pass if the code it claims to cover did the wrong thing?
-- Fix: snapshot the table / count writes / assert the side effect.
+Pick a test file from `candidates.B`. Read it and ask:
 
-**Does it assert behavior or the mock?**
-- Does the mock return X and the test assert X, without exercising domain logic?
-- Fix: in-memory entities, fake clocks, in-memory stores instead of mocks.
+### Can it actually fail? (vacuity)
 
-**Is it a timing bomb?**
-- `sleep`, `Future.delayed`, `setTimeout`, `time.sleep` with a fixed duration?
-- Under CPU contention less work fits in that window — the test flakes.
-- Fix: poll on a condition or use a virtual clock.
+- Does it assert real state, or only that a call did not throw?
+- Would it still pass if the implementation did the opposite?
+- Example smell: a test named "does not rewrite the table" that never reads the
+  table.
+- Fix: snapshot or count the side effect; assert the value, not the call.
 
-## Stream C — Property Fuzzing (Planned)
+### Does it assert behavior or the mock? (over-mocking)
 
-Needs a nightly harness. Examples:
-- Round-trip: `import -> export -> import` structural equivalence (not literal string identity — normalization breaks that).
-- Monotonicity: higher stability never shortens intervals; difficulty clamped; retrievability in `[0,1]`.
-- State machine: random action sequences under every continuity/edge mode; no deadlocks, no negative counts, no uncaught exceptions.
+- Does the mock return X and the test assert X, with no domain logic in between?
+- Fix: use in-memory entities, fake clocks, or in-memory stores. Keep a mock only
+  at an external boundary you do not own.
 
-Don't start this stream to "use tokens" before the harness exists and is proven nightly.
+### Is it a timing bomb? (flakiness)
 
-## Stream D — Migration Archeology (Planned)
+- Fixed `sleep`, `Future.delayed`, or `setTimeout` windows shrink under CPU
+  contention.
+- Fix: poll a condition with a deadline, or inject a virtual clock. Never add a
+  sleep to "stabilize" a test.
+- A flaky test is not proven flaky by one red run. Re-run it in isolation;
+  report the reproduction command.
 
-Needs fixture databases per historical schema version.
-- One on-disk fixture per old version, populated with realistic data.
-- Forward migration to current version, assert zero lost rows.
-- Orphan-row and cascade regression tests.
+Every Stream B finding needs evidence: the line, why it cannot fail, and the
+proposed stronger assertion. "Rename this test" or "reformat this file" is not a
+finding.
 
-Track it in the project plan. Don't run it as busywork per PR.
+## Triage checklist (both streams)
+
+- [ ] Is the finding real on the current base, not an old worktree?
+- [ ] Is it already covered by another test or an open PR?
+- [ ] Is the proposed test fail-to-pass under the wording of Law 1?
+- [ ] Is the change limited to the target and its test?
+- [ ] Did you avoid editing the referee (specs, gates, CI, lint config, ratchets)?
+
+If any box is unchecked, stop and record why; a documented "no real gap" is a
+valid `SOUND` result.
+
+## Stream C — property fuzzing / model checking (planned, unavailable)
+
+This needs a nightly harness that can run thousands of randomized transitions
+and shrink failures. Until that exists, do not promise or run it. Typical
+targets for later: round-trip idempotence, scheduling monotonicity, queue
+state-machine deadlocks.
+
+## Stream D — migration and data-preservation archeology (planned, unavailable)
+
+This needs fixture databases for every historical schema version and a
+migration harness. Until then, do not run it as per-PR busywork. Typical targets
+for later: zero-row-loss migrations, orphan-row checks, cascade behavior.

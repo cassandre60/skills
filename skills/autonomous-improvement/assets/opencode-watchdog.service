@@ -1,6 +1,0 @@
-[Unit]
-Description=Orchestrator watchdog (revive throttled/dead agent session via CLI nudge)
-
-[Service]
-Type=oneshot
-ExecStart=%h/.local/share/orchestrator/watchdog.sh

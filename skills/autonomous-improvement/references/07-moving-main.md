@@ -68,7 +68,7 @@ become two rebase jobs plus a merge-order decision — the owner's).
   If > 0: rebase onto origin/main, re-verify premise + red/green, THEN push.
 - "If the lines you are about to edit changed on main since your base, STOP and report
   instead of pushing a stale fix."
-- Progress checkpoints (Reference 06) bound the cost of whatever drift you do hit.
+- Progress checkpoints (Reference 05) bound the cost of whatever drift you do hit.
 
 ## Base-relative artifacts
 
@@ -83,7 +83,7 @@ Audits and negative results expire when main moves in the audited area:
 
 Worktrees are reused across relaunches to skip codegen setup — which is exactly how stale
 bases persist. Before re-dispatching into a reused worktree: confirm dirty files are yours
-(ownership map, Reference 06), then `git fetch origin && git rebase origin/main` — or
+(ownership map, Reference 05), then `git fetch origin && git rebase origin/main` — or
 `reset --hard origin/main` on a clean worktree you own. Never reset a worktree you do not
 own, and never reset around dirty files you did not create.
 

@@ -1,0 +1,65 @@
+{
+  "name": "go",
+  "extensions": [".go"],
+  "line_comment": "//",
+  "block_comment": ["/*", "*/"],
+  "string_quotes": ["\"", "`"],
+  "multiline_single_quotes": ["`"],
+  "triple_quotes": false,
+  "skip_line_prefixes": ["import ", "package "],
+  "rules": [
+    {
+      "pattern": "(?P<a>-?[A-Za-z_][A-Za-z0-9_.]*|-?[0-9]+)\\s*==\\s*(?P<b>-?[A-Za-z_][A-Za-z0-9_.]*|-?[0-9]+)",
+      "replacement": "\\g<a> != \\g<b>",
+      "description": "Invert equality: '==' -> '!='"
+    },
+    {
+      "pattern": "(?P<a>-?[A-Za-z_][A-Za-z0-9_.]*|-?[0-9]+)\\s*!=\\s*(?P<b>-?[A-Za-z_][A-Za-z0-9_.]*|-?[0-9]+)",
+      "replacement": "\\g<a> == \\g<b>",
+      "description": "Invert inequality: '!=' -> '=='"
+    },
+    {
+      "pattern": "(?<=\\s)<(?=\\s)",
+      "replacement": "<=",
+      "description": "Loosen strict inequality: '<' -> '<='"
+    },
+    {
+      "pattern": "(?<=\\s)>(?=\\s)",
+      "replacement": ">=",
+      "description": "Loosen strict inequality: '>' -> '>='"
+    },
+    {
+      "pattern": "(?<=\\s)<=(?=\\s)",
+      "replacement": "<",
+      "description": "Tighten inequality: '<=' -> '<'"
+    },
+    {
+      "pattern": "(?<=\\s)>=(?=\\s)",
+      "replacement": ">",
+      "description": "Tighten inequality: '>=' -> '>'"
+    },
+    {
+      "pattern": "&&",
+      "replacement": "||",
+      "description": "Swap logical AND (&&) to OR (||)"
+    },
+    {
+      "pattern": "\\|\\|",
+      "replacement": "&&",
+      "description": "Swap logical OR (||) to AND (&&)"
+    },
+    {
+      "pattern": "\\btrue\\b",
+      "replacement": "false",
+      "description": "Invert boolean literal true -> false"
+    },
+    {
+      "pattern": "\\bfalse\\b",
+      "replacement": "true",
+      "description": "Invert boolean literal false -> true"
+    }
+  ],
+  "compile_failure_patterns": [
+    "^\\S+\\.go:\\d+:\\d+: "
+  ]
+}

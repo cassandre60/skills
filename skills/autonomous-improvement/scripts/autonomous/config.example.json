@@ -1,0 +1,41 @@
+{
+  "base_ref": "origin/main",
+  "ledger_path": "docs/AUTONOMOUS_WORK_LEDGER.md",
+  "origin_url": null,
+  "setup_cmds": [],
+  "format_check_cmd": ["ruff", "format", "--check", "."],
+  "analyze_cmd": ["ruff", "check"],
+  "analyze_extensions": [".py"],
+  "gate_cmd": null,
+  "test_cmd": ["python3", "-m", "pytest", "-x", "-q"],
+  "test_for_source": [
+    {
+      "src": "^src/(?:.*/)?([^/]+)\\.py$",
+      "test": "tests/test_\\1.py"
+    },
+    {
+      "src": "^(?:lib|pkg)/(?:.*/)?([^/]+)\\.py$",
+      "test": "tests/test_\\1.py"
+    }
+  ],
+  "candidates": {
+    "A": {
+      "include": ["src/**/*.py", "lib/**/*.py"],
+      "exclude": ["**/__init__.py", "**/conftest.py", "**/migrations/**"],
+      "require_test": true,
+      "priority_paths": []
+    },
+    "B": {
+      "include": ["tests/**/*.py", "test/**/*.py"],
+      "exclude": ["**/conftest.py"],
+      "priority_paths": []
+    }
+  },
+  "machine_budget": {
+    "max_concurrent_tests": 1
+  },
+  "pr_required": {
+    "COMPLETED": true,
+    "SOUND": false
+  }
+}

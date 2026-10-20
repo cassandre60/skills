@@ -1,0 +1,11 @@
+#!/bin/sh
+cat <<'JSON'
+[
+  {
+    "number": 7,
+    "title": "test: harden scheduler",
+    "headRefName": "test/scheduler",
+    "files": [{"path": "src/scheduler.py"}]
+  }
+]
+JSON

@@ -1,0 +1,4 @@
+# Append to <repo>/.gitattributes (path is relative to the repo root).
+# merge=union keeps both sides' appended ledger rows; it does not resolve edits
+# to an existing row. Keep the ledger append-only.
+docs/AUTONOMOUS_WORK_LEDGER.md merge=union

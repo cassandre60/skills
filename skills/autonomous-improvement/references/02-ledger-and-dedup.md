@@ -2,41 +2,138 @@
 
 ## Schema
 
+Eight columns, in this order:
+
 ```markdown
 | Date | Stream | Target File / Module | Content Hash | Status | PR / Issue | Summary / Outcome | Re-Audit Trigger |
 |---|---|---|---|---|---|---|---|
 ```
 
-- `Content Hash` is `git hash-object <file>` (or `git rev-parse HEAD:<file>`) truncated to 9 chars — the hash of the file's bytes, not commit identity.
-- `Status` is `COMPLETED` (audited, gaps fixed or documented), `SOUND` (audited, no gaps), or `IN_PROGRESS` (claimed, not yet merged).
-- `Target File / Module` is the source file or logical module.
+- **Content Hash** is `<source9>:<companion9>`, using git blob hashes truncated
+  to 9 characters. For Stream A the source is the target and the companion is
+  its mapped test. For Stream B the target is the test file and the companion is
+  always `-`. No test exists → `<source9>:-`.
+- **Status** is exactly `COMPLETED` (audited; gaps fixed or documented) or
+  `SOUND` (audited; no gaps). `EXAMPLE` is ignored by the parser.
+- **Target** is repo-root-relative and stored in backticks.
 
-Do not use `git log -- <file>` (last commit touching the file). A revert or cherry-pick can give the same commit hash for different content, or different hashes for identical content.
+Legacy rows with a single hash (no `:`) are still accepted. They match on the
+source half only and are flagged `legacy` in `--json` output; re-audit them when
+convenient. New rows always use the composite form.
+
+## Authoritative row: newest wins
+
+`record` inserts new rows directly below the table header (newest first). For
+each target, the authoritative row is the greatest `(Date, -position)`:
+the newest date wins; on a tie the topmost row wins. Rows appended by hand at
+the bottom with a newer date also win. Only `COMPLETED` and `SOUND` are audited;
+a newer row of another status does not erase an older audit (there are no other
+statuses in V2).
+
+This fixes the V1 bug where the parser kept the oldest row and re-proposed every
+re-audited file forever.
+
+## Composite hash
+
+A Stream A audit depends on the source **and** the test that proves it. If the
+test is weakened or deleted, the old audit is stale. `record` computes the
+mapped test automatically (config `test_for_source`, then conservative path
+heuristics) and accepts `--test PATH` to override it. `next` and `check`
+consider a target audited only when both halves match.
+
+Hash semantics: **the blob at HEAD**. If the working tree differs,
+`record` warns; `--strict` makes that fatal. Do not record a hash that does not
+describe the audited bytes.
+
+## Cell escaping and separators
+
+Summaries may contain `|`, `\`, and newlines (mutation descriptions often do).
+Cells are written with `|` → `\|`, `\` → `\\`, and CR/LF collapsed to spaces.
+Rows must be parsed by splitting only on unescaped pipes. The round-trip is
+tested.
+
+The separator row may be rewritten by a formatter. `record` accepts compact,
+spaced, and colon-aligned separators (`|---|`, `| --- |`, `| :--- | ---: |`)
+and preserves the file's existing line endings (LF or CRLF).
 
 ## CLI
 
 ```bash
-python3 scripts/autonomous/ledger.py next --stream 1      # find next unaudited target
-python3 scripts/autonomous/ledger.py record \
-  --stream "Stream A (Mutation)" \
-  --target "src/domain/coordinator.ts" \
-  --status "COMPLETED" \
-  --pr "#42" \
-  --summary "27 mutants: 20 killed, 3 invalid, 2 gaps fixed"
+python3 scripts/autonomous/ledger.py next --stream A
+python3 scripts/autonomous/ledger.py next --stream B --limit 5 --json
+python3 scripts/autonomous/ledger.py record --stream A \
+  --target src/app.py --status COMPLETED --pr '#42' \
+  --summary '6 mutants: 2 killed, 4 triaged, 1 gap fixed'
+python3 scripts/autonomous/ledger.py check --target src/app.py
 ```
 
-`next` prints the first target whose content hash differs from the ledger (or is absent), skipping anything with an open PR. `record` inserts a row after the table header.
+- Stream ids are `A`/`B`; `1`/`2` are aliases. `C`/`D` exit 2 with
+  "planned, not implemented". No input ever exits 0 silently.
+- Candidates come from `candidates.A` / `candidates.B` globs via
+  `git ls-files`, ordered by `priority_paths` then lexicographically. Files that
+  do not exist at HEAD are skipped. There is no hardcoded target list.
+- Stream A candidates require a mapped existing test when
+  `require_test: true` (the default). Stream B candidates are test files.
+- `--pr` is optional for `SOUND` and required for `COMPLETED` by default
+  (`pr_required` in config).
+- `record` refuses a target that does not exist at HEAD, and refuses a duplicate
+  authoritative row with the same composite hash unless `--force`.
+- `check` exits 0 when the current composite hash is audited, 1 otherwise.
 
-## Concurrency
+## Open-PR collision check
 
-Two agents appending to one markdown table will conflict by construction.
+`next` makes one `gh pr list --state open --json number,title,headRefName,files`
+call (and falls back to branch fields if that `gh` cannot expose `files`).
 
-- Before recording: `gh pr list` — skip if an open PR already touches the target.
-- On conflict at push: `git pull --rebase origin/main` and retry. Don't overwrite the other row.
-- Re-check `gh pr list` immediately before pushing — another agent may have opened a PR between your `next` and your push.
+1. **File overlap** is primary: a target is claimed if its path appears in an
+   open PR's file list. Exact paths only; no substring matching.
+2. **Branch segments** are the fallback: normalize `_` to `-`, lowercase, and
+   match a whole branch segment (for example `test/chess-fsrs-scheduler`
+   claims `chess_fsrs_scheduler.dart`, but not `scheduler.dart`). Titles and
+   bodies are never searched.
+3. The skip message names the claiming PR, e.g. `open PR #123 test/foo`, so a
+   human can check it.
 
-For high-contention repos, consider a JSON-lines ledger or per-file ledger files. The markdown table is the default because it's readable in review.
+If `gh` is missing or the repo has no remote, `next` prints one warning and
+continues. `--require-gh` makes it fatal.
+
+## Claiming work without a third status
+
+The ledger is a git-tracked file: a row written in one agent's worktree is
+invisible to other agents until merged, so an in-progress row cannot
+deduplicate parallel work. Instead, **open a draft PR early** (an empty or WIP
+commit is enough). The file-overlap check above then protects the target. This is
+why the in-progress status was removed from the schema.
+
+## Parallel appends: merge=union
+
+Two agents appending below the header conflict by construction. Add:
+
+```
+docs/AUTONOMOUS_WORK_LEDGER.md merge=union
+```
+
+from `assets/gitattributes.fragment.txt`. Union merge keeps both sides' inserted
+lines; a scripted two-branch merge is in the test suite. Caveats:
+
+- Rows must stay **append-only**. Never edit an existing row; supersede it with
+  a new row. Newest-wins makes that safe.
+- If the ledger is also a protected path, apply the protected-paths and
+  gitattributes fragments together. Expect the protected-path gate to red on
+  ledger PRs; that is the designed approval friction, not a reason to drop the
+  row.
+- Union merge does not resolve edits to the same existing line; it only keeps
+  both additions. Do not rewrite the table.
+
+## Paths and cwd
+
+The repo root comes from `git rev-parse --show-toplevel`. All target paths are
+repo-root-relative and all git commands run with that cwd. The ledger path comes
+from config `ledger_path` (or `--ledger`), resolved against the repo root — never
+from `__file__`. Running from a subdirectory produces the same result.
 
 ## Migration from commit-hash ledgers
 
-Old rows that stored `git log` hashes remain valid as "last audited commit" markers. New rows must use content hashes. Re-audit is triggered by content change, not commit identity — so a content-hash ledger is stricter and never weaker.
+Old rows that stored `git log` hashes remain "last audited commit" markers. New
+rows use content hashes. Re-audit is triggered by content change, so re-audit or
+supersede old rows as you touch them; never rewrite history in place.

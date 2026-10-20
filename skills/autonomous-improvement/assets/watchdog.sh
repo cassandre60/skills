@@ -1,49 +1,66 @@
 #!/bin/bash
-# Orchestrator watchdog — revive a throttled or dead agent session from OUTSIDE the
-# session (no model quota needed to run this; the nudge costs one model call only).
-# See references/05-orchestrator-survival.md for the design and rationale.
+# Orchestrator watchdog — one code path, no process sniffing.
 #
-# Install:
-#   1. Edit STATE_DIR below (or export ORCH_STATE_DIR) to a durable, OUTSIDE-REPO path.
-#   2. Write your session ID into $STATE_DIR/opencode_session_id (get it via a no-op
-#      session op, e.g. renaming the session).
-#   3. Touch $STATE_DIR/last_beat from every orchestrator wake turn.
-#   4. systemd --user units: see opencode-watchdog.service + .timer in this directory.
+# If the heartbeat is fresh, exit. Otherwise run ONE foreground nudge into the
+# same session and let systemd reap it. A hung nudge is bounded by
+# ORCH_NUDGE_TIMEOUT (default 30 min) and an flock prevents overlapping runs.
 #
-# Behavior:
-#   - process alive + heartbeat stale (>45 min) -> headless nudge into the SAME session
-#     via `opencode run -s <sessionID>` (throttle/freeze recovery).
-#   - process dead -> same command revives the session (process-death recovery).
+# See references/05-unattended-operation.md. Install with install-watchdog.sh.
+#
+# Configuration:
+#   ORCH_STATE_DIR    durable state, outside the repo (default: ~/.local/share/orchestrator)
+#   ORCH_HB_MAX_AGE   seconds before the heartbeat is stale (default: 2700 = 45 min)
+#   ORCH_NUDGE_TIMEOUT seconds before the nudge is killed (default: 1800 = 30 min)
+#   ORCH_RESUME_CMD   bash snippet; $1 = session id, $2 = nudge message
+#                     (default: opencode run --auto -s "$1" "$2")
+#   ORCH_NUDGE_MSG    the nudge text
+#
+# Harness-specific: the default resume command is for opencode. Read your
+# harness docs for its headless resume-session flags; do not copy these flags
+# to a different harness.
 
 set -u
+
 STATE_DIR="${ORCH_STATE_DIR:-$HOME/.local/share/orchestrator}"
 LOG="$STATE_DIR/watchdog.log"
 HB="$STATE_DIR/last_beat"
 SID_FILE="$STATE_DIR/opencode_session_id"
-MAX_AGE="${ORCH_HB_MAX_AGE:-2700}"   # 45 min
+MAX_AGE="${ORCH_HB_MAX_AGE:-2700}"
+NUDGE_TIMEOUT="${ORCH_NUDGE_TIMEOUT:-1800}"
 NUDGE_MSG="${ORCH_NUDGE_MSG:-watchdog nudge: run orchestrator housekeeping per journal protocol, re-arm beats, yield promptly.}"
+RESUME_CMD="${ORCH_RESUME_CMD:-opencode run --auto -s \"\$1\" \"\$2\"}"
 
 mkdir -p "$STATE_DIR"
-echo "== $(date -Is)" >> "$LOG"
 
-SID=$(cat "$SID_FILE" 2>/dev/null || true)
-[ -z "$SID" ] && { echo "no session id in $SID_FILE; nothing to do" >> "$LOG"; exit 0; }
-
-if pgrep -f "opencode" >/dev/null 2>&1; then
-  if [ -f "$HB" ]; then
-    AGE=$(( $(date +%s) - $(stat -c %Y "$HB") ))
-    echo "heartbeat age: ${AGE}s (process alive)" >> "$LOG"
-    if [ "$AGE" -gt "$MAX_AGE" ]; then
-      echo "$(date -Is) stale heartbeat (${AGE}s) -> headless nudge to $SID" >> "$LOG"
-      touch "$HB"
-      opencode run --auto -s "$SID" "$NUDGE_MSG" >> "$LOG" 2>&1
-    fi
-  else
-    echo "heartbeat missing; process alive; creating it" >> "$LOG"
-    touch "$HB"
-  fi
-else
-  echo "$(date -Is) opencode process DEAD -> headless revive of $SID" >> "$LOG"
-  touch "$HB"
-  setsid nohup opencode run --auto -s "$SID" "$NUDGE_MSG" >> "$LOG" 2>&1 &
+# D2: a hung nudge must not overlap the next timer run.
+exec 9>"$STATE_DIR/watchdog.lock"
+if ! flock -n 9; then
+  echo "$(date -Is) previous watchdog run is still active; exiting" >>"$LOG"
+  exit 0
 fi
+
+SID="$(cat "$SID_FILE" 2>/dev/null || true)"
+if [ -z "$SID" ]; then
+  echo "$(date -Is) no session id in $SID_FILE; nothing to do" >>"$LOG"
+  exit 0
+fi
+
+if [ -f "$HB" ]; then
+  AGE=$(( $(date +%s) - $(stat -c %Y "$HB") ))
+  if [ "$AGE" -le "$MAX_AGE" ]; then
+    echo "$(date -Is) heartbeat fresh (${AGE}s <= ${MAX_AGE}s); nothing to do" >>"$LOG"
+    exit 0
+  fi
+  echo "$(date -Is) stale heartbeat (${AGE}s > ${MAX_AGE}s) -> foreground nudge to $SID" >>"$LOG"
+else
+  echo "$(date -Is) heartbeat missing -> foreground nudge to $SID" >>"$LOG"
+fi
+
+# Mark the attempt before running so a crash does not cause a nudge storm.
+touch "$HB"
+
+timeout --signal=TERM --kill-after=60 "$NUDGE_TIMEOUT" \
+  bash -c "$RESUME_CMD" _ "$SID" "$NUDGE_MSG" >>"$LOG" 2>&1
+RC=$?
+echo "$(date -Is) nudge finished with exit $RC (124 = timed out)" >>"$LOG"
+exit 0

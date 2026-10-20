@@ -1,0 +1,100 @@
+{
+  "name": "python",
+  "extensions": [".py"],
+  "line_comment": "#",
+  "block_comment": null,
+  "string_quotes": ["'", "\""],
+  "triple_quotes": true,
+  "skip_line_prefixes": ["import ", "from ", "@"],
+  "rules": [
+    {
+      "pattern": "\\bis\\s+not\\s+None\\b",
+      "replacement": "is None",
+      "description": "Invert null check: 'is not None' -> 'is None'"
+    },
+    {
+      "pattern": "\\bis\\s+None\\b",
+      "replacement": "is not None",
+      "description": "Invert null check: 'is None' -> 'is not None'"
+    },
+    {
+      "pattern": "(?P<a>-?[A-Za-z_][A-Za-z0-9_.]*|-?[0-9]+)\\s*==\\s*(?P<b>-?[A-Za-z_][A-Za-z0-9_.]*|-?[0-9]+)",
+      "replacement": "\\g<a> != \\g<b>",
+      "description": "Invert equality: '==' -> '!='"
+    },
+    {
+      "pattern": "(?P<a>-?[A-Za-z_][A-Za-z0-9_.]*|-?[0-9]+)\\s*!=\\s*(?P<b>-?[A-Za-z_][A-Za-z0-9_.]*|-?[0-9]+)",
+      "replacement": "\\g<a> == \\g<b>",
+      "description": "Invert inequality: '!=' -> '=='"
+    },
+    {
+      "pattern": "\\bnot\\s+in\\b",
+      "replacement": "in",
+      "description": "Invert membership: 'not in' -> 'in'"
+    },
+    {
+      "pattern": "\\bin\\b",
+      "replacement": "not in",
+      "description": "Invert membership: 'in' -> 'not in'",
+      "context_skip_prefix": "(?:\\bfor\\s+[^:]*|\\bnot\\s+)$"
+    },
+    {
+      "pattern": "\\band\\b",
+      "replacement": "or",
+      "description": "Swap logical AND to OR"
+    },
+    {
+      "pattern": "\\bor\\b",
+      "replacement": "and",
+      "description": "Swap logical OR to AND"
+    },
+    {
+      "pattern": "\\bTrue\\b",
+      "replacement": "False",
+      "description": "Invert boolean literal True -> False"
+    },
+    {
+      "pattern": "\\bFalse\\b",
+      "replacement": "True",
+      "description": "Invert boolean literal False -> True"
+    },
+    {
+      "pattern": "(?<=\\s)<(?=\\s)",
+      "replacement": "<=",
+      "description": "Loosen strict inequality: '<' -> '<='"
+    },
+    {
+      "pattern": "(?<=\\s)>(?=\\s)",
+      "replacement": ">=",
+      "description": "Loosen strict inequality: '>' -> '>='"
+    },
+    {
+      "pattern": "(?<=\\s)<=(?=\\s)",
+      "replacement": "<",
+      "description": "Tighten inequality: '<=' -> '<'"
+    },
+    {
+      "pattern": "(?<=\\s)>=(?=\\s)",
+      "replacement": ">",
+      "description": "Tighten inequality: '>=' -> '>'"
+    },
+    {
+      "pattern": "\\+\\s*1\\b",
+      "replacement": "+ 2",
+      "description": "Off-by-one: '+ 1' -> '+ 2'"
+    },
+    {
+      "pattern": "-\\s*1\\b",
+      "replacement": "- 2",
+      "description": "Off-by-one: '- 1' -> '- 2'"
+    },
+    {
+      "pattern": "(?<![=!<>\\w])not\\s+(?!in\\b)",
+      "replacement": "",
+      "description": "Remove a leading boolean negation"
+    }
+  ],
+  "compile_failure_patterns": [
+    "^\\s*(?:E\\s+)?(SyntaxError|IndentationError|TabError):"
+  ]
+}

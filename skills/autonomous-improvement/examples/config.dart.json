@@ -1,0 +1,43 @@
+{
+  "base_ref": "origin/main",
+  "ledger_path": "docs/AUTONOMOUS_WORK_LEDGER.md",
+  "origin_url": null,
+  "setup_cmds": [
+    ["fvm", "flutter", "pub", "get"],
+    ["fvm", "dart", "run", "build_runner", "build", "--delete-conflicting-outputs"],
+    ["fvm", "dart", "format", "lib/l10n/"]
+  ],
+  "format_check_cmd": [
+    "fvm", "dart", "format", "--output=none", "--set-exit-if-changed", "lib", "test"
+  ],
+  "analyze_cmd": ["fvm", "flutter", "analyze"],
+  "analyze_extensions": [".dart"],
+  "gate_cmd": ["./scripts/gates.sh", "t1"],
+  "test_cmd": ["fvm", "flutter", "test"],
+  "test_for_source": [
+    {
+      "src": "^lib/(.*)\\.dart$",
+      "test": "test/\\1_test.dart"
+    }
+  ],
+  "candidates": {
+    "A": {
+      "include": ["lib/**/*.dart"],
+      "exclude": ["**/*.g.dart", "**/*.freezed.dart", "**/*.mocks.dart", "**/l10n/**"],
+      "require_test": true,
+      "priority_paths": ["lib/src/domain"]
+    },
+    "B": {
+      "include": ["test/**/*_test.dart"],
+      "exclude": ["test/**/*.mocks.dart"],
+      "priority_paths": []
+    }
+  },
+  "machine_budget": {
+    "max_concurrent_tests": 1
+  },
+  "pr_required": {
+    "COMPLETED": true,
+    "SOUND": false
+  }
+}

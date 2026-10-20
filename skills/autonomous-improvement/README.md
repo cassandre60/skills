@@ -1,63 +1,63 @@
 # autonomous-improvement
 
-Spend tokens on mechanically falsifiable work — not on prose, renames, or checkbox tests.
+Spend agent tokens on mechanically falsifiable work: mutation testing that
+finds unprotected behavior, and adversarial audits that find tests which cannot
+fail. The entry point is [`SKILL.md`](SKILL.md); references are loaded on demand.
 
-Entry point: `SKILL.md`. References are split out so a model loads one concern when it reaches that step.
+## Requirements
+
+- `git`, `python3` >= 3.9 (standard library only).
+- `gh` is optional and only used to detect open PRs; without it `next` prints a
+  warning and continues. `--require-gh` makes that fatal.
+- The unattended watchdog needs Linux, `bash`, `timeout`, `flock`, and systemd
+  user units. It is optional and harness-specific (defaults to opencode).
 
 ## Install
 
-From the consolidated skills repo:
+This folder is a skill for opencode, Claude Code, and agents that read
+`SKILL.md`-style skill directories. Copy it into your harness's skills directory,
+for example:
 
 ```sh
-npx skills@latest add cassandre60/skills
+cp -r autonomous-improvement ~/.config/opencode/skills/autonomous-improvement
 ```
 
-Or copy this folder into wherever your agent reads skills from (folder name must stay `autonomous-improvement`):
+To use the scripts inside a target repo:
 
-- opencode, all projects:     `~/.config/opencode/skills/autonomous-improvement/`
-- opencode, one project:      `<repo>/.opencode/skills/autonomous-improvement/`
-- Claude Code, all projects:  `~/.claude/skills/autonomous-improvement/`
-- Claude Code, one project:   `<repo>/.claude/skills/autonomous-improvement/`
-  (opencode also reads the `.claude/skills` locations)
-- agents (generic):           `~/.agents/skills/autonomous-improvement/` or `<repo>/.agents/skills/`
-
-## Use
-
-Say what you want in plain words; the description triggers on:
-
-- "improve the repo", "audit and fix bugs", "run autonomous improvements"
-- "find performance issues", "increase test coverage meaningfully"
-- "mutation testing", "test gaps", "flaky tests"
-
-Or invoke explicitly:
-
-- "Use the autonomous-improvement skill to run Stream A against src/auth/"
-- "Use the autonomous-improvement skill — Stream B audit of test/payment/"
-- "Improve the repo — autonomous-improvement, Streams A+B"
-
-## What it enforces
-
-Four laws: fail-to-pass, content-hash dedup, worktree isolation, machine budget. Two active streams (mutation testing + adversarial test audit) on day one, two planned streams (property fuzzing + migration archeology) when the harnesses exist. No cosmetic churn, no vacuous tests, no wide local runs.
-
-## Relationship to agent-proof-codebase
-
-`agent-proof-codebase` builds the gates that make fake work fail. This skill spends tokens finding the real work — surviving mutants, vacuous tests, flaky sleeps, migration gaps. Use that skill first if the repo has no gates yet.
-
-## Layout
-
-```
-SKILL.md            laws, streams, quick start, workflow, references index
-references/         7 deep dives, read on demand
-scripts/            3 building blocks (Python stdlib only): mutation_engine, ledger, orchestrator
-assets/             ledger template + protected-paths fragment + watchdog units (unattended mode)
+```sh
+cp -r <skill>/scripts/autonomous <repo>/scripts/autonomous
+cp <repo>/scripts/autonomous/config.example.json <repo>/scripts/autonomous/config.json
+mkdir -p <repo>/docs
+cp <skill>/assets/AUTONOMOUS_WORK_LEDGER.template.md <repo>/docs/AUTONOMOUS_WORK_LEDGER.md
 ```
 
-## Why this skill exists
+Edit the `config.json` copy. Every project-specific command lives there as an
+argv array; no project-specific test runner, remote, or path is
+hardcoded. Then follow the Quick Start in `SKILL.md`.
 
-Agents given an open-ended "improve this codebase" prompt either stall in an hour (nothing is broken on the surface) or degenerate into fake work (renames, vacuous tests, scope creep). This skill channels tokens into mechanically falsifiable loops — a surviving mutant or a vacuous test is objective evidence that work remains, and fail-to-pass proof ensures each PR earned its keep.
+## What is in the folder
 
-## Notes
+```
+SKILL.md              laws, Streams A/B, quick start, references
+references/           deep dives (engine, ledger, workflow, gates, examples)
+scripts/autonomous/   ledger.py, mutation_engine.py, orchestrator.py,
+                      test_weakening_check.py, mutation_rules/*.json, common.py
+assets/               ledger template, gitattributes/protected-path fragments,
+                      optional systemd watchdog + installer
+examples/             ready-to-copy Dart and Python configs
+tests/                stdlib unittest suite (no network or toolchains)
+evals/                behavioral eval cases for an agent using the skill
+```
 
-- Scripts need only Python 3 and git (plus bash for fail-to-pass helpers in the companion skill).
-- The mutation engine is regex-based, not AST-based — every survivor needs human triage.
-- Released under the [MIT License](LICENSE).
+## Verify
+
+```sh
+python3 -m unittest discover -s tests -v
+```
+
+The suite creates temporary git repositories; it needs only `git` and
+`python3`. Watchdog tests are skipped when `bash`, `flock`, or `timeout` is
+absent. The systemd units themselves are not exercised in the suite (no systemd
+in CI containers); the watchdog shell path is tested when those tools exist.
+
+Released under the [MIT License](LICENSE).

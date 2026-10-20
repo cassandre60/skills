@@ -1,0 +1,10 @@
+[Unit]
+Description=Orchestrator watchdog (revive a stale agent session with one bounded nudge)
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/share/orchestrator/watchdog.sh
+# Backstop if the script itself wedges; the script also wraps the nudge in `timeout`.
+TimeoutStartSec=2h
+# Do not kill the nudge if the oneshot's main process exits early.
+KillMode=process

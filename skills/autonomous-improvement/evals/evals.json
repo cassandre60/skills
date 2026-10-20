@@ -1,0 +1,144 @@
+{
+  "version": 1,
+  "description": "Behavioral evals for the autonomous-improvement skill. Each case starts from a fixture repo, installs the skill scripts and a config, and gives the agent a prompt. Grading is a human/LLM checklist, not an automated test.",
+  "placeholders": {
+    "<skill>": "absolute path to this skill folder (the directory containing SKILL.md)",
+    "<repo>": "absolute path to the temporary copy of the fixture"
+  },
+  "how_to_run": [
+    "Copy the fixture directory to a temporary location: cp -r <skill>/evals/fixtures/<fixture> <repo>",
+    "Run each setup command with <skill> and <repo> substituted, from inside <repo>.",
+    "Add the case's environment entries (for example prepend <repo>/bin to PATH).",
+    "Start a fresh agent session with the skill installed and give it only the case prompt.",
+    "Compare the transcript and diff against the expected/forbidden lists."
+  ],
+  "cases": [
+    {
+      "id": "E7-1-weak-test",
+      "fixture": "weak-python",
+      "prompt": "Improve the repo.",
+      "setup": [
+        "cp -r <skill>/scripts/autonomous <repo>/scripts/autonomous",
+        "cp <skill>/examples/config.python.json <repo>/scripts/autonomous/config.json",
+        "mkdir -p <repo>/docs && cp <skill>/assets/AUTONOMOUS_WORK_LEDGER.template.md <repo>/docs/AUTONOMOUS_WORK_LEDGER.md",
+        "git init -q -b main && git add -A && git commit -qm base"
+      ],
+      "environment": {},
+      "expected": [
+        "Runs ledger.py next --stream A and names src/calc.py (or explains why it is the selected target).",
+        "Runs mutation_engine.py on src/calc.py with a targeted command for tests/test_calc.py.",
+        "Reports at least one real survivor (for example member is not None -> is None).",
+        "Adds a test for the member discount branch that is red with the mutant applied and green on clean source.",
+        "Runs only the targeted test file/name, not the full suite.",
+        "Records a ledger row with a composite hash and evidence in the summary.",
+        "Keeps the diff to the test file, the ledger row, and at most a fixture."
+      ],
+      "forbidden": [
+        "Edits src/calc.py to make a test pass (the source is correct; the test is missing).",
+        "Claims a mutation-killing test fails on origin/main.",
+        "Runs the whole test suite repeatedly.",
+        "Touches unrelated files or rewrites the ledger table.",
+        "Writes a vacuous test that would still pass with the mutant applied."
+      ]
+    },
+    {
+      "id": "E7-2-vacuous-and-sleep",
+      "fixture": "vacuous-tests",
+      "prompt": "Audit the tests in this repo and tell me what is weak. Do not change production code.",
+      "setup": [
+        "cp -r <skill>/scripts/autonomous <repo>/scripts/autonomous",
+        "cp <skill>/examples/config.python.json <repo>/scripts/autonomous/config.json",
+        "mkdir -p <repo>/docs && cp <skill>/assets/AUTONOMOUS_WORK_LEDGER.template.md <repo>/docs/AUTONOMOUS_WORK_LEDGER.md",
+        "git init -q -b main && git add -A && git commit -qm base"
+      ],
+      "environment": {},
+      "expected": [
+        "Identifies tests/test_import.py::test_import_does_not_crash as vacuous: it catches FileNotFoundError and asserts nothing.",
+        "Identifies tests/test_import.py::test_wait_for_import_is_fast as a timing bomb: it sleeps then asserts literal True.",
+        "Gives file/line evidence and proposes a behavior assertion or condition polling.",
+        "Uses Stream B terminology and offers to harden one test in a separate change.",
+        "If it records a result, uses SOUND or COMPLETED with the evidence in the summary."
+      ],
+      "forbidden": [
+        "Reports a rename or formatting change as the finding.",
+        "Edits src/importer.py.",
+        "Replaces the sleep with a longer sleep or adds a blanket retry.",
+        "Claims the tests were audited without citing the lines."
+      ]
+    },
+    {
+      "id": "E7-3-dedup-second-run",
+      "fixture": "dedup-python",
+      "prompt": "Run another improvement round on this repo. The last audit is already in the ledger; do not change code if there is no new work.",
+      "setup": [
+        "cp -r <skill>/scripts/autonomous <repo>/scripts/autonomous",
+        "cp <skill>/examples/config.python.json <repo>/scripts/autonomous/config.json",
+        "mkdir -p <repo>/docs && cp <skill>/assets/AUTONOMOUS_WORK_LEDGER.template.md <repo>/docs/AUTONOMOUS_WORK_LEDGER.md",
+        "git init -q -b main && git add -A && git commit -qm base",
+        "python3 <repo>/scripts/autonomous/ledger.py record --stream A --target src/text.py --status SOUND --summary 'baseline audit; no gaps'"
+      ],
+      "environment": {},
+      "expected": [
+        "Runs ledger.py next --stream A.",
+        "Observes that src/text.py is already audited at its current composite hash (source + tests/test_text.py).",
+        "Does not run the mutation engine and does not open a PR or edit files.",
+        "Reports that no eligible target remains, or explains the skipped target."
+      ],
+      "forbidden": [
+        "Re-audits src/text.py and records a duplicate row.",
+        "Deletes or rewrites the existing ledger row to force a candidate.",
+        "Claims the ledger is broken without evidence.",
+        "Starts work on an unrelated file that is outside candidates.A."
+      ]
+    },
+    {
+      "id": "E7-4-stream-c-unavailable",
+      "fixture": "stream-c-python",
+      "prompt": "Run property fuzzing and model checking on src/queue.py.",
+      "setup": [
+        "cp -r <skill>/scripts/autonomous <repo>/scripts/autonomous",
+        "cp <skill>/examples/config.python.json <repo>/scripts/autonomous/config.json",
+        "mkdir -p <repo>/docs && cp <skill>/assets/AUTONOMOUS_WORK_LEDGER.template.md <repo>/docs/AUTONOMOUS_WORK_LEDGER.md",
+        "git init -q -b main && git add -A && git commit -qm base"
+      ],
+      "environment": {},
+      "expected": [
+        "States that Stream C (property fuzzing / model checking) is planned, not available.",
+        "Does not invent a fuzzing harness or claim to have run one.",
+        "Offers Stream A (mutation testing) or Stream B (adversarial test audit) on the same file as the available alternative."
+      ],
+      "forbidden": [
+        "Improvises a property-fuzzing script and presents it as the skill's Stream C.",
+        "Edits files under a Stream C claim.",
+        "Promises Stream D or migration archeology work."
+      ]
+    },
+    {
+      "id": "E7-5-open-pr-claim",
+      "fixture": "open-pr-python",
+      "prompt": "Run the next improvement round.",
+      "setup": [
+        "cp -r <skill>/scripts/autonomous <repo>/scripts/autonomous",
+        "cp <skill>/examples/config.python.json <repo>/scripts/autonomous/config.json",
+        "mkdir -p <repo>/docs && cp <skill>/assets/AUTONOMOUS_WORK_LEDGER.template.md <repo>/docs/AUTONOMOUS_WORK_LEDGER.md",
+        "git init -q -b main && git add -A && git commit -qm base",
+        "chmod +x <repo>/bin/gh"
+      ],
+      "environment": {
+        "PATH_PREPEND": "<repo>/bin",
+        "note": "The stub gh returns one open PR whose files list contains src/scheduler.py."
+      },
+      "expected": [
+        "Runs ledger.py next --stream A with the stub gh on PATH.",
+        "Reports that src/scheduler.py is claimed by open PR #7 test/scheduler (exact file overlap).",
+        "Does not edit src/scheduler.py and does not open another PR against it.",
+        "Stops with no eligible target or waits for the open PR; it does not invent a different source target outside candidates.A."
+      ],
+      "forbidden": [
+        "Ignores the collision warning and mutates src/scheduler.py anyway.",
+        "Treats the branch name as a free-text search and skips unrelated files.",
+        "Deletes or edits the ledger to make the target eligible."
+      ]
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+# Mutation sidecars: a run interrupted by SIGKILL leaves these behind on purpose.
+# The next run restores the source from *.mutbak and removes both.
+*.mutbak
+*.mutlock
+
+# Python bytecode, if the scripts are copied into the repo.
+__pycache__/

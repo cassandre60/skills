@@ -1,194 +1,151 @@
 ---
 name: autonomous-improvement
-description: Run high-signal autonomous improvement cycles without creating fake work. Use when asked to "improve the repo", "audit and fix bugs", "find and fix performance issues", "increase test coverage meaningfully", or when an agent otherwise needs to spend tokens on mechanically falsifiable work — mutation testing, adversarial test audits, property fuzzing, and migration archeology — rather than cosmetic churn, vacuous tests, or full-suite local runs.
+description: Run falsifiable, high-signal improvement cycles on a codebase instead of cosmetic churn: mutation testing to find tests that don't actually protect behavior, and adversarial audits of existing tests (vacuous assertions, flaky sleeps, over-mocking). Use when asked to "improve the repo", "audit the tests", "find weak or flaky tests", "improve test quality, not just coverage", "run mutation testing", or when "tests pass but I don't trust them" — or when an agent has spare budget and needs work that can be proven real (fails without the fix, not already done at this file's content, cheap enough to run locally). Do not use for feature work, refactors, or one-off bugfixes.
 ---
 
 # Autonomous Improvement
 
-Spend tokens on mechanically falsifiable work — not on prose, renames, or checkbox tests.
+Spend tokens on work that can be **mechanically falsified**, not on renames,
+prose, or checkbox tests. Two streams are active:
 
-Every task here must clear three bars: it **fails without the fix** (fail-to-pass), it **does not already exist at this content hash** (deduplication), and it **does not melt the machine** (targeted tests + CI for the full suite). If any bar is skipped, the work is fake by definition.
+- **A — mutation testing:** find behavior the suite does not protect.
+- **B — adversarial test audit:** find tests that cannot fail, assert mocks, or
+  sleep instead of synchronizing.
 
-This skill is complementary to `agent-proof-codebase`. That skill builds the gates that make fake work fail. This skill spends tokens finding the real work — surviving mutants, vacuous tests, flaky sleeps, migration gaps, and data-loss orphans — and turning each one into a small, gated PR with fail-to-pass proof. If the repo has no gates yet, run `agent-proof-codebase` mode A/B first.
+Each round produces at most one small, evidence-backed PR. If there is no
+falsifiable gap, stop; that is a valid result.
 
-## The 4 Laws
+## The four laws
 
-These are non-negotiable. Violating any one of them turns a cycle into fake work.
+| Law | Rule |
+|---|---|
+| **1. Fail-to-pass** | No fix or test lands without proof that the new test **fails against the defect** and passes once the defect is addressed. For a bugfix the defect is the bug on `origin/main` (red on main, green after the fix). For a test-only PR closing a mutation gap the defect is the surviving mutant (red with the mutant applied, green on clean source). |
+| **2. Content-hash dedup** | Deduplicate on the **content hash** of the target *and its companion test*, never on commit identity. The ledger stores `<source9>:<test9>`; a test change invalidates the audit just like a source change. |
+| **3. Worktree isolation** | Every task runs in an isolated worktree branched from the configured base (`origin/main` by default). Stage by name; never run destructive git commands outside your own worktree. |
+| **4. Machine budget** | One targeted test per mutant, one full-file run at the end of the task. Never run the whole suite locally — that is CI's job. One analyze/lint pass per task, on touched files, after the last edit. |
 
-| Law | Rule | Why it exists |
-|-----|------|---------------|
-| **1. Fail-to-pass** | No bugfix or test lands without a test that **fails on `origin/main`** before the fix and passes after. | A test that passes on unmodified code has zero signal. |
-| **2. Content-hash dedup** | Deduplicate on **content hash** (`git hash-object` / `git rev-parse HEAD:<file>`), not commit identity (`git log -- <file>`). A revert or cherry-pick can give the same commit hash for different content. | Prevents re-auditing unchanged files and endless duplicate PRs across parallel agents. |
-| **3. Worktree isolation** | Every task runs in an **isolated worktree** branched from `origin/main` (not local `main`). Never `git add -A`; stage by name. Never run destructive git commands outside the assigned worktree. | One agent's `reset --hard` in a shared tree silently destroys another's uncommitted work — unrecoverable. |
-| **4. Machine budget** | Run **one targeted test** at a time (e.g. `--plain-name` for a single test), one full-file run at the end. Never run the full suite or `./verify` locally — that is CI's job. One `analyze` per task, on touched files, after the last edit. | A full run pins every core and has heated a workstation to hard-reboot territory here before. |
+The engine runs tests serially. `machine_budget.max_concurrent_tests` in config
+records the owner's cap for parallel shards/agents; it is not a per-run fan-out
+knob.
 
-## Quick Start
-
-When asked to "improve the repo" or equivalent, follow this 5-step loop:
-
-1. **Pick + dedup:** Select the next ready task from the project's real plan (`IMPLEMENTATION_PLAN.md`, backlog, or equivalent). For quality work below, query the ledger:
-   ```bash
-   python3 scripts/autonomous/ledger.py next --stream <n>
-   ```
-   If the file's content hash has not changed since its last `COMPLETED`/`SOUND` ledger entry, skip it. Run `gh pr list` and re-check before pushing — another agent may have opened a PR in between.
-2. **Prove failure:** Write a test or mutation that **fails on `origin/main`**.
-3. **Isolate:** Create `../<repo>-<slug>` from `origin/main` and work there.
-4. **Gate:** Verify the fix passes, run the project's gate entry point **after committing** (diff-based gates read `origin/main...HEAD` and see nothing while uncommitted), and attach evidence.
-5. **Record:** Append the ledger row in the same PR. On conflict (`git pull --rebase` needed), rebase and retry — don't overwrite the other row.
-
-## The 4 Improvement Streams
-
-Two streams are **active on day one**. Two are **planned** — they need a harness first and are not executed to "use tokens". Copy the stream that matches your stack; ignore the rest.
-
-### Stream A — Active: Mutation Testing (Breaker -> Builder)
-
-Mechanically find blindspots where logic could break without tests noticing.
-
-- **How:** Invert semantic operators per file — relational (`==`/`!=`, `<`/`<=`), logical (`&&`/`||`), null checks, booleans, collection predicates (`.isEmpty`), off-by-one — then run the matching test file.
-- **Signal:** `KILLED` means the suite caught it. `SURVIVED` means a proven gap (triage first — regex-based engines produce equivalent mutants). `UNCOMPILABLE` is noise, excluded from kill rate.
-- **Output:** One small PR per triaged survivor — a test that fails on the mutant, passes on clean code, citing the invariant (`// SPEC INV-xxx` or equivalent).
-- **Promotion:** Diff-scoped mutation becomes a blocking gate only after two green runs without false positives.
-- **Tool:** `scripts/autonomous/mutation_engine.py` (regex-based, no AST — every survivor needs human triage; uses `shell=False` via `shlex`).
-
-### Stream B — Active: Adversarial Test Audit (The 3 Sins)
-
-Harden the existing suite. Every flag needs human judgment — a flagged line is not automatically bad.
-
-1. **Can it actually fail? (Vacuity):** Does the test assert real state changes, or trivialities? Example: a test titled "does not rewrite the table" that never reads the table.
-2. **Does it assert behavior or the mock? (Over-mocking):** Replace mocks that echo their setup with in-memory domain entities, fake clocks, or in-memory stores.
-3. **Is it a timing bomb? (Flakiness):** Replace fixed wall-clock sleeps (`sleep(80)`, `Future.delayed`) with condition polling or virtual clocks. Never add a sleep to "stabilize" a test.
-
-### Stream C — Planned: Property Fuzzing & Model Checking
-
-Verify invariants across thousands of randomized transitions. Requires a nightly harness before it can gate PRs.
-
-- **Examples:** Round-trip idempotence (structural equivalence after `import -> export -> import`, not literal string identity), rate/scheduling monotonicity, queue state-machine fuzzing (deadlocks, negative counts).
-- **Not yet:** Wire the harness first; don't claim this stream is "proven" until it runs nightly.
-
-### Stream D — Planned: Migration & Data Preservation Archeology
-
-Prove durability across every shipped schema version.
-
-- **Examples:** Fixture databases per historical schema version, forward-migration assertions with zero lost rows, orphan-row regression tests, foreign-key/cascade checks.
-- **Not yet:** Needs a fixture harness and representative data; track it in the project plan, not as busywork.
-
-## Workflow (one task)
+## Install into a repo
 
 ```bash
-# 0. Branch from origin/main, not local main (which may carry another agent's unpushed work)
-git remote set-url origin <url>
-git fetch origin main
-git worktree add ../<repo>-<slug> -b <type>/<slug> origin/main
-cd ../<repo>-<slug>
-
-# 1. Baseline worktree setup (each worktree needs its own generated files)
-# Flutter/Dart: build_runner; other stacks: whatever generates ignored outputs
-# Example (Flutter):
-fvm flutter pub get
-fvm dart run build_runner build --delete-conflicting-outputs
-fvm dart format lib/l10n/  # discard codegen churn; don't commit it (if applicable)
-
-# 2. Prove red on baseline (one test, not the file — keeps the loop cool)
-<test-cmd> --plain-name '<test name>'    # must FAIL on origin/main
-
-# 3. Minimal fix, then green
-<test-cmd> --plain-name '<test name>'    # must PASS after fix
-
-# 4. Gates after committing (diff-based gates read HEAD, not the working tree)
-<format-cmd> lib test
-<analyze-cmd> <touched-files>
-./scripts/gates.sh t1                      # or the project's gate entry point
-# Direct tripwire when gates.sh is unavailable:
-python3 scripts/gates/test_weakening_check.py --base origin/main
-
-# 5. Stage by name, push, PR with evidence
-git status
-git push -u origin <branch>
-gh pr create -R <owner>/<repo> --title "<type>(<area>): <summary>" --body "<fail-to-pass evidence>"
+cp -r <skill>/scripts/autonomous <repo>/scripts/autonomous
+cp <repo>/scripts/autonomous/config.example.json <repo>/scripts/autonomous/config.json
+cp <skill>/assets/AUTONOMOUS_WORK_LEDGER.template.md <repo>/docs/AUTONOMOUS_WORK_LEDGER.md
 ```
 
-Loop budget: one `--plain-name` iteration, one full-file run at the end, one `analyze` after the last edit. The fail-on-old-code check counts as the second run — then stop. CI runs the full suite on every push so a local wide run is duplicate heat, not extra safety.
+Edit the `config.json` copy to name the repo's real test, format, analyze, and
+gate commands. Every command is an **argv array**; a missing key is
+skipped with `[skip] <step> not configured`. See `references/stack-adapters.md`
+for Python, Dart/Flutter, TypeScript/JavaScript, and Go examples.
 
-## Roles (optional, for parallel agents)
+## Quick start (one round)
 
-For teams running multiple agents, the ledger and worktrees act as the message bus. A single agent can do all three.
+1. `python3 scripts/autonomous/ledger.py next --stream A` selects the next unaudited target.
+2. `python3 scripts/autonomous/orchestrator.py create-worktree --slug <slug> --type test` isolates it.
+3. `python3 scripts/autonomous/mutation_engine.py --source <target> --test-cmd "<targeted cmd>"` finds survivors.
+4. For one triaged survivor, prove the new test is red with the mutant and green on clean source.
+5. Commit, then run `python3 scripts/autonomous/orchestrator.py verify-gate --worktree .`.
+6. Push the branch and open the PR, then record the audit on that branch and push the ledger commit.
 
-- **Breaker:** Never edits `lib/`/`src/`. Finds survivors, fuzz failures, or smell flags. Output: Issue with a copy-pasteable failing test and a cited invariant.
-- **Builder:** Isolated worktree, proves red on `origin/main`, minimal fix, `gates.sh t1`, gated PR.
-- **Sentinel:** Read-only diff + CI inspection — no protected-file edits, no weakened tests, no fake abstractions.
+Full commands, worktree cleanup, and the evidence contract: `references/04-workflow-and-roles.md`.
 
-## Unattended operation (owner away)
+## Stream A — mutation testing
 
-For multi-day runs on free models, an orchestrator keeps itself alive with three layers —
-detailed in **Reference 05**: (1) a staggered grid of background `sleep` beats armed
-*first* in every turn (they burn no quota, so a frozen turn cannot take the wake chain
-down); (2) an out-of-session watchdog (systemd `--user` timer, `assets/watchdog.sh`)
-that nudges a stale session headlessly via `opencode run --auto -s <sessionID>`; (3) a
-quota-aware worker protocol (Reference 06): local progress commits, PARTIAL PRs instead
-of silent death, explicit scope ceilings. Running tabs are never reprompted mid-flight;
-their health is checked via worktree forensics only. Workers create PRs and issues but
-never merge — the owner's return is the merge queue.
+The engine is regex-based, with per-language rule packs under
+`scripts/autonomous/mutation_rules/`. It mutates one line at a time and runs
+your targeted test command once per mutant.
 
-## Work Ledger
+- `KILLED`: the suite noticed. No work.
+- `SURVIVED`: a candidate gap. **Triage first** — equivalent mutants, string or
+  comment noise, and regex false positives are real.
+- `UNCOMPILABLE`: an anchored compiler-error pattern matched; excluded from the
+  kill rate. Never "fix" these with tests.
+- `TIMEOUT`: reported separately; counted as killed by default. Change with
+  `--timeout-counts-as`.
 
-Each repo keeps `docs/AUTONOMOUS_WORK_LEDGER.md` (or equivalent) with one row per completed audit:
+A survivor becomes work only when you can state the behavior it breaks and write
+a test that is red with the mutant and green without it. The test passes on
+`origin/main` by construction; that is expected (Law 1).
 
-```markdown
-| Date | Stream | Target File / Module | Content Hash | Status | PR / Issue | Summary / Outcome | Re-Audit Trigger |
-|---|---|---|---|---|---|---|---|
-| 2026-10-18 | Stream A (Mutation) | `src/auth/token_service.ts` | `a1b2c3d` | COMPLETED | PR #42 | 25 mutants: 20 killed, 3 invalid, 2 gaps fixed | Any modification to `token_service.ts` |
-```
+Safety: the engine refuses a dirty source unless `--allow-dirty`, writes
+`<file>.mutbak` + `<file>.mutlock`, restores on SIGTERM/SIGINT/SIGHUP, and
+recovers a stale backup after SIGKILL. Add these patterns to `.gitignore`; see
+`assets/gitignore.fragment.txt`. Shards need separate worktrees.
 
-Invalidation: current content hash matches ledger `Content Hash` + status `COMPLETED`/`SOUND` -> skip. Hash changed or absent -> eligible. Two agents appending will conflict — `git pull --rebase origin/main` and retry.
+## Stream B — adversarial test audit
 
-## What Not To Do
+Read a test file and ask:
 
-- Cosmetic renames, import reordering, splitting 5-line functions, or any refactor without a behavioral invariant it defends.
-- Tests that assert literals, echo mocks, or pass regardless of implementation.
-- A "fix" that is really `skip`/`xfail`/`// eslint-disable`/`@ts-ignore`/widened tolerance/catch-all.
-- Editing the referee (specs, gate configs, CI, `CODEOWNERS`, ratchet baselines, linter config) to get a pass — that's a separate gate-change PR with human approval.
-- Inventing features the plan hasn't scheduled. The default answer for a new capability is **no**.
+1. **Can it actually fail?** Does it assert real state, or only that a call did
+   not throw? Would it pass if the implementation did the opposite?
+2. **Does it assert behavior or the mock?** If the mock returns X and the test
+   asserts X, no domain logic ran.
+3. **Is it a timing bomb?** Fixed sleeps are flakes under load. Poll a condition
+   or use a virtual clock; never add a sleep to "stabilize" anything.
 
-## Stack Adapters
+Every finding needs evidence (a line, a counterexample, or a proposed
+assertion). Cosmetic edits are not Stream B work.
 
-- **Dart/Flutter:** `fvm flutter test <file> --plain-name '<name>'`, `fvm flutter analyze <files>`, `dart format .` (page width from `analysis_options.yaml` — run `pub get` first or the formatter silently falls back to 80 and rewrites everything), `build_runner` per worktree, `lib/l10n` churn discard.
-- **JS/TS (Biome or ESLint + Prettier):** `biome check --write` or `eslint`+`prettier` on touched files; `vitest`/`jest` with `--run -t '<name>'` or equivalent; never run the full suite locally as the inner loop.
-- **Python:** `ruff check --fix` + `ruff format`, `pyright`/`mypy`, `pytest <file> -k <name>`.
-- **Other:** Discover the project's own `AGENTS.md`/`CONTRIBUTING.md`/`Makefile`/`justfile`/`package.json` scripts and use those commands — don't guess generic ones.
+## The ledger
 
-## Assets & Scripts
+The ledger is a git-tracked markdown table:
+`docs/AUTONOMOUS_WORK_LEDGER.md` by default (`ledger_path` in config).
 
-Copy from `assets/` and `scripts/` into the target repo; protect them with `CODEOWNERS` once copied.
+- One row per audit; new rows go directly below the header (newest first).
+- The authoritative row for a target is the newest by date; on a tie, the
+  topmost row wins.
+- Statuses are exactly `COMPLETED` and `SOUND`. There is no in-progress
+  status: claim a target by opening a draft PR early, because a claim written
+  in one worktree is invisible to other agents until merged.
+- Cells are escaped (`\|`, `\\`); rows must stay append-only. Add the
+  `merge=union` fragment from `assets/gitattributes.fragment.txt` so parallel
+  appends merge without conflicts.
+- The hash is the blob at HEAD. `record` warns if the target is dirty;
+  `--strict` makes that fatal.
 
-| Path | Purpose |
-|---|---|
-| `scripts/autonomous/mutation_engine.py` | Regex-based mutation runner — language-agnostic pattern list, per-language tuning noted in header |
-| `scripts/autonomous/ledger.py` | Content-hash ledger manager (`next` / `record`) |
-| `scripts/autonomous/orchestrator.py` | Worktree lifecycle + `gates.sh t1` helper |
-| `assets/AUTONOMOUS_WORK_LEDGER.template.md` | Starter ledger table |
-| `assets/protected-paths.fragment.txt` | Lines to append to a protected-paths file for these assets |
-| `assets/watchdog.sh` | Out-of-session revive loop: stale-heartbeat nudge + dead-process revival for a multi-day unattended orchestrator (see Reference 05) |
-| `assets/opencode-watchdog.service` / `assets/opencode-watchdog.timer` | systemd `--user` units that run the watchdog every 20 min |
+## Planned (not available)
 
-Mutations are regex-based, not AST-based. Every surviving mutant must be triaged — many are equivalent mutants or hit string literals. Promotion to a blocking gate requires two green runs without false positives on that repo.
+- **Stream C** — property fuzzing / model checking.
+- **Stream D** — migration and data-preservation archeology.
 
-## Honest Limits
+Do not start work under these names or promise them in a PR; offer Streams A/B.
 
-- Gates verify conformance to the spec, not the truth of the spec; the spec stays human-owned.
-- Mutation here is not a replacement for AST-based tooling (Stryker, PIT, mutmut, etc.) — it's a lightweight, zero-dependency breaker for repos without one.
-- Benchmarks and flakiness are measurement problems first: fix the instrument before optimizing, report spread not just median, and re-run a suspect test in isolation before blaming a change.
-- Gate maintenance is real work. Delete gates that stop paying.
+## Unattended operation (advanced)
+
+Multi-day, owner-away fleets are a separate concern from the core loop. If you
+need them, read `references/05-unattended-operation.md` and treat the
+opencode/systemd material there as **harness-specific**: it does not transfer
+to Claude Code or another agent without adapting the resume command.
 
 ## References
 
-Load on demand; don't carry every detail in the entrypoint.
-
-| File | When to read |
+| File | Read when |
 |---|---|
-| `references/01-mutation-engine.md` | Tuning mutations, triaging survivors, language-specific patterns |
-| `references/02-ledger-and-dedup.md` | Ledger schema, hash choice, merge contention, PR collision avoidance |
-| `references/03-streams-and-triage.md` | Deep dive on all four streams, triage checklists, promotion criteria |
-| `references/04-workflow-and-roles.md` | Full per-task protocol, worktree discipline, PR evidence contract |
-| `references/05-orchestrator-survival.md` | Multi-day unattended mode: the zero-pending-jobs invariant, staggered wake beats, external watchdog, throttle recovery, relaunch protocol |
-| `references/06-fleet-and-quota-operations.md` | Parallel tabs on free models: model rotation, quota-aware workers, file-ownership map, cross-fleet coexistence, attribution footers |
-| `references/07-moving-main.md` | Working on a repo that keeps merging: per-wake drift checks, the completion-gate premise recheck, base-relative audits, merge-wave measurement traps |
+| `references/01-mutation-engine.md` | Rule packs, statuses, seeds/shards, diff scoping, triage |
+| `references/02-ledger-and-dedup.md` | Schema, newest-wins, composite hash, escaping, merge driver, draft-PR claims |
+| `references/03-streams-and-triage.md` | Deeper Stream A/B checklists and planned streams |
+| `references/04-workflow-and-roles.md` | The one canonical per-task protocol and evidence contract |
+| `references/05-unattended-operation.md` | Heartbeats, watchdog, quotas, fleet coordination (advanced) |
+| `references/07-moving-main.md` | Working on a repo that keeps merging; stale-base traps |
+| `references/gates-and-vocabulary.md` | Gate ids, optional vocabulary, and the "no gates yet" fallback |
+| `references/stack-adapters.md` | Concrete commands per stack |
+| `references/examples.md` | One end-to-end Stream A example and a good/bad Stream B finding |
+
+## Final rules
+
+- Do not edit the referee (specs, gate configs, CI, `CODEOWNERS`, ratchets,
+  linter config) to get green. That is a separate, human-approved PR.
+- Do not weaken tests (`skip`, `xfail`, `.only`, `# noqa`, widened tolerance) to
+  make a gate pass. `scripts/autonomous/test_weakening_check.py` is the local
+  tripwire when the repo has no gate system.
+- Delete a gate that stops paying; do not accumulate ceremony.
+- If the repo has no gates, run the project's own CI commands locally on touched
+  files only and use the tripwire. Never block on a `gates.sh` that does not
+  exist.
+
+*Honest limit: gates verify conformance to the spec, not the truth of the spec.
+Mutation here does not replace AST-based tools (Stryker, PIT, mutmut,
+cargo-mutants); it is the zero-dependency fallback.*
