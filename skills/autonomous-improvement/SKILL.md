@@ -33,6 +33,12 @@ live model too — verified 2026-10-20: seven nudges on the frozen model, every
 one answered "Rate limit exceeded", across an 8-hour freeze while another
 free model stayed alive. See "Model rotation" in `05`.
 
+A PR is not done when it is created. The Orchestrator owns each PR to merge:
+it reads the checks on every wake, drives a red check that sits inside the
+diff back to green, re-asks the owner per item when a protected-path gate
+needs a label, and merges only on green **for the current head sha**. The
+loop is in "The CI green loop" in `04`.
+
 ## The five laws
 
 | Law | Rule |
