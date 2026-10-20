@@ -94,6 +94,15 @@ The Orchestrator:
   model — never the provider/model that just failed — and the dead model is
   recorded on the journal's dead-pool list. When every pool is dry, it reports
   that plainly instead of spinning workers against dead pools;
+- **never parks a task because of a pool**: the task is re-dispatched on a live
+  model — the session's own, dispatched unpinned, first — or it is reported as
+  blocked-with-reason. Idle because a pinned pool died is the failure mode
+  this fleet is most prone to (verified 2026-10-20: three pinned pools died
+  within minutes, the fleet stopped, and the session's own pool was alive and
+  untried the whole time);
+- **re-derives the queue from the codebase**: when the tracked targets are
+  exhausted, the next candidates are the files with no ledger row yet. An
+  exhausted list is a signal to look wider, not to idle;
 - **owns every PR from creation to merge**: it reads that PR's checks on every
   wake, drives a red check that sits inside the diff back to green (re-dispatch
   the fix to the same worker session, or to a fresh worker on a live model),
