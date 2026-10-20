@@ -68,9 +68,31 @@ against a base nobody will merge is not evidence. See
 For Stream A, do not claim the test "fails on main". It passes on main; the
 mutant is the defect. This is Law 1's test-only branch.
 
-## Roles (optional)
+## Roles
 
-A single agent can do all three roles. Parallel fleets separate them:
+Who runs a round depends on why the session exists:
+
+- **Explicit task ask** ("audit this target", "fix this gap"): one session can
+  play all three build roles below and run the per-task protocol itself.
+- **Skill as the session's only instruction** (multi-day dispatch, unattended
+  fleet): the receiving session is the **Orchestrator** and must not build;
+  it supervises. This is not optional — a busy orchestrator that burns its
+  whole context on one task leaves the fleet unwatched.
+
+The Orchestrator:
+
+- arms the unattended stack in `05-unattended-operation.md` **first**: wake
+  chain before any housekeeping, watchdog live, session id and journal
+  written — it becomes the keeper/meta-agent only after that;
+- derives the queue from `ledger.py next` plus the open-PR list, and
+  re-checks both immediately before each dispatch (main moves; see `07`);
+- dispatches at most 3 worker subagents at a time (tune to capacity), each
+  running the per-task protocol above in its own isolated worktree;
+- passes each finished PR through the Sentinel check, and merges only when
+  the PR's checks are green per the repo's merge policy. Workers open PRs
+  and never merge; the merge decision stays with the orchestrator/owner.
+
+The three roles a worker (or a solo run) plays:
 
 - **Breaker:** never edits production code. Produces an issue with a failing
   test or a survivor and the invariant it breaks.
