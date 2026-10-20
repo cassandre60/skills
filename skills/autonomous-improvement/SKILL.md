@@ -25,7 +25,15 @@ See "Roles" in `04`; the unattended stack that keeps it alive is in `05`,
 whose cold start finds the state dir, writes its own session id, and arms
 the wake grid **before** the watchdog — boot order matters.
 
-## The four laws
+When a worker or the session itself dies with a quota error, the Orchestrator
+**rotates the model**, it does not retry the same one: enumerate the live
+models, re-dispatch on a different one, and put the dead model on the
+journal's dead-pool list. A resume that wakes a frozen session must name a
+live model too — verified 2026-10-20: seven nudges on the frozen model, every
+one answered "Rate limit exceeded", across an 8-hour freeze while another
+free model stayed alive. See "Model rotation" in `05`.
+
+## The five laws
 
 | Law | Rule |
 |---|---|
@@ -33,6 +41,7 @@ the wake grid **before** the watchdog — boot order matters.
 | **2. Content-hash dedup** | Deduplicate on the **content hash** of the target *and its companion test*, never on commit identity. The ledger stores `<source9>:<test9>`; a test change invalidates the audit just like a source change. |
 | **3. Worktree isolation** | Every task runs in an isolated worktree branched from the configured base (`origin/main` by default). Stage by name; never run destructive git commands outside your own worktree. |
 | **4. Machine budget** | One targeted test per mutant, one full-file run at the end of the task. Never run the whole suite locally — that is CI's job. One analyze/lint pass per task, on touched files, after the last edit. |
+| **5. Pool rotation** | A quota error changes the model; it is never retried on the model that just failed. The dead model is recorded, the next live model takes the task, and the wake that revives a frozen session names a live model. A gateway reporting "$0 balance" is a paid pool with no credit, not a free fallback. |
 
 The engine runs tests serially. `machine_budget.max_concurrent_tests` in config
 records the owner's cap for parallel shards/agents; it is not a per-run fan-out
@@ -129,6 +138,11 @@ Multi-day, owner-away fleets are a separate concern from the core loop. If you
 need them, read `references/05-unattended-operation.md` and treat the
 opencode/systemd material there as **harness-specific**: it does not transfer
 to Claude Code or another agent without adapting the resume command.
+
+The installed watchdog walks a **model ladder** (`ORCH_MODEL_LADDER`): on a
+quota/balance error it marks that model and retries the same tick on the next
+one, instead of waiting out the heartbeat threshold. Every ladder entry must
+carry quota independent of the others — and must actually be free.
 
 ## References
 
