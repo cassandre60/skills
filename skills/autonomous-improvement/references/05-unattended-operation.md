@@ -1,8 +1,37 @@
 # Unattended Operation (advanced)
 
-This reference is for multi-day, owner-away fleets. The core Streams A/B loop
-does not need it. Everything in the **harness-specific** sections defaults to
-opencode + systemd on Linux; adapt or ignore it for another harness.
+This reference is for multi-day, owner-away fleets and for every session
+running as the Orchestrator (`04`) — its cold start lives here. A single
+session doing an explicit Stream A/B task does not need it. Harness sections
+default to opencode + systemd on Linux; adapt or ignore for another harness.
+
+## Cold start (skill-only boot)
+
+A session whose only instruction is this skill starts its own operation
+before anything else. First turn, in order:
+
+1. **Find the state.** Look for the durable state dir outside the repo
+   (`~/.local/share/<project>-oracle/`, or the name a prior run deployed).
+   It should hold a journal, a session-id file and — when the snapshot
+   timer runs — a snapshots log. A missing dir means first deployment:
+   create it with the same naming pattern. The journal is the fleet's
+   memory; do not skip it.
+2. **Learn your own session id** from the harness and write it into the
+   session-id file the watchdog reads (opencode: a no-op
+   `session_rename` returns it). Until this is current, every revive
+   nudge knocks a dead session.
+3. **Arm the wake grid** as backgrounded sleeps FIRST — beats cost no
+   tokens and are the only self-wake that needs no helper.
+4. **Watchdog.** If one is deployed but stopped, start it after step 2 —
+   it reads the same session-id file. Otherwise install from
+   `assets/install-watchdog.sh`. If neither works, degrade to
+   beats-only and record that in the journal: beats alone keep the loop
+   alive; the watchdog is armor, not a requirement.
+5. **Read the journal tail** (and the snapshots log after any gap):
+   ledger status, open PRs, in-flight tabs supersede session memory —
+   right after a restart this file is the fastest reliable read.
+
+Only then derive the queue (`ledger.py next` + open PRs) and dispatch.
 
 ## The one invariant
 

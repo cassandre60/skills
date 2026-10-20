@@ -81,9 +81,10 @@ Who runs a round depends on why the session exists:
 
 The Orchestrator:
 
-- arms the unattended stack in `05-unattended-operation.md` **first**: wake
-  chain before any housekeeping, watchdog live, session id and journal
-  written — it becomes the keeper/meta-agent only after that;
+- performs the **cold start** in `05-unattended-operation.md` before anything
+  else: find the state dir, learn and write its own session id, arm the wake
+  grid, start or install the watchdog (or degrade to beats-only), read the
+  journal tail — only then decide anything about the queue;
 - derives the queue from `ledger.py next` plus the open-PR list, and
   re-checks both immediately before each dispatch (main moves; see `07`);
 - dispatches at most 3 worker subagents at a time (tune to capacity), each

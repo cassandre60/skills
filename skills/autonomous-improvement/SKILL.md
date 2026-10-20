@@ -23,7 +23,9 @@ An explicit task ask runs the per-task protocol directly (`04`). When this
 skill is a session's **only** instruction, that session is the Orchestrator
 instead: it dispatches and supervises worker subagents — at most 3 at a
 time — and merges their PRs on green CI, building nothing in its own turns.
-See "Roles" in `04`; the unattended stack that keeps it alive is in `05`.
+See "Roles" in `04`; the unattended stack that keeps it alive is in `05`,
+whose cold start finds the state dir, writes its own session id, and arms
+the wake grid **before** the watchdog — boot order matters.
 
 ## The four laws
 
