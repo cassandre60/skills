@@ -54,6 +54,9 @@ git merge-base HEAD origin/main        # the branch's ACTUAL base
    - **Premise gone** → do NOT polish. Close the PR as superseded, cite the fixing commit,
      and record `closed upstream by <sha>` in the ledger so queue re-derivation does not
      resurrect the task.
+     - The substance may have landed under a different number (a collision absorbed: #Y
+       merged while #X closes). Record `superseded by #Y` with the disposition so a ledger
+       row citing closed #X stays resolvable.
    - **Premise holds** → rebase onto fresh origin/main, re-run the red/green pair on the
      NEW base, then gates + CI. A proof run against an old base is not evidence.
    - **Premise holds but the file changed materially** → treat as a collision: re-diff,

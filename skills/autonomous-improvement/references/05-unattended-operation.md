@@ -18,9 +18,37 @@ session has.
   `~/.local/share/<project>-oracle/journal.md`) so recovery does not depend on
   reconstructing state from memory.
 - One batched shell call per wake; one line of prose when nothing changed.
+- Stretch the grid when free-pool pressure is high (for example 30, 60, 120
+  minutes): completed sleeps are free, but every wake turn spends tokens
+  whether or not the pool has any left.
 
 This invariant cannot save a dead session process. The external watchdog below
-covers that case.
+covers that case. It also cannot save a session whose **model pool is dry** —
+that third failure mode is next.
+
+## Freeze anatomy: token starvation is a third mode
+
+A pending sleep needs no model tokens, but **waking because it fired does**.
+Every wake channel — a completed beat, a watchdog nudge, a queued user
+message — spends the session's own model pool, so a dry pool freezes the
+session while the process stays alive and "healthy":
+
+- pending beats keep firing; each wake turn dies silently on quota;
+- nudges queue as user messages; none of them conjures tokens;
+- when the pool returns, every queued nudge is delivered at once. Verified
+  2026-10-20: a ~9 h freeze produced a 7x burst of identical nudges.
+
+Two counters keep one frozen window cheap:
+
+1. **Knock rate-limit.** A `last_nudge` marker: exit while the previous nudge
+   is younger than ~35 min. `flock` prevents concurrent runs, not stacked
+   queued ones. One frozen window delivers one queued nudge.
+2. **Tier ladder** through `ORCH_RESUME_CMD`, escalating by staleness depth:
+   the session's own model recovers transient freezes; after ~1h45m stale,
+   retry on a **different free pool** (`-m <provider/model>` — a different
+   quota bucket, not the same one renamed); beyond that, a cheap paid model
+   only with explicit owner consent. A tier run that fails logs and retries
+   on the next timer tick.
 
 ## External watchdog: one code path
 
@@ -136,6 +164,9 @@ not a security boundary.
   headlessly. It is the only verified injection point here.
 - Free-model pooling and `tools.opencode.models` are opencode features. Another
   harness needs its own model enumeration.
+- An opencode server restart preserves sessions and background subagents but
+  kills background sleep beats. First action after a restart: re-arm the beat
+  grid, then continue. Verified twice (2026-10-19, 2026-10-20).
 - Attribution footers are a **policy convention**, not a skill requirement. If a
   repo asks for them, append them to PR/issue **bodies** only, never titles or
   repo files.
@@ -172,6 +203,16 @@ commits, no progress for >3h), never by prompting a tab mid-flight.
   owner.
 - No attribution footers on other fleets' PRs; they are not your artifacts.
 
+## Snapshot accumulator (no-model evidence)
+
+A second `--user` timer, hourly, that needs no model tokens: append to an
+append-only log (`snapshots.log`) the state the orchestrator must not lose to
+a freeze — current `main` sha, open PRs with head branches, per-worktree
+own-commit and dirty counts. While the orchestrator cannot read anything,
+the log keeps accruing; the recovery wake replays it instead of rebuilding
+state from `gh`. Verified 2026-10-20: snapshots caught a full merge wave
+while the orchestrator was frozen.
+
 ## Sentinel review checklist (per worker PR)
 
 0. Fresh fetch + premise recheck on current `origin/main` (see
@@ -204,3 +245,8 @@ When a fleet is cancelled (rate limits, harness restart):
   an explicit unstage.
 - [2026-10-19] `opencode run --auto -s <sessionID> "msg"` continues a specific
   session headlessly. Verified by a successful watchdog nudge.
+- [2026-10-20] Free-pool exhaustion freezes the session with the process alive
+  and all wake channels funneling through the same empty pool; queued nudges
+  flush only when the pool returns (7x identical burst after a ~9 h freeze).
+  Knock rate-limiting plus a tiered `-m` cross-pool fallback bound one window
+  to one queued nudge and let the first open window serve the wake.
