@@ -908,7 +908,13 @@ Behavioral evals (E7) are separate and run with an agent, not in `unittest`.
 ## Appendix A — Suggested replacement text
 
 **Frontmatter description (E3):**
-> Run falsifiable, high-signal improvement cycles on a codebase instead of cosmetic churn: mutation testing to find tests that don't actually protect behavior, and adversarial audits of existing tests (vacuous assertions, flaky sleeps, over-mocking). Use when asked to "improve the repo", "audit the tests", "find weak or flaky tests", "improve test quality, not just coverage", "run mutation testing", or when "tests pass but I don't trust them" — or when an agent has spare budget and needs work that can be proven real (fails without the fix, not already done at this file's content, cheap enough to run locally). Do not use for feature work, refactors, or one-off bugfixes.
+> Run falsifiable, high-signal improvement cycles on a codebase instead of cosmetic churn — mutation testing to find tests that don't actually protect behavior, and adversarial audits of existing tests (vacuous assertions, flaky sleeps, over-mocking). Use when asked to "improve the repo", "audit the tests", "find weak or flaky tests", "improve test quality, not just coverage", "run mutation testing", or when "tests pass but I don't trust them" — or when an agent has spare budget and needs work that can be proven real (fails without the fix, not already done at this file's content, cheap enough to run locally). Given as a session's only prompt, it turns that session into an orchestrator that dispatches worker subagents instead of building itself (references/04-workflow-and-roles.md). Do not use for feature work, refactors, or one-off bugfixes.
+
+> Note: the em dash after "cosmetic churn" is deliberate. A plain `": "`
+> inside an unquoted YAML scalar makes the frontmatter invalid, and the
+> `skills` installer then skips the whole skill with a warning instead of
+> failing. `scripts/check_skills.py` and `scripts/check_discovery.sh` now
+> fail CI on it.
 
 **Law 1 (E1):** see E1 above.
 

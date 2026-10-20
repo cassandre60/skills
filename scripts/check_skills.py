@@ -6,11 +6,24 @@ Enforces:
 2. SKILL.md has valid YAML frontmatter with `name:` matching <name> and a non-empty `description:`
 3. Relative links/paths mentioned inside the skill directory resolve to real files
 4. No hardcoded API keys / secrets (sk-..., ghp_..., etc.)
+
+The frontmatter check parses YAML the way the `skills` installer does. A
+SKILL.md whose frontmatter the installer cannot parse is silently skipped at
+install time, so a regex-only check lets a broken skill ship unnoticed.
 """
-import os
 import re
 import sys
 from pathlib import Path
+
+try:
+    import yaml
+except ImportError:
+    print(
+        "Error: PyYAML is required to validate skill frontmatter.\n"
+        "Install it with: pip install -r scripts/requirements.txt",
+        file=sys.stderr,
+    )
+    sys.exit(2)
 
 ROOT = Path(__file__).resolve().parent.parent
 SKILLS_DIR = ROOT / "skills"
@@ -21,29 +34,56 @@ SECRET_PATTERNS = [
     (re.compile(r"github_pat_[a-zA-Z0-9_]{60,}"), "Fine-grained GitHub token"),
 ]
 
+def split_frontmatter(text: str) -> tuple[str | None, str]:
+    """Split SKILL.md into (frontmatter, body).
+
+    Returns (None, text) when the file has no opening `---` or the frontmatter
+    is never closed. A `---` inside the body (a horizontal rule) is not treated
+    as the closing delimiter.
+    """
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return None, text
+    for index in range(1, len(lines)):
+        if lines[index].strip() == "---":
+            return "\n".join(lines[1:index]), "\n".join(lines[index + 1 :])
+    return None, text
+
 def check_frontmatter(skill_dir: Path, skill_md: Path, issues: list):
     text = skill_md.read_text(encoding="utf-8")
-    if not text.startswith("---"):
-        issues.append(f"{skill_dir.name}: SKILL.md missing opening YAML frontmatter ('---')")
+    frontmatter, _ = split_frontmatter(text)
+
+    if frontmatter is None:
+        if not text.startswith("---"):
+            issues.append(f"{skill_dir.name}: SKILL.md missing opening YAML frontmatter ('---')")
+        else:
+            issues.append(f"{skill_dir.name}: SKILL.md malformed YAML frontmatter (unclosed '---')")
         return text
 
-    parts = text.split("---", 2)
-    if len(parts) < 3:
-        issues.append(f"{skill_dir.name}: SKILL.md malformed YAML frontmatter (unclosed '---')")
-        return text
-
-    frontmatter = parts[1]
-    name_match = re.search(r"^name:\s*([^\s#]+)", frontmatter, re.M)
-    desc_match = re.search(r"^description:\s*(.+)", frontmatter, re.M)
-
-    if not name_match:
-        issues.append(f"{skill_dir.name}: SKILL.md frontmatter missing 'name:'")
-    elif name_match.group(1).strip() != skill_dir.name:
+    try:
+        data = yaml.safe_load(frontmatter)
+    except yaml.YAMLError as error:
         issues.append(
-            f"{skill_dir.name}: SKILL.md frontmatter name '{name_match.group(1)}' does not match directory '{skill_dir.name}'"
+            f"{skill_dir.name}: SKILL.md frontmatter is not valid YAML "
+            f"(the skills installer will skip this skill): {error}"
+        )
+        return text
+
+    if not isinstance(data, dict):
+        issues.append(f"{skill_dir.name}: SKILL.md frontmatter must be a YAML mapping")
+        return text
+
+    name = data.get("name")
+    description = data.get("description")
+
+    if not isinstance(name, str) or not name.strip():
+        issues.append(f"{skill_dir.name}: SKILL.md frontmatter missing 'name:'")
+    elif name.strip() != skill_dir.name:
+        issues.append(
+            f"{skill_dir.name}: SKILL.md frontmatter name '{name.strip()}' does not match directory '{skill_dir.name}'"
         )
 
-    if not desc_match or not desc_match.group(1).strip():
+    if not isinstance(description, str) or not description.strip():
         issues.append(f"{skill_dir.name}: SKILL.md frontmatter missing or empty 'description:'")
 
     return text

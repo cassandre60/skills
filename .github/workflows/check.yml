@@ -14,8 +14,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install pyyaml
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: pip install -r scripts/requirements.txt
       - name: Validate skills (frontmatter, structure, references, secrets)
         run: python3 scripts/check_skills.py
+      - name: Verify every skill is discoverable by the skills installer
+        run: scripts/check_discovery.sh
       - name: Verify README dynamic sections are fresh
         run: python3 scripts/generate_readme.py --check
