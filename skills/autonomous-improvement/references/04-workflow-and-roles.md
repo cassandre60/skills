@@ -145,6 +145,15 @@ sit red and the fleet looks busy while nothing converges.
 6. **Nothing red goes quiet.** If a PR has been red for two wakes without an
    owner answer, say so in the owner report — in plain terms, with what the
    red check is and what the owner is being asked to accept.
+7. **Protected-file bookkeeping is batched, not bundled.** When a repo treats
+   an audit ledger as a protected path, a worker's row for it blocks the PR on
+   a gate label — and the gate's own message says such an edit "must be a
+   separate PR, not bundled with product code". So workers must not touch that
+   file: they report the row text, and the orchestrator collects the rows
+   into **one** separate ledger PR per wave. One owner decision per wave
+   instead of one per PR, and the product PRs ship green. (Verified
+   2026-10-20: five audit PRs were each blocked on the same kind of one-line
+   append; batching them turned five owner decisions into one.)
 
 ## Git discipline
 
