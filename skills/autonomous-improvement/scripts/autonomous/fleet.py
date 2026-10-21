@@ -63,8 +63,13 @@ def fetch_gh_prs(
     require_gh: bool = False,
 ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
     """Fetch PRs from gh CLI with fallback for older versions and stubs."""
+    # No `commits`: it drags in the authors connection, and on a repo with a
+    # few hundred PRs the query exceeds GraphQL's node limit ("requesting up to
+    # 1,000,000 possible nodes ... exceeds the maximum limit of 500,000").
+    # The failure is silent - the caller falls back to a field set without
+    # mergedAt, and then every PR looks unmerged: acceptance_rate reads 0.0.
     fields_full = (
-        "number,title,headRefName,headRefOid,commits,statusCheckRollup,"
+        "number,title,headRefName,headRefOid,statusCheckRollup,"
         "labels,createdAt,updatedAt,mergedAt,closedAt,body"
     )
     argv = [
