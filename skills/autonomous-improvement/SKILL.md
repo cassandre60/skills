@@ -6,11 +6,13 @@ description: Run falsifiable, high-signal improvement cycles on a codebase inste
 # Autonomous Improvement
 
 Spend tokens on work that can be **mechanically falsified**, not on renames,
-prose, or checkbox tests. Two streams are active:
+prose, or checkbox tests. Four streams are active:
 
 - **A — mutation testing:** find behavior the suite does not protect.
 - **B — adversarial test audit:** find tests that cannot fail, assert mocks, or
   sleep instead of synchronizing.
+- **C — property / fuzz:** recorded seeds through the repo's own harness; shrunk counterexamples retained (`fuzz_shrink.py`).
+- **G — performance:** bench delta beyond the band plus output equivalence, both mandatory — `perf_gate.py`.
 
 Each round produces at most one small, evidence-backed PR. If there is no
 falsifiable gap, stop; that is a valid result.
@@ -144,17 +146,16 @@ The ledger is a git-tracked markdown table:
 - The hash is the blob at HEAD. `record` warns if the target is dirty;
   `--strict` makes that fatal.
 
-## Beyond testing (planned streams C–L)
+## Beyond testing (planned streams D, E, F, H, I, J, K, L)
 
-Testing is the bootstrap, not the ceiling: streams C–L generalize the same
-five laws to fuzzing, defect repair, flakiness, performance, security, docs
-truthfulness, simplification, dependency evolution, and — capped and
-eval-gated — the fleet improving itself. Each must pass the stream contract
-in `references/08-recursive-self-improvement.md` (deterministic finder,
+Testing is the bootstrap, not the ceiling. The remaining streams (defect
+repair, flakiness, security, docs truthfulness, simplification, dependency
+evolution, capped self-improvement) must pass the stream contract in
+`references/08-recursive-self-improvement.md` (deterministic finder,
 mechanical oracle, content-addressed memory, bounded blast radius, referee
-isolation) before its letter unlocks; `ledger.py` rejects C–L until then.
-Do not start work under a locked letter or promise it in a PR; offer A/B, or
-file the finding as an evidence-backed issue.
+isolation) before their letter unlocks; `ledger.py` rejects locked letters.
+Do not start work under a locked letter or promise it in a PR; offer
+A/B/C/G, or file the finding as an evidence-backed issue.
 
 ## Unattended operation (advanced)
 

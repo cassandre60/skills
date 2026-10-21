@@ -428,11 +428,11 @@ def test_for_source(root: Path, cfg: Dict[str, Any], source: str) -> Optional[st
 STREAMS: Dict[str, Dict[str, Any]] = {
     "A": {"label": "A (Mutation)", "status": "available"},
     "B": {"label": "B (Test Audit)", "status": "available"},
-    "C": {"label": "C (Property / Fuzz)", "status": "planned"},
+    "C": {"label": "C (Property / Fuzz)", "status": "available"},
     "D": {"label": "D (Data / Migration)", "status": "planned"},
     "E": {"label": "E (Defect Repair)", "status": "planned"},
     "F": {"label": "F (Flake & Determinism)", "status": "planned"},
-    "G": {"label": "G (Performance)", "status": "planned"},
+    "G": {"label": "G (Performance)", "status": "available"},
     "H": {"label": "H (Security & Supply Chain)", "status": "planned"},
     "I": {"label": "I (Docs & Spec Truthfulness)", "status": "planned"},
     "J": {"label": "J (Simplification / Dead Code)", "status": "planned"},

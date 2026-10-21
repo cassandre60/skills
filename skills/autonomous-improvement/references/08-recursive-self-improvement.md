@@ -39,7 +39,13 @@ at T2, and at T1 for anything referee-adjacent.
 
 ## The catalog
 
-Available now: **A** mutation, **B** adversarial test audit (`03`).
+Available now: **A** mutation, **B** adversarial test audit (`03`),
+**C** property/fuzz (`fuzz_shrink.py`: recorded seeds, deterministic
+shrink, retained counterexamples, replay oracle) and **G** performance
+(`perf_gate.py`: pinned bench delta beyond the band plus differential
+equivalence — both halves mandatory, "faster because it does less" is
+rejected). **F**, **I**, **H+K** and **E** ship in their own PRs — see
+those for their tooling.
 
 | Stream | Oracle in one line | Starts |
 |---|---|---|

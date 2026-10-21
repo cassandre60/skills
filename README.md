@@ -60,10 +60,10 @@ skills/
     LICENSE
     README.md
     assets/     # 12 files
-    evals/      # 18 files
+    evals/      # 28 files
     examples/   # 2 files
     references/ # 10 files
-    scripts/    # 14 files
+    scripts/    # 16 files
     tests/      # 3 files
   cliproxy-integration/
     SKILL.md
