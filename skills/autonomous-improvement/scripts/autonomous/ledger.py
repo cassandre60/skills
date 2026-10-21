@@ -38,6 +38,7 @@ from common import (
     hash_at_head,
     is_dirty,
     load_config,
+    match_any,
     normalize_stream,
     path_at_head,
     rel_path,
@@ -48,8 +49,12 @@ from common import (
 )
 
 SEPARATOR_RE = re.compile(r"^\|\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$")
-STATUSES = ("COMPLETED", "SOUND")
 AUDITED_STATUSES = {"COMPLETED", "SOUND"}
+# Negative dispositions: "the fleet was told no". They are memory, not audits:
+# a disposition applies only while the composite hash still matches, so any
+# content change re-opens the target (same rule as an audit going stale).
+DISPOSITION_STATUSES = {"REJECTED", "WONTFIX", "SUPERSEDED"}
+STATUSES = ("COMPLETED", "SOUND", "REJECTED", "WONTFIX", "SUPERSEDED")
 
 
 @dataclass
@@ -141,7 +146,7 @@ def parse_ledger(path: Path) -> List[LedgerRow]:
         if len(cells) < 8:
             continue
         status = cells[4].strip().strip("*`").upper()
-        if status not in AUDITED_STATUSES and status != "EXAMPLE":
+        if status not in AUDITED_STATUSES and status not in DISPOSITION_STATUSES and status != "EXAMPLE":
             continue
         rows.append(
             LedgerRow(
@@ -164,6 +169,28 @@ def authoritative_rows(path: Path) -> Dict[str, LedgerRow]:
     newest: Dict[str, LedgerRow] = {}
     for row in parse_ledger(path):
         if row.status not in AUDITED_STATUSES:
+            continue
+        current = newest.get(row.target)
+        key = (row.date or "0000-00-00", -row.line_index)
+        if current is None:
+            newest[row.target] = row
+            continue
+        current_key = (current.date or "0000-00-00", -current.line_index)
+        if key > current_key:
+            newest[row.target] = row
+    return newest
+
+
+def authoritative_dispositions(path: Path) -> Dict[str, LedgerRow]:
+    """Newest negative disposition per target (REJECTED / WONTFIX / SUPERSEDED).
+
+    Same newest-wins rule as :func:`authoritative_rows`. A disposition only
+    suppresses a target while the composite hash still matches; content
+    changes re-open it, exactly like a stale audit.
+    """
+    newest: Dict[str, LedgerRow] = {}
+    for row in parse_ledger(path):
+        if row.status not in DISPOSITION_STATUSES:
             continue
         current = newest.get(row.target)
         key = (row.date or "0000-00-00", -row.line_index)
@@ -352,6 +379,7 @@ def cmd_next(args: argparse.Namespace) -> int:
     stream = normalize_stream(args.stream)
     ledger = _ledger_path(root, cfg, args.ledger)
     audited = authoritative_rows(ledger)
+    dispositions = authoritative_dispositions(ledger)
     claims, warning = _gh_claims(root, args.require_gh)
     if warning:
         print(f"[warning] {warning}", file=sys.stderr)
@@ -365,6 +393,21 @@ def cmd_next(args: argparse.Namespace) -> int:
             continue
         if record["audited"]:
             skipped.append(dict(record, skip="already audited at current content hash"))
+            continue
+        disposition = dispositions.get(record["target"])
+        if disposition and _matches(
+            disposition, record["source_hash"], record.get("test_hash")
+        ):
+            skipped.append(
+                dict(
+                    record,
+                    disposition=disposition.status,
+                    skip=(
+                        f"{disposition.status} at current content hash "
+                        f"({disposition.pr or 'no PR'}): {disposition.summary}"
+                    ),
+                )
+            )
             continue
         claimed_by = _claimed(claims, record["target"], record.get("test"))
         if claimed_by:
@@ -428,6 +471,63 @@ def _require_pr(cfg: Dict[str, Any], status: str) -> bool:
     return status == "COMPLETED"
 
 
+def _row_text(
+    stream: str,
+    target: str,
+    composite: str,
+    status: str,
+    pr: str,
+    summary: str,
+    trigger: str,
+) -> str:
+    return (
+        f"| {esc(datetime.date.today().isoformat())} "
+        f"| {esc(stream_label(stream))} "
+        f"| `{esc(target)}` "
+        f"| `{esc(composite)}` "
+        f"| {esc(status)} "
+        f"| {esc(pr)} "
+        f"| {esc(summary)} "
+        f"| {esc(trigger)} |"
+    )
+
+
+def _insert_rows(ledger: Path, new_rows: List[str]) -> None:
+    """Insert rows directly below the table header, preserving list order."""
+    if not ledger.exists():
+        raise Fatal(
+            f"ledger not found: {ledger} "
+            "(copy assets/AUTONOMOUS_WORK_LEDGER.template.md first)"
+        )
+    with open(ledger, "r", encoding="utf-8", newline="") as handle:
+        content = handle.read()
+    newline = "\r\n" if "\r\n" in content else "\n"
+    lines = content.splitlines()
+
+    header_index: Optional[int] = None
+    for index, line in enumerate(lines):
+        cells = split_row(line)
+        if cells and cells[0].strip().lower() == "date":
+            header_index = index
+            break
+    if header_index is None:
+        raise Fatal(f"could not locate ledger table header in {ledger}")
+    separator_index: Optional[int] = None
+    for index in range(header_index + 1, len(lines)):
+        if SEPARATOR_RE.match(lines[index].strip()):
+            separator_index = index
+            break
+    if separator_index is None:
+        raise Fatal(f"could not locate ledger table separator in {ledger}")
+
+    insert_at = separator_index + 1
+    lines[insert_at:insert_at] = new_rows
+    with open(ledger, "w", encoding="utf-8", newline="") as handle:
+        handle.write(
+            newline.join(lines) + (newline if content.endswith(("\n", "\r\n")) else "")
+        )
+
+
 def cmd_record(args: argparse.Namespace) -> int:
     root = repo_root()
     cfg = load_config(root, args.config)
@@ -464,62 +564,48 @@ def cmd_record(args: argparse.Namespace) -> int:
         print(f"[warn] {message}", file=sys.stderr)
 
     pr = (args.pr or "").strip() or "—"
-    if _require_pr(cfg, status) and pr == "—":
+    if status in AUDITED_STATUSES and _require_pr(cfg, status) and pr == "—":
         raise Fatal(f"--pr is required for status {status} (pass --pr, or configure pr_required)")
 
-    existing = authoritative_rows(ledger).get(target)
-    if existing and existing.composite == composite and existing.status in AUDITED_STATUSES:
+    # Duplicate detection spans audits and dispositions: re-recording the same
+    # "no" at the same hash is noise, and --force is the explicit override.
+    existing_audit = authoritative_rows(ledger).get(target)
+    if status in AUDITED_STATUSES and existing_audit and existing_audit.composite == composite:
         message = (
-            f"{target} already has an authoritative {existing.status} row at {composite} "
-            f"({existing.date}, {existing.pr})"
+            f"{target} already has an authoritative {existing_audit.status} row at {composite} "
+            f"({existing_audit.date}, {existing_audit.pr})"
+        )
+        if not args.force:
+            raise Fatal(message + "; pass --force to record a duplicate")
+        print(f"[warn] {message} (--force)", file=sys.stderr)
+
+    existing_disposition = authoritative_dispositions(ledger).get(target)
+    if (
+        status in DISPOSITION_STATUSES
+        and existing_disposition
+        and existing_disposition.composite == composite
+        and existing_disposition.status == status
+    ):
+        message = (
+            f"{target} already has a {status} row at {composite} "
+            f"({existing_disposition.date}, {existing_disposition.pr})"
         )
         if not args.force:
             raise Fatal(message + "; pass --force to record a duplicate")
         print(f"[warn] {message} (--force)", file=sys.stderr)
 
     trigger = args.trigger or f"Any modification to {Path(target).name}."
-    row = (
-        f"| {esc(datetime.date.today().isoformat())} "
-        f"| {esc(stream_label(stream))} "
-        f"| `{esc(target)}` "
-        f"| `{esc(composite)}` "
-        f"| {esc(status)} "
-        f"| {esc(pr)} "
-        f"| {esc(args.summary)} "
-        f"| {esc(trigger)} |"
-    )
-
-    if not ledger.exists():
-        raise Fatal(f"ledger not found: {ledger} (copy assets/AUTONOMOUS_WORK_LEDGER.template.md first)")
-    with open(ledger, "r", encoding="utf-8", newline="") as handle:
-        content = handle.read()
-    newline = "\r\n" if "\r\n" in content else "\n"
-    lines = content.splitlines()
-
-    header_index: Optional[int] = None
-    for index, line in enumerate(lines):
-        cells = split_row(line)
-        if cells and cells[0].strip().lower() == "date":
-            header_index = index
-            break
-    if header_index is None:
-        raise Fatal(f"could not locate ledger table header in {ledger}")
-    separator_index: Optional[int] = None
-    for index in range(header_index + 1, len(lines)):
-        if SEPARATOR_RE.match(lines[index].strip()):
-            separator_index = index
-            break
-    if separator_index is None:
-        raise Fatal(f"could not locate ledger table separator in {ledger}")
-
-    insert_at = separator_index + 1
-    lines.insert(insert_at, row)
-    with open(ledger, "w", encoding="utf-8", newline="") as handle:
-        handle.write(newline.join(lines) + (newline if content.endswith(("\n", "\r\n")) else ""))
+    row = _row_text(stream, target, composite, status, pr, args.summary, trigger)
+    _insert_rows(ledger, [row])
 
     print(f"[+] Recorded in {ledger}:")
     print(f"    {row}")
     print("    If another agent edited the ledger concurrently, rebase before pushing.")
+    if status in DISPOSITION_STATUSES:
+        print(
+            f"    {target} stays suppressed only while its composite hash is {composite}; "
+            "any content change re-opens it."
+        )
     return EXIT_OK
 
 
@@ -547,7 +633,172 @@ def cmd_check(args: argparse.Namespace) -> int:
         print(f"[!] not audited at {current}; newest row is {row.composite} ({row.date}, {row.status})")
     else:
         print(f"[!] no audited row for {target}")
+    disposition = authoritative_dispositions(ledger).get(target)
+    if disposition and _matches(disposition, source_hash, companion_hash):
+        print(
+            f"[!] {disposition.status} at {current} ({disposition.pr or 'no PR'}): "
+            f"{disposition.summary} — suppressed until the content changes"
+        )
     return EXIT_NEGATIVE
+
+
+def _stream_for_target(cfg: Dict[str, Any], target: str) -> Optional[str]:
+    """Which configured stream owns this path, if any."""
+    for stream in ("A", "B"):
+        section = cfg.get("candidates", {}).get(stream, {})
+        include = section.get("include") or []
+        exclude = section.get("exclude") or []
+        if include and match_any(target, include) and not match_any(target, exclude):
+            return stream
+    return None
+
+
+def _closed_prs(
+    root: Path, limit: int, require_gh: bool
+) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+    """Closed PRs with their file lists, newest first as gh orders them."""
+    fields_variants = (
+        "number,title,state,mergedAt,files,labels",
+        "number,title,state,mergedAt,files",
+    )
+    detail = "unknown error"
+    for fields in fields_variants:
+        argv = [
+            "gh",
+            "pr",
+            "list",
+            "--state",
+            "closed",
+            "--json",
+            fields,
+            "--limit",
+            str(limit),
+        ]
+        try:
+            proc = run(argv, cwd=root, quiet=True)
+        except Exception as exc:  # missing tool or timeout
+            if require_gh:
+                raise EnvError(f"gh not available: {exc}")
+            return [], f"gh not available ({exc}); cannot sync rejections"
+        if proc.returncode != 0:
+            message = (proc.stderr or proc.stdout).strip().splitlines()
+            detail = message[0] if message else f"exit {proc.returncode}"
+            continue
+        try:
+            data = json.loads(proc.stdout)
+        except json.JSONDecodeError:
+            detail = "invalid JSON"
+            continue
+        if not isinstance(data, list):
+            detail = "unexpected payload"
+            continue
+        return [item for item in data if isinstance(item, dict)], None
+    if require_gh:
+        raise EnvError(f"gh pr list failed: {detail}")
+    return [], f"gh pr list failed ({detail}); cannot sync rejections"
+
+
+def cmd_sync_rejections(args: argparse.Namespace) -> int:
+    """Turn closed-unmerged fleet PRs into REJECTED rows (the fleet's memory of "no")."""
+    root = repo_root()
+    cfg = load_config(root, args.config)
+    ledger = _ledger_path(root, cfg, args.ledger)
+    prs, warning = _closed_prs(root, args.limit, args.require_gh)
+    if warning:
+        print(f"[warning] {warning}", file=sys.stderr)
+
+    audited = authoritative_rows(ledger)
+    dispositions = authoritative_dispositions(ledger)
+    rows: List[str] = []
+    proposed: List[Dict[str, Any]] = []
+    seen: set = set()
+
+    for pr in prs:
+        if pr.get("mergedAt"):
+            continue  # merged PRs are work that landed, not a rejection
+        if str(pr.get("state") or "").upper() != "CLOSED":
+            continue
+        number = pr.get("number")
+        title = " ".join(str(pr.get("title") or "").split())
+        files = pr.get("files") or []
+        if not isinstance(files, list):
+            continue
+        for item in files:
+            path = item.get("path") if isinstance(item, dict) else None
+            if not path:
+                continue
+            target = str(path)
+            if target in seen:
+                continue
+            stream = _stream_for_target(cfg, target)
+            if stream is None:
+                continue
+            if not path_at_head(root, target):
+                continue  # file was deleted with the rejected change
+            source_hash = hash_at_head(root, target)
+            if not source_hash:
+                continue
+            companion: Optional[str] = None
+            companion_hash: Optional[str] = None
+            if stream == "A":
+                mapped = test_for_source(root, cfg, target)
+                if mapped and path_at_head(root, mapped):
+                    companion = mapped
+                    companion_hash = hash_at_head(root, mapped)
+            composite = composite_hash(source_hash, companion_hash)
+
+            already_audited = audited.get(target)
+            if already_audited and _matches(already_audited, source_hash, companion_hash):
+                continue  # audited since the PR closed; an audit outranks a rejection
+            remembered = dispositions.get(target)
+            if (
+                remembered
+                and remembered.composite == composite
+                and remembered.status == "REJECTED"
+            ):
+                continue  # already recorded at this content hash
+
+            seen.add(target)
+            summary = f"owner closed #{number} unmerged: {title}".strip()
+            trigger = f"Any modification to {Path(target).name}."
+            rows.append(
+                _row_text(stream, target, composite, "REJECTED", f"#{number}", summary, trigger)
+            )
+            proposed.append(
+                {
+                    "target": target,
+                    "stream": stream,
+                    "composite_hash": composite,
+                    "pr": f"#{number}",
+                    "summary": summary,
+                }
+            )
+
+    if rows and not args.dry_run:
+        _insert_rows(ledger, rows)
+
+    if args.json:
+        json.dump(
+            {
+                "ledger": str(ledger),
+                "dry_run": bool(args.dry_run),
+                "recorded": proposed,
+            },
+            sys.stdout,
+            indent=2,
+        )
+        sys.stdout.write("\n")
+        return EXIT_OK
+
+    for item in proposed:
+        print(f"[+] REJECTED {item['target']} at {item['composite_hash']} from {item['pr']}")
+    if not proposed:
+        print("[+] No new closed-unmerged PRs to remember.")
+    elif args.dry_run:
+        print(f"    (dry run: {len(proposed)} row(s) not written)")
+    else:
+        print(f"    Wrote {len(proposed)} REJECTED row(s) to {ledger}.")
+    return EXIT_OK
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -591,6 +842,17 @@ def build_parser() -> argparse.ArgumentParser:
     check_parser.add_argument("--target", required=True, help="repo-relative target path")
     check_parser.add_argument("--stream", default="A", help="A/B (default A)")
     check_parser.set_defaults(func=cmd_check)
+
+    sync_parser = subparsers.add_parser(
+        "sync-rejections",
+        parents=[common_parent],
+        help="record REJECTED rows for closed-unmerged fleet PRs",
+    )
+    sync_parser.add_argument("--limit", type=int, default=100, help="closed PRs to inspect")
+    sync_parser.add_argument("--dry-run", action="store_true", help="show rows without writing")
+    sync_parser.add_argument("--json", action="store_true", help="machine-readable output")
+    sync_parser.add_argument("--require-gh", action="store_true", help="fail if gh is unavailable")
+    sync_parser.set_defaults(func=cmd_sync_rejections)
     return parser
 
 

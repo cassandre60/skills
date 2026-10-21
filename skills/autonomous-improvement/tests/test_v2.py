@@ -194,6 +194,109 @@ class LedgerTests(RepoTestCase):
         self.assertEqual(planned.returncode, 2)
         self.assertIn("planned, not implemented", planned.stderr)
 
+    def test_rejected_target_is_suppressed_until_content_changes(self):
+        repo, _ = self.make()
+
+        before = script(repo, "ledger.py", "next", "--stream", "A", "--json")
+        self.assertEqual(before.returncode, 0, before.stderr)
+        self.assertEqual(
+            [item["target"] for item in json.loads(before.stdout)["candidates"]],
+            ["src/app.py"],
+        )
+
+        recorded = self.record(
+            repo,
+            "--stream", "A",
+            "--target", "src/app.py",
+            "--status", "REJECTED",
+            "--pr", "#9",
+            "--summary", "owner closed the PR as out of scope",
+        )
+        self.assertEqual(recorded.returncode, 0, recorded.stdout + recorded.stderr)
+        self.assertIn("REJECTED", (repo / "docs" / "AUTONOMOUS_WORK_LEDGER.md").read_text())
+
+        suppressed = script(repo, "ledger.py", "next", "--stream", "A", "--json")
+        self.assertEqual(suppressed.returncode, 0, suppressed.stderr)
+        payload = json.loads(suppressed.stdout)
+        self.assertEqual(payload["candidates"], [])
+        skipped = payload["skipped"]
+        self.assertEqual(len(skipped), 1)
+        self.assertEqual(skipped[0]["disposition"], "REJECTED")
+        self.assertIn("owner closed the PR as out of scope", skipped[0]["skip"])
+
+        # A content change invalidates the disposition, same as a stale audit.
+        write(repo / "src" / "app.py", "def f(a, b):\n    return a != b\n")
+        commit(repo, "change")
+        reopened = script(repo, "ledger.py", "next", "--stream", "A", "--json")
+        self.assertEqual(
+            [item["target"] for item in json.loads(reopened.stdout)["candidates"]],
+            ["src/app.py"],
+        )
+
+    def test_rejected_duplicate_requires_force(self):
+        repo, _ = self.make()
+        args = (
+            "--stream", "A", "--target", "src/app.py",
+            "--status", "WONTFIX", "--summary", "not worth it",
+        )
+        first = self.record(repo, *args)
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        second = self.record(repo, *args)
+        self.assertEqual(second.returncode, 1, second.stdout + second.stderr)
+        self.assertIn("already has a WONTFIX row", second.stderr)
+
+    def test_sync_rejections_remembers_closed_unmerged_prs_only(self):
+        repo, _ = self.make()
+        payload = [
+            {
+                "number": 7,
+                "title": "test: harden app",
+                "state": "CLOSED",
+                "mergedAt": None,
+                "files": [{"path": "src/app.py"}],
+                "labels": [],
+            },
+            {
+                "number": 8,
+                "title": "test: landed change",
+                "state": "MERGED",
+                "mergedAt": "2026-10-20T00:00:00Z",
+                "files": [{"path": "src/app.py"}],
+                "labels": [],
+            },
+        ]
+        json_path = self.tmp / "closed.json"
+        json_path.write_text(json.dumps(payload) + "\n")
+        bin_dir = path_with_only(self.tmp, ("git",))
+        gh = write(
+            bin_dir / "gh",
+            "#!/bin/sh\nwhile IFS= read -r line; do printf '%s\\n' \"$line\"; done < \"$GH_JSON\"\n",
+        )
+        gh.chmod(0o755)
+        env = env_with_path(bin_dir, GH_JSON=str(json_path))
+
+        synced = script(repo, "ledger.py", "sync-rejections", "--json", env=env)
+        self.assertEqual(synced.returncode, 0, synced.stdout + synced.stderr)
+        recorded = json.loads(synced.stdout)["recorded"]
+        self.assertEqual([item["target"] for item in recorded], ["src/app.py"])
+        self.assertEqual(recorded[0]["pr"], "#7")
+
+        ledger_path = repo / "docs" / "AUTONOMOUS_WORK_LEDGER.md"
+        text = ledger_path.read_text()
+        self.assertIn("REJECTED", text)
+        self.assertIn("#7", text)
+        self.assertNotIn("#8", text)
+
+        # Idempotent: a second sync at the same content hash adds nothing.
+        again = script(repo, "ledger.py", "sync-rejections", "--json", env=env)
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assertEqual(json.loads(again.stdout)["recorded"], [])
+        self.assertEqual(ledger_path.read_text(), text)
+
+        # And the remembered rejection actually hides the target.
+        nxt = script(repo, "ledger.py", "next", "--stream", "A", "--json", env=env)
+        self.assertEqual(json.loads(nxt.stdout)["candidates"], [])
+
     def test_next_without_gh(self):
         repo, _ = self.make()
         bin_dir = path_with_only(self.tmp, ("git",))

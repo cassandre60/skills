@@ -13,8 +13,10 @@ Eight columns, in this order:
   to 9 characters. For Stream A the source is the target and the companion is
   its mapped test. For Stream B the target is the test file and the companion is
   always `-`. No test exists → `<source9>:-`.
-- **Status** is exactly `COMPLETED` (audited; gaps fixed or documented) or
-  `SOUND` (audited; no gaps). `EXAMPLE` is ignored by the parser.
+- **Status** is an audit (`COMPLETED` — gaps fixed or documented; `SOUND` — no
+  gaps) or a negative disposition (`REJECTED` — owner closed the PR unmerged;
+  `WONTFIX` — deliberately out of scope; `SUPERSEDED` — replaced by the PR named
+  in the PR column). `EXAMPLE` is ignored by the parser.
 - **Target** is repo-root-relative and stored in backticks.
 
 Legacy rows with a single hash (no `:`) are still accepted. They match on the
@@ -26,12 +28,42 @@ convenient. New rows always use the composite form.
 `record` inserts new rows directly below the table header (newest first). For
 each target, the authoritative row is the greatest `(Date, -position)`:
 the newest date wins; on a tie the topmost row wins. Rows appended by hand at
-the bottom with a newer date also win. Only `COMPLETED` and `SOUND` are audited;
-a newer row of another status does not erase an older audit (there are no other
-statuses in V2).
+the bottom with a newer date also win. Only `COMPLETED` and `SOUND` count as
+audited; dispositions are tracked in their own map under the same rule.
 
 This fixes the V1 bug where the parser kept the oldest row and re-proposed every
 re-audited file forever.
+
+## Negative dispositions: the memory of no
+
+An audit says "this is done". A disposition says "stop asking". Both are keyed
+to the composite hash, so both go stale the same way:
+
+- `next` skips a target whose newest disposition matches the current composite
+  hash. The skip names the status, the PR, and the one-line reason, so a human
+  can audit the refusal.
+- Any content change (source or mapped test) invalidates the disposition and
+  re-opens the target. A rejection is "not this diff", not "never this file".
+- An audit at the current hash outranks a disposition: if work landed after the
+  PR was closed, the audit wins and the target stays audited.
+- `sync-rejections` scans `gh pr list --state closed`, takes PRs with
+  `mergedAt: null`, and writes a `REJECTED` row (`#n`, PR title) for every file
+  that is a configured candidate and still exists at HEAD. It is idempotent at
+  the same hash and skips files whose current hash is already audited.
+
+This is the difference between a colleague and a spammer: the fleet must not
+re-propose work the owner already declined. `--dry-run` previews the rows;
+`--json` reports them.
+
+## Per-mutant dispositions (not yet durable)
+
+Mutant-level triage happens per run: `--output-json` records each mutant and its
+status, and Stream A triages survivors before recording an audit row. A survivor
+classified *equivalent* or *noise* is therefore evidence a human read it — but it
+lives only in that run's report, so a later engine run re-reports it. A durable
+ledger keyed `file:line:mutant-hash` → `KILLED-BY #pr | EQUIVALENT | NOISE` is
+the remaining half of this work item; until it lands, the audit row's summary is
+the only place that disposition survives.
 
 ## Composite hash
 
@@ -64,6 +96,10 @@ python3 scripts/autonomous/ledger.py next --stream B --limit 5 --json
 python3 scripts/autonomous/ledger.py record --stream A \
   --target src/app.py --status COMPLETED --pr '#42' \
   --summary '6 mutants: 2 killed, 4 triaged, 1 gap fixed'
+python3 scripts/autonomous/ledger.py record --stream A \
+  --target src/app.py --status REJECTED --pr '#51' \
+  --summary 'owner closed: out of scope'
+python3 scripts/autonomous/ledger.py sync-rejections --dry-run
 python3 scripts/autonomous/ledger.py check --target src/app.py
 ```
 
@@ -75,10 +111,13 @@ python3 scripts/autonomous/ledger.py check --target src/app.py
 - Stream A candidates require a mapped existing test when
   `require_test: true` (the default). Stream B candidates are test files.
 - `--pr` is optional for `SOUND` and required for `COMPLETED` by default
-  (`pr_required` in config).
+  (`pr_required` in config). Dispositions never require `--pr`, but the PR that
+  produced the "no" belongs in the column.
 - `record` refuses a target that does not exist at HEAD, and refuses a duplicate
   authoritative row with the same composite hash unless `--force`.
-- `check` exits 0 when the current composite hash is audited, 1 otherwise.
+- `check` exits 0 when the current composite hash is audited, 1 otherwise. When a
+  disposition matches the current hash it says so on the next line, so a "no" is
+  never mistaken for "never looked at".
 
 ## Open-PR collision check
 
