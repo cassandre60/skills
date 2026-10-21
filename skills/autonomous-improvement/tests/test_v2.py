@@ -1614,6 +1614,10 @@ class WatchdogTests(RepoTestCase):
         snap_unit = home / ".config/systemd/user/orchestrator-snapshot.service"
         self.assertTrue(snap_unit.exists())
         self.assertTrue((home / ".local/share/orchestrator/snapshot.sh").exists())
+        wake_unit = home / ".config/systemd/user/orchestrator-wake.service"
+        self.assertTrue(wake_unit.exists())
+        self.assertIn("wake.sh", wake_unit.read_text())
+        self.assertTrue((home / ".local/share/orchestrator/wake.sh").exists())
 
     def test_no_session_id_is_a_noop(self):
         state = self.tmp / "state"
@@ -1937,6 +1941,105 @@ class FleetTests(RepoTestCase):
         self.assertIn("TestModel-A", stats["by_model"])
 
 
+class FleetWakeTests(RepoTestCase):
+    """Issue #18: stateless wakes — files in, fresh run, files out."""
+
+    def _pr(self, number: int, conclusion: str = "", status: str = "COMPLETED"):
+        return {
+            "number": number,
+            "title": f"pr {number}",
+            "headRefName": f"b{number}",
+            "headRefOid": f"sha{number}",
+            "statusCheckRollup": [
+                {"name": "test", "status": status, "conclusion": conclusion}
+            ],
+            "labels": [],
+            "commits": [{"oid": f"sha{number}"}],
+        }
+
+    def _setup(self, payload):
+        repo, _ = python_repo(self.tmp)
+        commit(repo)
+        json_path = self.tmp / "prs.json"
+        json_path.write_text(json.dumps(payload) + "\n")
+        bin_dir = path_with_only(self.tmp, ("git",))
+        gh = write(
+            bin_dir / "gh",
+            "#!/bin/sh\nwhile IFS= read -r line; do printf '%s\\n' \"$line\"; done < \"$GH_JSON\"\n",
+        )
+        gh.chmod(0o755)
+        return repo, env_with_path(bin_dir, GH_JSON=str(json_path)), json_path
+
+    def test_needs_brain_quiet_at_cap_and_loud_when_red(self):
+        repo, env, json_path = self._setup(
+            [self._pr(i, status="IN_PROGRESS") for i in range(1, 6)]
+        )
+        quiet = script(repo, "fleet.py", "needs-brain", "--json", env=env)
+        self.assertEqual(quiet.returncode, 1, quiet.stdout + quiet.stderr)
+        self.assertFalse(json.loads(quiet.stdout)["needs_brain"])
+
+        json_path.write_text(json.dumps([self._pr(7, conclusion="FAILURE")]) + "\n")
+        loud = script(repo, "fleet.py", "needs-brain", "--json", env=env)
+        self.assertEqual(loud.returncode, 0, loud.stdout + loud.stderr)
+        data = json.loads(loud.stdout)
+        self.assertTrue(data["needs_brain"])
+        self.assertEqual(data["tend"], [7])
+        self.assertIn("red-pr:#7", data["reasons"])
+
+    def test_wake_launches_fresh_harness_and_second_wake_continues(self):
+        repo, env, _ = self._setup([self._pr(7, conclusion="FAILURE")])
+        state_dir = self.tmp / "state"
+        marker = self.tmp / "harness-marker.json"
+        harness = write(
+            self.tmp / "harness_stub.py",
+            "import json, pathlib, sys\n"
+            "args = sys.argv[1:]\n"
+            "prompt = ''\n"
+            "for a in args:\n"
+            "    if a.endswith('last-wake-prompt.md'):\n"
+            "        prompt = pathlib.Path(a).read_text()\n"
+            f"pathlib.Path({str(marker)!r}).write_text(json.dumps({{'args': args, 'prompt': prompt}}))\n",
+        )
+        cmd = ("fleet.py", "wake", "--state-dir", str(state_dir),
+               "--harness-cmd", f"{PYTHON} {harness} {{prompt_file}}")
+        first = script(repo, *cmd, env=env)
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        launched = json.loads(marker.read_text())
+        self.assertIn("PR #7", launched["prompt"])
+        self.assertTrue((state_dir / "snapshot.json").exists())
+        self.assertTrue((state_dir / "last-wake-prompt.md").exists())
+        wakes = (state_dir / "wakes.jsonl").read_text().splitlines()
+        self.assertEqual(len(wakes), 1)
+        self.assertEqual(json.loads(wakes[0])["action"], "launched")
+
+        second = script(repo, *cmd, env=env)
+        self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
+        self.assertEqual(
+            len((state_dir / "wakes.jsonl").read_text().splitlines()), 2
+        )
+        # The stateless shape has no session to immortalize.
+        self.assertEqual(list(state_dir.rglob("*session*")), [])
+
+    def test_wake_quiet_never_launches(self):
+        repo, env, _ = self._setup(
+            [self._pr(i, status="IN_PROGRESS") for i in range(1, 6)]
+        )
+        state_dir = self.tmp / "state"
+        marker = self.tmp / "should-not-exist"
+        harness = write(
+            self.tmp / "harness_stub.py",
+            f"import pathlib\npathlib.Path({str(marker)!r}).write_text('ran')\n",
+        )
+        result = script(
+            repo, "fleet.py", "wake", "--state-dir", str(state_dir),
+            "--harness-cmd", f"{PYTHON} {harness}", env=env,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(marker.exists())
+        record = json.loads((state_dir / "wakes.jsonl").read_text().splitlines()[0])
+        self.assertEqual(record["action"], "quiet")
+
+
 class FleetClaimPublishTests(RepoTestCase):
     """Issue #17: the claim and the transport are code, not prose."""
 
@@ -2218,6 +2321,9 @@ class DocumentationInvariantTests(unittest.TestCase):
             "assets/orchestrator-watchdog.timer",
             "assets/orchestrator-snapshot.service",
             "assets/orchestrator-snapshot.timer",
+            "assets/wake.sh",
+            "assets/orchestrator-wake.service",
+            "assets/orchestrator-wake.timer",
             "assets/install-watchdog.sh",
             "assets/gitattributes.fragment.txt",
             "assets/gitignore.fragment.txt",

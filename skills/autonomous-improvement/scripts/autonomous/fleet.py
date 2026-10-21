@@ -12,6 +12,8 @@ Usage:
   python3 scripts/autonomous/fleet.py pr-state [--json] [--pr <num>]
   python3 scripts/autonomous/fleet.py govern [--json]
   python3 scripts/autonomous/fleet.py stats [--json] [--days <N>]
+  python3 scripts/autonomous/fleet.py needs-brain [--json]
+  python3 scripts/autonomous/fleet.py wake [--state-dir <dir>] [--harness-cmd <argv>]
   python3 scripts/autonomous/fleet.py claim --target <path> --stream A [--json]
   python3 scripts/autonomous/fleet.py publish --pr <num> [--title <title>]
   python3 scripts/autonomous/fleet.py publish --issues-from <engine.json> [--json]
@@ -24,6 +26,7 @@ import datetime
 import json
 import os
 import re
+import shlex
 import sys
 import tempfile
 from pathlib import Path
@@ -675,6 +678,239 @@ def cmd_stats(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+# --- Stateless wakes (issue #18) -------------------------------------------
+# The timer is a starter, not a nurse: each wake snapshots (0 tokens), asks
+# needs-brain whether anything awaits a decision, and only then launches ONE
+# fresh headless Orchestrator run with a self-contained prompt. State lives
+# in snapshot.json + ledger + journal; there is no session to immortalize
+# and no session-id file whose staleness can strand the fleet.
+
+
+def _needs_brain_from_states(
+    root: Path, cfg: Dict[str, Any], open_states: List[Dict[str, Any]]
+) -> Dict[str, Any]:
+    fleet_cfg = cfg.get("fleet", {})
+    max_open = int(fleet_cfg.get("max_open_prs", 5))
+    kill_file = str(fleet_cfg.get("kill_switch_file") or ".autonomous/STOP")
+    killed = (root / kill_file).exists() or (root / ".autonomous" / "STOP").exists()
+
+    tend: List[int] = []
+    green: List[int] = []
+    reasons: List[str] = []
+    for state in open_states:
+        number = state.get("pr")
+        if number is None:
+            continue
+        if state.get("checks") == "red":
+            tend.append(number)
+            reasons.append(f"red-pr:#{number}")
+        if state.get("owner_ask_pending"):
+            if number not in tend:
+                tend.append(number)
+            reasons.append(f"owner-ask:#{number}")
+        if state.get("checks") == "green":
+            green.append(number)
+            reasons.append(f"green-unmerged:#{number}")
+    can_dispatch = len(open_states) < max_open
+    if can_dispatch:
+        reasons.append("queue-headroom")
+    return {
+        "needs_brain": (not killed) and bool(reasons),
+        "reasons": ["kill-switch"] if killed else reasons,
+        "tend": sorted(set(tend)),
+        "green_unmerged": sorted(green),
+        "open_prs": len(open_states),
+        "can_dispatch": can_dispatch and not killed,
+    }
+
+
+def cmd_needs_brain(args: argparse.Namespace) -> int:
+    root = main_repo_root()
+    cfg = load_config(root, args.config)
+    prs_data, gh_warn = fetch_gh_prs(root, state="open", require_gh=args.require_gh)
+    if gh_warn:
+        eprint(f"[warn] {gh_warn}")
+    states = [evaluate_pr_checks(p) for p in prs_data]
+    result = _needs_brain_from_states(root, cfg, states)
+    if args.json:
+        print(json.dumps(result, indent=2))
+    elif result["needs_brain"]:
+        print(f"[*] Brain needed: {', '.join(result['reasons'])}")
+    else:
+        print(f"[*] Quiet: {', '.join(result['reasons']) or 'nothing pending'}")
+    return EXIT_OK if result["needs_brain"] else EXIT_NEGATIVE
+
+
+def _wake_prompt(
+    root: Path,
+    cfg: Dict[str, Any],
+    state_dir: Path,
+    snapshot: Dict[str, Any],
+    brain: Dict[str, Any],
+) -> str:
+    ledger = cfg.get("ledger_path") or "docs/AUTONOMOUS_WORK_LEDGER.md"
+    merge_policy = (cfg.get("fleet", {}) or {}).get("merge_policy", "never")
+    lines = [
+        "You are a FRESH autonomous-improvement Orchestrator wake. You have no",
+        "memory beyond the files named here; that is by design. Work from them,",
+        "leave state behind in them, and exit when this wake's duties are done.",
+        "",
+        f"State dir: {state_dir}",
+        f"- Snapshot (just refreshed, deterministic): {state_dir / 'snapshot.json'}",
+        f"- Journal (append your decisions + one state line per open PR): {state_dir / 'journal.md'}",
+        f"- Ledger: {root / ledger}",
+        f"Main SHA at wake: {snapshot.get('main_sha', 'unknown')}",
+        f"Wake reasons: {', '.join(brain['reasons'])}",
+        "",
+        "Open PRs:",
+    ]
+    for pr in snapshot.get("open_prs") or []:
+        head = str(pr.get("head_sha") or "unknown")[:9]
+        red = f" [{pr['red_kind']}]" if pr.get("red_kind") else ""
+        ask = "yes" if pr.get("owner_ask_pending") else "no"
+        lines.append(
+            f"- PR #{pr.get('pr')} | head {head} | checks {pr.get('checks')}{red} "
+            f"| owner-ask {ask} | iterations {pr.get('iterations')}"
+        )
+    if not snapshot.get("open_prs"):
+        lines.append("- (none)")
+    lines += [
+        "",
+        "Duties, in order:",
+        "1. Run `python3 scripts/autonomous/fleet.py govern --json` and obey it.",
+        "2. Tend before generating: every red or owner-ask PR above gets fixed,",
+        "   answered, or re-asked (references/04 CI green loop).",
+        "3. Only if govern allows dispatch: pick work with",
+        "   `ledger.py next --stream A --rank risk`, claim it with",
+        "   `fleet.py claim` BEFORE working, and finish through evidence.py +",
+        "   `fleet.py publish`. Never edit production code in a test PR.",
+        f"4. Merge policy for this repo: {merge_policy}. When in doubt, do not merge.",
+        "5. Append decisions to the journal, then exit. A later fresh wake",
+        "   continues from the files — nothing may live only in this session.",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _render_harness_argv(
+    template: List[str], prompt_file: Path, prompt: str, model: str
+) -> List[str]:
+    argv: List[str] = []
+    used_prompt = False
+    for part in template:
+        if part == "{model}" and not model:
+            continue
+        if "{prompt_file}" in part or "{prompt}" in part:
+            used_prompt = True
+        argv.append(
+            part.replace("{prompt_file}", str(prompt_file))
+            .replace("{prompt}", prompt)
+            .replace("{model}", model)
+        )
+    if not used_prompt:
+        # opencode run / claude -p / codex exec all take the prompt as the
+        # final positional argument.
+        argv.append(prompt)
+    return argv
+
+
+def cmd_wake(args: argparse.Namespace) -> int:
+    root = main_repo_root()
+    cfg = load_config(root, args.config)
+    state_dir = _resolve_state_dir(root, args.state_dir)
+    state_dir.mkdir(parents=True, exist_ok=True)
+
+    cmd_snapshot(
+        argparse.Namespace(
+            config=args.config,
+            state_dir=str(state_dir),
+            output=None,
+            require_gh=args.require_gh,
+            quiet=True,
+        )
+    )
+    snapshot_path = state_dir / "snapshot.json"
+    snapshot: Dict[str, Any] = {}
+    if snapshot_path.exists():
+        try:
+            snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            snapshot = {}
+    brain = _needs_brain_from_states(root, cfg, snapshot.get("open_prs") or [])
+
+    record: Dict[str, Any] = {
+        "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "needs_brain": brain["needs_brain"],
+        "reasons": brain["reasons"],
+        "action": "quiet",
+    }
+    exit_code = EXIT_OK
+
+    if brain["needs_brain"]:
+        prompt = _wake_prompt(root, cfg, state_dir, snapshot, brain)
+        prompt_file = state_dir / "last-wake-prompt.md"
+        prompt_file.write_text(prompt, encoding="utf-8")
+        if args.print_prompt:
+            print(prompt, end="")
+
+        fleet_cfg = cfg.get("fleet", {}) or {}
+        template: Optional[List[str]] = None
+        if args.harness_cmd:
+            try:
+                template = shlex.split(args.harness_cmd)
+            except ValueError as exc:
+                raise UsageError(f"cannot parse --harness-cmd: {exc}")
+        elif fleet_cfg.get("harness_cmd"):
+            template = [str(part) for part in fleet_cfg["harness_cmd"]]
+
+        if template:
+            if args.model:
+                ladder = [args.model]
+            elif os.environ.get("ORCH_MODEL_LADDER", "").split():
+                ladder = os.environ["ORCH_MODEL_LADDER"].split()
+            elif fleet_cfg.get("model_ladder"):
+                ladder = [str(m) for m in fleet_cfg["model_ladder"]]
+            else:
+                ladder = [""]
+            launched = False
+            for model in ladder:
+                argv = _render_harness_argv(template, prompt_file, prompt, model)
+                try:
+                    proc = run(argv, cwd=root, quiet=True)
+                except EnvError as exc:
+                    eprint(f"[warn] harness launch failed: {exc}")
+                    continue
+                tail = (proc.stdout or "").strip().splitlines()
+                if tail:
+                    print(f"    harness: {tail[-1]}")
+                if proc.returncode == 0:
+                    record["action"] = "launched"
+                    record["model"] = model or None
+                    launched = True
+                    break
+                eprint(
+                    f"[warn] harness exited {proc.returncode}"
+                    + (f" on model {model!r}" if model else "")
+                    + "; trying next ladder entry"
+                )
+            if not launched:
+                record["action"] = "launch-failed"
+                exit_code = EXIT_NEGATIVE
+        else:
+            record["action"] = "prompt-only"
+            print(
+                f"[*] Brain needed ({', '.join(brain['reasons'])}); no harness "
+                f"configured — wake prompt written to {prompt_file}"
+            )
+
+    with open(state_dir / "wakes.jsonl", "a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record) + "\n")
+    print(
+        f"[*] Wake recorded: {record['action']}"
+        + (f" ({', '.join(brain['reasons'])})" if brain["reasons"] else "")
+    )
+    return exit_code
+
+
 # --- Claim + publish transport (issue #17) --------------------------------
 # The claim mechanism used to be prose ("open a draft PR early") that the
 # canonical protocol contradicted by opening the PR at the end. claim makes
@@ -989,6 +1225,28 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_claim.add_argument("--slug", help="worktree slug (default: derived from target)")
     p_claim.add_argument("--json", action="store_true", help="emit JSON as the last line")
 
+    # needs-brain
+    p_brain = subparsers.add_parser(
+        "needs-brain", help="0-token predicate: does anything await a model decision?"
+    )
+    p_brain.add_argument("--config", help="path to config.json")
+    p_brain.add_argument("--json", action="store_true", help="emit JSON")
+    p_brain.add_argument("--require-gh", action="store_true", help="fail if gh is unavailable")
+
+    # wake
+    p_wake = subparsers.add_parser(
+        "wake", help="stateless wake: snapshot, needs-brain gate, one fresh harness run"
+    )
+    p_wake.add_argument("--config", help="path to config.json")
+    p_wake.add_argument("--state-dir", help="directory for snapshots and wake records")
+    p_wake.add_argument(
+        "--harness-cmd",
+        help="headless harness argv template ({prompt_file}/{prompt}/{model} substituted)",
+    )
+    p_wake.add_argument("--model", help="single model override for {model}")
+    p_wake.add_argument("--print-prompt", action="store_true", help="also print the wake prompt")
+    p_wake.add_argument("--require-gh", action="store_true", help="fail if gh is unavailable")
+
     # publish
     p_pub = subparsers.add_parser(
         "publish", help="render evidence into a PR and flip it ready, or file survivor issues"
@@ -1012,6 +1270,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             return cmd_govern(args)
         if args.command == "stats":
             return cmd_stats(args)
+        if args.command == "needs-brain":
+            return cmd_needs_brain(args)
+        if args.command == "wake":
+            return cmd_wake(args)
         if args.command == "claim":
             return cmd_claim(args)
         if args.command == "publish":

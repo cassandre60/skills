@@ -49,6 +49,8 @@ DEFAULT_CONFIG = {
         "min_acceptance_rate_14d": 0.5,
         "acceptance_floor_min_decided": 5,
         "kill_switch_file": ".autonomous/STOP",
+        "harness_cmd": None,
+        "model_ladder": [],
         "merge_policy": "never",
         "ledger_mode": "batched",
     },

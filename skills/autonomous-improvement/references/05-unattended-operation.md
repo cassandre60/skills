@@ -5,7 +5,77 @@ running as the Orchestrator (`04`) — its cold start lives here. A single
 session doing an explicit Stream A/B task does not need it. Harness sections
 default to opencode + systemd on Linux; adapt or ignore for another harness.
 
-## Cold start (skill-only boot)
+## Primary shape: stateless wakes
+
+The default unattended shape keeps **no session alive**. A timer
+(`orchestrator-wake.timer`, 30 min) is a *starter*, not a nurse — each tick
+runs `fleet.py wake`, which:
+
+1. refreshes the snapshot (`snapshot.json`: main sha, per-PR state lines,
+   worktree dirt) — deterministic, 0 tokens;
+2. asks the **needs-brain predicate** whether anything awaits a model
+   decision: a red PR, an unanswered owner ask, a green-unmerged PR, or
+   dispatch headroom under the WIP cap with no kill switch. Quiet ticks
+   exit here, having spent nothing (`fleet.py needs-brain --json` is the
+   same predicate standalone: exit 0 = brain needed, 1 = quiet);
+3. only then writes a self-contained wake prompt (`last-wake-prompt.md`:
+   state files, PR state lines, the duty list — govern first, tend before
+   generating, claim before working, evidence before publish, journal
+   before exit) and launches **one fresh headless run** of the configured
+   harness with it, walking the model ladder (`ORCH_MODEL_LADDER` /
+   `fleet.model_ladder`) until a run starts successfully;
+4. appends the outcome to `wakes.jsonl` and exits. The next wake is a
+   different process with a fresh context; everything it needs is in
+   `snapshot.json`, the ledger, and the journal.
+
+There is no session-id file and no beat grid to re-arm, so the two biggest
+verified freeze classes below — harness restart killing the beats, pool
+death freezing the one immortal session every wake channel funnels
+through — do not exist in this shape. A dry pool merely fails the ladder
+walk for one tick; the snapshot keeps accruing underneath.
+
+Configure the launch once, in `config.json`:
+
+```json
+"fleet": {
+  "harness_cmd": ["opencode", "run", "--auto", "-m", "{model}"],
+  "model_ladder": ["provider/model-a", "provider/model-b"]
+}
+```
+
+`{model}` and `{prompt_file}`/`{prompt}` are substituted per launch; with
+no prompt placeholder, the prompt text is appended as the final argument
+(the convention all three CLIs below use). With no `harness_cmd`, `wake`
+writes the prompt and stops (`prompt-only`) — useful for cron-driven
+manual review.
+
+### Harness adapters
+
+| Harness | Fresh wake (`fleet.harness_cmd`) | Observing the run | Workers | Status here |
+|---|---|---|---|---|
+| opencode | `opencode run --auto -m {model}` (+ prompt) | exit code; `wakes.jsonl` | subagents inside the run | resume form field-verified (below); fresh-run form is the same CLI minus `-s` |
+| Claude Code | `claude -p --output-format json --max-turns 60` (+ prompt) | exit code + JSON usage on stdout | subagents inside the run | upstream-documented; not field-verified in this repo |
+| Codex | `codex exec --json` (+ prompt) | exit code + JSONL events | separate `codex exec` runs | upstream-documented; not field-verified in this repo |
+| anything else | any argv template | exit code | separate runs | — |
+
+For every shape the exit contract is the same: the run tends/dispatches,
+appends its decisions and PR state lines to the journal, and *exits*.
+`--resume`-style continuation exists on all three CLIs; in this shape it
+is available, never required.
+
+**The watchdog's role now:** armor for the *fallback* shape below — it
+revives a long-lived session whose beats died. In the primary shape it is
+replaced by the wake timer. Enable **one** starter (wake timer *or*
+watchdog timer), never both, or the fleet wakes twice per decision. A new
+deployer: install, set `fleet.harness_cmd` + `ORCH_REPO_DIR` in
+`watchdog.env`, `systemctl --user enable --now orchestrator-wake.timer`,
+done — everything below this section is the fallback's operating manual
+and the scar tissue that motivated replacing it.
+
+## Cold start (skill-only boot — long-lived-session fallback)
+
+*Fallback shape only* — for harnesses with no headless one-shot mode. A
+stateless wake boots from `last-wake-prompt.md` instead of this dance.
 
 A session whose only instruction is this skill starts its own operation
 before anything else. First turn, in order:
@@ -33,7 +103,10 @@ before anything else. First turn, in order:
 
 Only then derive the queue (`ledger.py next` + open PRs) and dispatch.
 
-## The one invariant
+## The one invariant (fallback shape)
+
+In the primary shape the timer *is* the wakeup and there is no turn to keep
+alive; this invariant governs the long-lived-session fallback only.
 
 **Never end a turn with zero pending wakeups.** A background job that completes
 wakes the agent even when the user is away; it is the only self-wake mechanism a
