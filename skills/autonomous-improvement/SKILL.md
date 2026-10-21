@@ -6,11 +6,13 @@ description: Run falsifiable, high-signal improvement cycles on a codebase inste
 # Autonomous Improvement
 
 Spend tokens on work that can be **mechanically falsified**, not on renames,
-prose, or checkbox tests. Two streams are active:
+prose, or checkbox tests. Three streams are active:
 
 - **A — mutation testing:** find behavior the suite does not protect.
 - **B — adversarial test audit:** find tests that cannot fail, assert mocks, or
   sleep instead of synchronizing.
+- **E — defect repair:** repair issue-reported defects (`repair.py`); the repro is
+  red on the base before the fix exists, the fix minimal, unreproducibles bounced.
 
 Each round produces at most one small, evidence-backed PR. If there is no
 falsifiable gap, stop; that is a valid result.
@@ -144,16 +146,15 @@ The ledger is a git-tracked markdown table:
 - The hash is the blob at HEAD. `record` warns if the target is dirty;
   `--strict` makes that fatal.
 
-## Beyond testing (planned streams C–L)
+## Beyond testing (planned streams C, D, F–L)
 
-Testing is the bootstrap, not the ceiling: streams C–L generalize the same
-five laws to fuzzing, defect repair, flakiness, performance, security, docs
-truthfulness, simplification, dependency evolution, and — capped and
-eval-gated — the fleet improving itself. Each must pass the stream contract
-in `references/08-recursive-self-improvement.md` (deterministic finder,
-mechanical oracle, content-addressed memory, bounded blast radius, referee
-isolation) before its letter unlocks; `ledger.py` rejects C–L until then.
-Do not start work under a locked letter or promise it in a PR; offer A/B, or
+Testing is the bootstrap, not the ceiling: the remaining streams (fuzzing,
+flakiness, performance, security, docs truth, simplification, dependency
+evolution, capped fleet self-improvement) generalize the same five laws and
+must pass the contract in `references/08-recursive-self-improvement.md`
+(deterministic finder, mechanical oracle, bounded blast radius) before the
+letter unlocks; `ledger.py` rejects unshipped letters until then.
+Do not start work under a locked letter or promise it in a PR; offer A/B/E, or
 file the finding as an evidence-backed issue.
 
 ## Unattended operation (advanced)

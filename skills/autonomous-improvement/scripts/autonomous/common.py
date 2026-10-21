@@ -430,7 +430,7 @@ STREAMS: Dict[str, Dict[str, Any]] = {
     "B": {"label": "B (Test Audit)", "status": "available"},
     "C": {"label": "C (Property / Fuzz)", "status": "planned"},
     "D": {"label": "D (Data / Migration)", "status": "planned"},
-    "E": {"label": "E (Defect Repair)", "status": "planned"},
+    "E": {"label": "E (Defect Repair)", "status": "available"},
     "F": {"label": "F (Flake & Determinism)", "status": "planned"},
     "G": {"label": "G (Performance)", "status": "planned"},
     "H": {"label": "H (Security & Supply Chain)", "status": "planned"},

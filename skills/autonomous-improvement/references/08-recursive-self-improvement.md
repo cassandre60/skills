@@ -39,7 +39,11 @@ at T2, and at T1 for anything referee-adjacent.
 
 ## The catalog
 
-Available now: **A** mutation, **B** adversarial test audit (`03`).
+Available now: **A** mutation, **B** adversarial test audit (`03`), **E**
+defect repair (`repair.py`: bugreport intake with bounce-backs + verify-red
+baseline guard + verify-green minimal-fix/spot-check gate) — and **F**
+flake/determinism plus **I** docs-truth (see their separate PRs; the letters
+stay planned here until those branches land).
 
 | Stream | Oracle in one line | Starts |
 |---|---|---|
@@ -54,11 +58,23 @@ Available now: **A** mutation, **B** adversarial test audit (`03`).
 | **K** Dependency evolution | build + targeted suite green on the bump; majors one per PR | T2 |
 | **L** Meta (fleet self-improvement) | proposal beats incumbent on history replay; eval set does not regress | T1/T2 capped |
 
-`ledger.py` rejects C–L with "planned, not implemented" until a stream ships
+`ledger.py` rejects unshipped letters with "planned, not implemented" until a stream ships
 its finder + oracle + eval fixture. A stream that exists only as an
 encouraging paragraph produces cosmetic churn with a fancy name — do not
-start work under these letters before their tooling lands; offer A/B, or
+start work under these letters before their tooling lands; offer A/B/E, or
 file the finding as an issue (that *is* T1 behavior).
+
+**Stream E instantiation (shipped in `repair.py`):** intake is 0-token and
+bounces what it cannot test — a bug report that names no Expected/Actual
+gets a bounce-back comment listing the missing facts, and the tool changes
+zero files. The oracle is anchored where a worker cannot fake it: the
+Breaker writes the repro test first and `verify-red` records the base sha
+with a tests-only diff (any source edit at red time is refused, since the
+fix may not exist yet); the Builder answers `verify-green`, which demands
+the repro pass, a bounded non-test fix diff (`--max-fix-files`), and a
+mutation spot-check on the touched lines via the engine's `--diff-base`
+(zero survivors or the green is refused). Evidence lands in one JSON file
+the PR carries; bounces never produce diffs.
 
 Sequencing rationale in brief: **F** repairs the oracle A/B/E trust; **E**
 is the largest value unlock (pre-justified defects via issue/CI intake);

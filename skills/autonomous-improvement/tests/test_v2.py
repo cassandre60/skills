@@ -1141,6 +1141,65 @@ class MutationEngineTests(RepoTestCase):
         self.assertEqual(allowed.returncode, 0, allowed.stderr)
 
 
+    def test_same_second_pycache_staleness_cannot_leak(self):
+        """Regression: mutant loads must never reuse bytecode cached the same second.
+
+        A mutant rewrite that keeps byte-length equal (e.g. ``- 1`` -> ``- 2``)
+        leaves the source's size identical and usually within the same
+        mtime-second as the pyc created by the baseline run — with a fresh pyc
+        check the spawned interpreter then executes the CLEAN (or a stale)
+        bytecode and the engine records a false survivor, and the stale
+        bytecode poisons the next invocation's baseline. The engine must make
+        pyc reuse impossible around mutant loading.
+        """
+        repo, _ = python_repo(self.tmp, with_origin=False)
+        commit(repo)
+        # A scoped, actually-executing test so comparison mutants die.
+        (repo / "src" / "app.py").write_text("def f(a, b):\n    return a == b\n")
+        (repo / "tests" / "test_f.py").write_text(
+            "import sys\nsys.path.insert(0, '')\nfrom src.app import f\n"
+            "assert f(1, 1) is True\nassert f(1, 2) is False\nprint('ok')\n"
+        )
+        git(repo, "add", "-A")
+        git(repo, "commit", "-qm", "killers for comparison mutants")
+        # Prime a pyc the way any earlier tool run would have left it.
+        self.assertEqual(
+            run([sys.executable, "-c", "import src.app"], cwd=repo).returncode, 0
+        )
+        original = (repo / "src" / "app.py").read_bytes()
+
+        def one_pass():
+            # run_mutation_pass spawns the test command from the caller's
+            # cwd; pin it to the repo for the duration of the pass.
+            cwd = os.getcwd()
+            os.chdir(repo)
+            try:
+                results = engine_module.run_mutation_pass(
+                    source_path=str(repo / "src" / "app.py"),
+                    test_cmd=f"{sys.executable} tests/test_f.py",
+                    max_mutants=4,
+                    timeout=30.0,
+                )
+            finally:
+                os.chdir(cwd)
+            status = git(repo, "status", "--porcelain", "-uall")
+            leaked = [l for l in status.stdout.splitlines() if "__pycache__" not in l]
+            self.assertEqual(leaked, [], status.stdout)
+            self.assertEqual((repo / "src" / "app.py").read_bytes(), original)
+            return results
+
+        first = one_pass()
+        second = one_pass()
+        for label, results in (("first", first), ("second", second)):
+            counts = results["counts"]
+            self.assertEqual(
+                counts["survived"], 0,
+                f"{label} pass recorded a false survivor: {results['survived']}",
+            )
+            self.assertGreaterEqual(counts["killed"], 1, f"{label} pass: {counts}")
+            self.assertEqual(counts["uncompilable"], 0, f"{label} pass: {counts}")
+
+
 class TestWeakeningTests(RepoTestCase):
     def test_removed_assertion_and_added_skip(self):
         repo, _ = init_repo(self.tmp)
@@ -1544,6 +1603,169 @@ class CandidateOrderingTests(unittest.TestCase):
                 "src/z_last.py",
             ],
         )
+
+
+class RepairStreamTests(RepoTestCase):
+    """Stream E (issue #22): defect-repair intake + red/green oracle.
+
+    The intake is 0-token: bug report files must NAME expected vs actual
+    behavior; a report that cannot become a failing test is bounced back
+    with the missing facts and the tool leaves the repo untouched.
+    verify-red is the un-fakeable anchor: the repro test must be red with
+    NOTHING outside tests/ changed vs the base ref; verify-green demands
+    the repro green plus at least one minimal fix file, optionally running
+    the mutation engine's --diff-base spot-check on the touched lines.
+    """
+
+    FIXTURE = SKILL_ROOT / "evals" / "fixtures" / "defect-python"
+
+    REPRO_TEST = [
+        "import sys\n",
+        "sys.path.insert(0, '')\n",
+        "from src.calculator import median\n",
+        "assert median([1, 2, 3, 4]) == 2.5, median([1, 2, 3, 4])\n",
+        "assert median([7]) == 7\n",
+        "print('ok')\n",
+    ]
+
+    def repair_run(self, repo: Path, *args: str) -> subprocess.CompletedProcess:
+        return run(
+            [PYTHON, str(SKILL_ROOT / "scripts" / "autonomous" / "repair.py"), *args],
+            cwd=repo,
+        )
+
+    def copy_fixture(self) -> Path:
+        repo = self.tmp / "repo"
+        shutil.copytree(self.FIXTURE, repo)
+        return repo
+
+    def seeded_repo(self) -> Path:
+        repo = self.copy_fixture()
+        git(repo, "init", "-q", "-b", "main")
+        git(repo, "add", "-A")
+        git(repo, "commit", "-qm", "base: seeded median bug + bug reports")
+        # The repro test is written AFTER the base commit so verify-red's
+        # tests-only diff actually has the test file in it.
+        (repo / "tests").mkdir(exist_ok=True)
+        (repo / "tests" / "test_repro_median.py").write_text("".join(self.REPRO_TEST))
+        return repo
+
+    def tree_digest(self, repo: Path) -> str:
+        import hashlib
+
+        parts = []
+        for path in sorted(repo.rglob("*")):
+            rel = str(path.relative_to(repo))
+            if ".git/" in rel or ".git" == rel:
+                continue
+            data = path.read_bytes() if path.is_file() else b"<dir>"
+            parts.append(f"{rel}:{hashlib.sha256(data).hexdigest()}")
+        return hashlib.sha256("\n".join(parts).encode()).hexdigest()
+
+    def test_intake_names_expected_and_actual(self):
+        repo = self.copy_fixture()
+        res = self.repair_run(repo, "intake", "--reports", "docs/bugreports", "--json")
+        # rc 1 is fine here: the fixture also carries the unreproducible
+        # report (tested separately); parsing is what this test asserts.
+        self.assertIn(res.returncode, (0, 1), res.stdout + res.stderr)
+        payload = json.loads(res.stdout)
+        kinded = {c["kind"]: c for c in payload["candidates"]}
+        self.assertIn("candidate", kinded)
+        self.assertEqual(kinded["candidate"]["expected"], "median([1, 2, 3, 4]) == 2.5")
+        self.assertIn("median([1, 2, 3, 4]) == 3", kinded["candidate"]["actual"])
+
+    def test_intake_bounces_missing_facts_zero_diff(self):
+        repo = self.copy_fixture()
+        before = self.tree_digest(repo)
+        res = self.repair_run(repo, "intake", "--reports", "docs/bugreports", "--json")
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        payload = json.loads(res.stdout)
+        bounce = next(c for c in payload["candidates"] if c["kind"] == "bounce")
+        self.assertEqual(set(bounce["missing"]), {"expected", "actual"})
+        self.assertIn("zero code changes were made", res.stderr.replace("\n", " "))
+        self.assertEqual(self.tree_digest(repo), before, "intake must not write anything")
+
+    def test_verify_red_refuses_non_test_changes(self):
+        repo = self.seeded_repo()
+        (repo / "src" / "calculator.py").write_text("def median(values):\n    raise SystemExit\n")
+        res = self.repair_run(
+            repo, "verify-red", "--test-script", "tests/test_repro_median.py",
+            "--evidence", "evidence.json", "--base-ref", "HEAD",
+        )
+        self.assertNotEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertIn("non-test", res.stderr)
+        self.assertFalse((repo / "evidence.json").exists())
+
+    def test_verify_red_records_base_and_red(self):
+        repo = self.seeded_repo()
+        res = self.repair_run(
+            repo, "verify-red", "--test-script", "tests/test_repro_median.py",
+            "--evidence", "evidence.json", "--base-ref", "HEAD",
+        )
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        evidence = json.loads((repo / "evidence.json").read_text())
+        self.assertEqual(evidence["red"]["verified"], True)
+        self.assertNotEqual(evidence["base"]["sha"], "")
+        self.assertEqual(evidence["changed_files"], ["tests/test_repro_median.py"])
+
+    def test_verify_green_requires_fix_and_records_spot_check(self):
+        repo = self.seeded_repo()
+        # Real Breaker→Builder flow: red recorded with the test as the ONLY
+        # change, then the minimal fix lands, then green verifies.
+        res = self.repair_run(
+            repo, "verify-red", "--test-script", "tests/test_repro_median.py",
+            "--evidence", "evidence.json", "--base-ref", "HEAD",
+        )
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        (repo / "src" / "calculator.py").write_text(
+            "def median(values):\n"
+            "    values = sorted(values)\n"
+            "    n = len(values)\n"
+            "    middle = values[n // 2]\n"
+            "    if n % 2:\n"
+            "        return middle\n"
+            "    return (values[n // 2 - 1] + middle) / 2\n"
+        )
+        git(repo, "add", "-A")
+        git(repo, "commit", "-qm", "fix: median averages the middle pair for even n")
+        res = self.repair_run(
+            repo, "verify-green", "--test-script", "tests/test_repro_median.py",
+            "--evidence", "evidence.json", "--spot-check", "2",
+        )
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        evidence = json.loads((repo / "evidence.json").read_text())
+        self.assertEqual(evidence["green"]["verified"], True)
+        self.assertIn("src/calculator.py", evidence["fix_files"])
+        self.assertEqual(evidence["spot_check"]["survivors"], 0)
+        self.assertEqual(evidence["spot_check"]["file"], "src/calculator.py")
+
+    def test_verify_green_refuses_fixless_or_tampered_base(self):
+        # A green repro with zero source diff is only possible if the evidence
+        # base is missing/tampered (e.g. repointed at a commit that already
+        # contained the fix) — the tool must refuse, not wave it through.
+        repo = self.seeded_repo()
+        res = self.repair_run(
+            repo, "verify-red", "--test-script", "tests/test_repro_median.py",
+            "--evidence", "evidence.json", "--base-ref", "HEAD",
+        )
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        evidence = json.loads((repo / "evidence.json").read_text())
+        evidence.pop("base")
+        (repo / "evidence.json").write_text(json.dumps(evidence, indent=2))
+        res = self.repair_run(
+            repo, "verify-green", "--test-script", "tests/test_repro_median.py",
+            "--evidence", "evidence.json",
+        )
+        self.assertNotEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertIn("no base.sha", res.stderr)
+
+    def test_stream_e_unlocked(self):
+        repo = self.copy_fixture()
+        git(repo, "init", "-q", "-b", "main")
+        install_scripts(repo)
+        res = script(repo, "ledger.py", "next", "--stream", "E", "--json")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(common_module.STREAMS["E"]["status"], "available")
 
 
 class DocumentationInvariantTests(unittest.TestCase):
