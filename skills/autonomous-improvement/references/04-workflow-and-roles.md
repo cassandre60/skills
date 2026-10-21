@@ -161,6 +161,14 @@ sit red and the fleet looks busy while nothing converges.
 6. **Nothing red goes quiet.** If a PR has been red for two wakes without an
    owner answer, say so in the owner report — in plain terms, with what the
    red check is and what the owner is being asked to accept.
+8. **Batched ledger rows conflict with each other.** Every ledger row is
+   inserted at the top of the same table, so two ledger branches collide on
+   the same lines. When the orchestrator's ledger branch merges a base that
+   has moved, resolve it by REBUILDING: take the base's ledger, re-insert
+   the rows the branch contributes, and commit that — never commit conflict
+   markers, and verify the pushed file contains none before moving on. A
+   conflicted ledger pushed to a PR is worse than a missing row.
+
 7. **Protected-file bookkeeping is batched, not bundled.** When a repo treats
    an audit ledger as a protected path, a worker's row for it blocks the PR on
    a gate label — and the gate's own message says such an edit "must be a
