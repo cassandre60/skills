@@ -31,6 +31,7 @@
 #   ORCH_MODEL_COOLDOWN seconds a model that failed with a quota error is skipped
 #                     (default 3600 = 1 h)
 #   ORCH_NUDGE_MODELS  how many ladder models to try per tick (default 3)
+#   ORCH_FAILURE_RETENTION seconds a model_failure entry is kept (default 604800 = 7d)
 #   ORCH_MIN_INTERVAL  minimum seconds between nudge rounds (default 600)
 #
 # Harness-specific: the default resume command is for opencode. Read your
@@ -75,7 +76,22 @@ fi
 
 # A quota error is a stronger wake signal than a stale heartbeat: rotate the
 # model immediately, do not wait for the age threshold.
-QUOTA_RE='rate limit|rate_limit|429|quota|too many requests|insufficient balance|balance is at|exceeded your current|overloaded'
+#
+# Signature discipline (2026-10-21): grepping the nudge output for loose quota
+# words parks a model whose agent merely *summarizes* a journal incident that
+# mentions rate limits. A quota failure therefore needs evidence: either an
+# error-shaped line naming the limit (strong), or the loose words together
+# with a failing nudge exit (weak made credible by the failure).
+QUOTA_WORDS='rate limit|rate_limit|429|quota|too many requests|insufficient balance|balance is at|exceeded your current|overloaded'
+QUOTA_STRONG_RE="(error|failed|failure|exception|fatal).*($QUOTA_WORDS)|insufficient balance|balance is at \\\$0"
+
+is_quota_failure() { # $1: nudge exit code, $2: nudge output file
+  grep -Eiq "$QUOTA_STRONG_RE" "$2" && return 0
+  if [ "$1" -ne 0 ] && grep -Eiq "$QUOTA_WORDS" "$2"; then
+    return 0
+  fi
+  return 1
+}
 
 failed_recently() { # $1: model id -> 0 when the model is in cooldown
   local model="$1" now ts
@@ -93,6 +109,27 @@ mark_failed() { # $1: model id
   now=$(date +%s)
   printf '%s %s\n' "$model" "$now" >>"$FAIL_FILE"
 }
+
+# The failure log is append-only otherwise; drop entries older than the
+# retention window (default 7 days) and malformed lines, once per tick.
+RETENTION="${ORCH_FAILURE_RETENTION:-604800}"
+prune_failures() {
+  [ -f "$FAIL_FILE" ] || return 0
+  local now m ts tmp
+  now=$(date +%s)
+  tmp="$FAIL_FILE.tmp"
+  : >"$tmp"
+  while read -r m ts; do
+    case "$ts" in
+      *[!0-9]*|"") continue ;;
+    esac
+    if [ $(( now - ts )) -le "$RETENTION" ]; then
+      printf '%s %s\n' "$m" "$ts" >>"$tmp"
+    fi
+  done <"$FAIL_FILE"
+  mv "$tmp" "$FAIL_FILE"
+}
+prune_failures
 
 # Models to try this tick: the ladder minus models in cooldown. An empty
 # ladder means "use the session default" (no rotation is possible then).
@@ -145,7 +182,7 @@ for model in "${candidates[@]}"; do
     bash -c "$RESUME_CMD" _ "$SID" "$NUDGE_MSG" "$model" >"$OUT" 2>&1
   RC=$?
   tail -c 800 "$OUT" >>"$LOG"
-  if grep -Eiq "$QUOTA_RE" "$OUT"; then
+  if is_quota_failure "$RC" "$OUT"; then
     echo "$(date -Is) model '$label' answered with a quota/balance failure; rotating" >>"$LOG"
     if [ -n "$model" ]; then
       mark_failed "$model"
@@ -162,4 +199,6 @@ done
 # once instead of waiting out a freshness the session never earned.
 touch -d "@$(( $(date +%s) - MAX_AGE - 1 ))" "$HB"
 echo "$(date -Is) every attempted model failed with a quota error; heartbeat left stale for the next tick" >>"$LOG"
-exit 0
+# Total failure is distress systemd should be able to see: OnFailure= can
+# notify the owner (a dead fleet otherwise announces itself by silence).
+exit 1

@@ -72,6 +72,12 @@ fi
 # --- case 2: every model fails -> both recorded -------------------------
 write_fake_opencode "free" "free"
 run_watchdog
+WD_RC=$?
+if [ "$WD_RC" -ne 0 ]; then
+  ok "total-failure tick exits nonzero so OnFailure can fire"
+else
+  fail "total-failure tick exited 0; systemd cannot signal distress"
+fi
 if grep -q '^opencode/alpha-free ' "$TMP/state/model_failures" 2>/dev/null &&
   grep -q '^opencode/beta-free ' "$TMP/state/model_failures" 2>/dev/null; then
   ok "both ladder models recorded when all fail"
@@ -101,6 +107,50 @@ if grep -q 'every model in the ladder is in cooldown' "$TMP/state/watchdog.log";
   ok "cooldown respected: falls back to the session default once"
 else
   fail "cooldown was not respected"
+fi
+
+# --- case 4: success that merely MENTIONS limits is not a quota failure --
+# The tightened signatures need an error-shaped line or a failing exit; an
+# agent summarizing a journal incident must not park its own model.
+cat >"$TMP/bin/opencode" <<'EOF'
+#!/bin/bash
+echo "ARGS: $*"
+echo "wake: housekeeping done; journal mentions an old rate limit quota incident"
+EOF
+chmod +x "$TMP/bin/opencode"
+run_watchdog
+if grep -q '^opencode/alpha-free ' "$TMP/state/model_failures" 2>/dev/null; then
+  fail "successful model parked for merely mentioning rate limits"
+else
+  ok "prose mention of limits on a successful nudge does not park the model"
+fi
+if grep -q 'rotating' "$TMP/state/watchdog.log"; then
+  fail "watchdog rotated away from a successful nudge"
+else
+  ok "no rotation after a successful nudge"
+fi
+
+# --- case 5: model_failures older than retention are pruned --------------
+write_fake_opencode "zzz-never-matches" "beta-free"
+OLD_TS=$(( $(date +%s) - 8 * 86400 ))
+printf 'opencode/ancient-free %s\nopencode/beta-free %s\n' "$OLD_TS" "$(date +%s)" \
+  >"$TMP/state/model_failures"
+rm -f "$TMP/state/watchdog.log" "$TMP/state/last_nudge"
+printf 'ses_TEST\n' >"$TMP/state/opencode_session_id"
+touch -d '3 hours ago' "$TMP/state/last_beat"
+PATH="$TMP/bin:$PATH" ORCH_STATE_DIR="$TMP/state" \
+  ORCH_MODEL_LADDER="opencode/alpha-free opencode/beta-free" \
+  ORCH_NUDGE_TIMEOUT=20 ORCH_MIN_INTERVAL=0 ORCH_HB_MAX_AGE=60 \
+  bash "$ASSETS" >/dev/null 2>&1
+if grep -q '^opencode/ancient-free ' "$TMP/state/model_failures" 2>/dev/null; then
+  fail "8-day-old failure entry was not pruned"
+else
+  ok "stale failure entries pruned beyond retention"
+fi
+if grep -q '^opencode/beta-free ' "$TMP/state/model_failures" 2>/dev/null; then
+  ok "recent failure entry kept"
+else
+  fail "recent failure entry was pruned too"
 fi
 
 if [ "$FAILED" -eq 0 ]; then

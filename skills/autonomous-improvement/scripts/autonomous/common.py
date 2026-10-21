@@ -51,6 +51,7 @@ DEFAULT_CONFIG = {
         "kill_switch_file": ".autonomous/STOP",
         "harness_cmd": None,
         "model_ladder": [],
+        "doctor_min_free_gb": 2,
         "merge_policy": "never",
         "ledger_mode": "batched",
     },

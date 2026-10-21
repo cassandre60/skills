@@ -2006,6 +2006,7 @@ class FleetWakeTests(RepoTestCase):
         self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
         launched = json.loads(marker.read_text())
         self.assertIn("PR #7", launched["prompt"])
+        self.assertIn("fleet.py doctor", launched["prompt"])
         self.assertTrue((state_dir / "snapshot.json").exists())
         self.assertTrue((state_dir / "last-wake-prompt.md").exists())
         wakes = (state_dir / "wakes.jsonl").read_text().splitlines()
@@ -2038,6 +2039,101 @@ class FleetWakeTests(RepoTestCase):
         self.assertFalse(marker.exists())
         record = json.loads((state_dir / "wakes.jsonl").read_text().splitlines()[0])
         self.assertEqual(record["action"], "quiet")
+
+
+class DoctorTests(RepoTestCase):
+    """Issue #19: blast-radius advice becomes checks, not hope."""
+
+    def _env(self, scenario: Dict[str, Any], linger: str = "yes") -> Dict[str, str]:
+        repo = self._repo
+        scenario_path = self.tmp / "doctor-scenario.json"
+        scenario_path.write_text(json.dumps(scenario))
+        bin_dir = path_with_only(self.tmp, ("git",))
+        gh = write(
+            bin_dir / "gh",
+            f"#!{PYTHON}\n"
+            "import datetime, email.utils, json, os, sys\n"
+            "args = sys.argv[1:]\n"
+            "sc = json.loads(open(os.environ['DOCTOR_SCENARIO']).read())\n"
+            "if args[:2] == ['auth', 'status']:\n"
+            "    print('github.com', file=sys.stderr)\n"
+            "    print(f\"  - Token scopes: {sc['scopes']}\", file=sys.stderr)\n"
+            "    sys.exit(0)\n"
+            "if args[:2] == ['repo', 'view']:\n"
+            "    print(json.dumps({'nameWithOwner': 'o/r', 'viewerPermission': sc.get('permission', 'WRITE')}))\n"
+            "    sys.exit(0)\n"
+            "if args and args[0] == 'api':\n"
+            "    joined = ' '.join(args)\n"
+            "    if 'protection' in joined:\n"
+            "        if sc.get('protection'):\n"
+            "            print(json.dumps({'required_status_checks': {'contexts': ['check']}}))\n"
+            "            sys.exit(0)\n"
+            "        print('Branch not protected', file=sys.stderr)\n"
+            "        sys.exit(1)\n"
+            "    if '-i' in args:\n"
+            "        print('HTTP/2 200')\n"
+            "        print('Date: ' + email.utils.format_datetime(datetime.datetime.now(datetime.timezone.utc)))\n"
+            "        print('{}')\n"
+            "        sys.exit(0)\n"
+            "    print('{}')\n"
+            "    sys.exit(0)\n"
+            "sys.exit(1)\n",
+        )
+        gh.chmod(0o755)
+        loginctl = write(bin_dir / "loginctl", "#!/bin/sh\nprintf '%s\\n' \"$LINGER_VALUE\"\n")
+        loginctl.chmod(0o755)
+        systemctl = write(
+            bin_dir / "systemctl",
+            "#!/bin/sh\ncase \"$*\" in *orchestrator-wake*) printf 'active\\n' ;; *) printf 'inactive\\n'; exit 1 ;; esac\n",
+        )
+        systemctl.chmod(0o755)
+        return env_with_path(
+            bin_dir,
+            DOCTOR_SCENARIO=str(scenario_path),
+            LINGER_VALUE=linger,
+            ORCH_MODEL_LADDER="provider/a provider/b",
+        )
+
+    @property
+    def _repo(self) -> Path:
+        if not hasattr(self, "_cached_repo"):
+            repo, _ = python_repo(self.tmp)
+            commit(repo)
+            self._cached_repo = repo
+        return self._cached_repo
+
+    def _doctor(self, scenario, linger="yes"):
+        state_dir = self.tmp / "state"
+        state_dir.mkdir(exist_ok=True)
+        result = script(
+            self._repo, "fleet.py", "doctor", "--json",
+            "--state-dir", str(state_dir), env=self._env(scenario, linger),
+        )
+        checks = {}
+        if result.stdout.strip():
+            data = json.loads(result.stdout)
+            checks = {item["name"]: item for item in data["checks"]}
+        return result, checks
+
+    GOOD = {"scopes": "'repo:status'", "protection": True, "permission": "WRITE"}
+
+    def test_all_good_fixture_exits_zero(self):
+        result, checks = self._doctor(self.GOOD)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(checks["linger"]["status"], "ok")
+        self.assertEqual(checks["token-scopes"]["status"], "ok")
+
+    def test_missing_linger_is_named_hard_failure(self):
+        result, checks = self._doctor(self.GOOD, linger="no")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(checks["linger"]["status"], "fail")
+
+    def test_overscoped_token_is_named_hard_failure(self):
+        scenario = dict(self.GOOD, scopes="'repo', 'read:org'")
+        result, checks = self._doctor(scenario)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(checks["token-scopes"]["status"], "fail")
+        self.assertIn("repo", checks["token-scopes"]["detail"])
 
 
 class FleetClaimPublishTests(RepoTestCase):
