@@ -1141,6 +1141,175 @@ class MutationEngineTests(RepoTestCase):
         self.assertEqual(allowed.returncode, 0, allowed.stderr)
 
 
+class VerdictReliabilityTests(RepoTestCase):
+    """Issue #16: baseline-relative timeouts, survivor confirmation, verdict cache."""
+
+    def make_repo(self):
+        repo, _ = python_repo(self.tmp)
+        write(repo / "src" / "app.py", "def f(a, b):\n    return a == b\n")
+        commit(repo)
+        return repo
+
+    def test_baseline_relative_timeout_computation(self):
+        # Unit: max(5x baseline, 20s) when no explicit --timeout was given;
+        # an explicit flag is preserved verbatim ("flags preserved" in #16).
+        self.assertEqual(engine_module._effective_timeout(13.0, None), 65.0)
+        self.assertEqual(engine_module._effective_timeout(1.0, None), 20.0)
+        self.assertEqual(engine_module._effective_timeout(0.2, None), 20.0)
+        self.assertEqual(engine_module._effective_timeout(13.0, 0.3), 0.3)
+
+    def test_baseline_relative_timeout_recorded_in_json(self):
+        repo = self.make_repo()
+        output = self.tmp / "t.json"
+        result = script(
+            repo, "mutation_engine.py", "--source", "src/app.py",
+            "--test-cmd", f"{PYTHON} -c pass", "--max-mutants", "2",
+            "--output-json", str(output),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = json.loads(output.read_text())
+        self.assertEqual(data["timeout_mode"], "baseline-relative")
+        # Room: local baselines are seconds; the 20s floor is the effective default.
+        self.assertEqual(data["timeout_effective"], 20.0)
+        self.assertEqual(data["counts"]["timeout"], 0)
+
+    def test_flaky_suite_does_not_yield_confirmed_survivor(self):
+        # Deterministic stand-in for "passes/fails alternating" (#16 item 3):
+        # call 1 (baseline, clean) passes; later invocations on MUTATED source
+        # pass too (fabricating a survivor); later invocations on CLEAN source
+        # fail — the suite cannot be trusted on clean source, so the survivor
+        # verdict proves nothing and must not be reported as work.
+        repo = self.make_repo()
+        (repo / "orig.txt").write_text((repo / "src" / "app.py").read_text())
+        stub = write(
+            repo / "flake.py",
+            "import pathlib, sys\n"
+            "calls = pathlib.Path('calls.txt')\n"
+            "count = int(calls.read_text() or '0') + 1 if calls.exists() else 1\n"
+            "calls.write_text(str(count))\n"
+            "actual = pathlib.Path('src/app.py').read_text()\n"
+            "if count == 1:\n"
+            "    sys.exit(0)\n"
+            "if actual == pathlib.Path('orig.txt').read_text():\n"
+            "    sys.exit(1)\n"
+            "sys.exit(0)\n",
+        )
+        output = self.tmp / "flake.json"
+        result = script(
+            repo, "mutation_engine.py", "--source", "src/app.py",
+            "--test-cmd", f"{PYTHON} {stub}", "--max-mutants", "1",
+            "--output-json", str(output),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = json.loads(output.read_text())
+        self.assertEqual(data["counts"]["survived"], 0)
+        self.assertEqual(data["counts"]["unverified"], 1)
+        self.assertEqual(data["counts"]["killed"], 0)
+        self.assertEqual(len(data["unverified"]), 1)
+
+    def test_confirm_survivors_default_positive_path(self):
+        # Healthy suite: mutant run passes AND clean-source confirm passes ->
+        # the survivor is confirmed and reported as work. Default N=1.
+        repo = self.make_repo()
+        output = self.tmp / "confirm.json"
+        result = script(
+            repo, "mutation_engine.py", "--source", "src/app.py",
+            "--test-cmd", f"{PYTHON} -c pass", "--max-mutants", "2",
+            "--output-json", str(output),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = json.loads(output.read_text())
+        self.assertGreaterEqual(data["counts"]["survived"], 1)
+        self.assertEqual(data["counts"]["unverified"], 0)
+        self.assertEqual(data["confirm_survivors"], 1)
+
+    def test_confirm_survivors_zero_restores_legacy_behavior(self):
+        # --confirm-survivors 0: voided confirmation; a survivor stands on the
+        # first pass even when clean source cannot reproduce a pass (legacy).
+        repo = self.make_repo()
+        (repo / "orig.txt").write_text((repo / "src" / "app.py").read_text())
+        stub = write(
+            repo / "flake0.py",
+            "import pathlib, sys\n"
+            "calls = pathlib.Path('calls0.txt')\n"
+            "count = int(calls.read_text() or '0') + 1 if calls.exists() else 1\n"
+            "calls.write_text(str(count))\n"
+            "actual = pathlib.Path('src/app.py').read_text()\n"
+            "if count == 1:\n"
+            "    sys.exit(0)\n"
+            "if actual == pathlib.Path('orig.txt').read_text():\n"
+            "    sys.exit(1)\n"
+            "sys.exit(0)\n",
+        )
+        output = self.tmp / "confirm0.json"
+        result = script(
+            repo, "mutation_engine.py", "--source", "src/app.py",
+            "--test-cmd", f"{PYTHON} {stub}", "--max-mutants", "1",
+            "--confirm-survivors", "0",
+            "--output-json", str(output),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = json.loads(output.read_text())
+        self.assertEqual(data["counts"]["survived"], 1)
+
+    def test_verdict_cache_hits_and_bypass(self):
+        repo = self.make_repo()
+        output_a = self.tmp / "cache1.json"
+        output_b = self.tmp / "cache2.json"
+        output_c = self.tmp / "cache3.json"
+        argv = [
+            repo, "mutation_engine.py", "--source", "src/app.py",
+            "--test-cmd", f"{PYTHON} -c pass", "--max-mutants", "3",
+        ]
+        first = script(*argv, "--output-json", str(output_a))
+        self.assertEqual(first.returncode, 0, first.stderr)
+        data_a = json.loads(output_a.read_text())
+        self.assertEqual(data_a["cache_hits"], 0)
+        self.assertTrue((repo / ".autonomous" / "mutant-cache.json").exists())
+
+        second = script(*argv, "--output-json", str(output_b))
+        self.assertEqual(second.returncode, 0, second.stderr)
+        data_b = json.loads(output_b.read_text())
+        # Same repo state, same test command -> every verdict is a cache hit,
+        # and the reported verdict tables match the earlier run exactly
+        # ("assert on reported counts, not wall time" per #16).
+        self.assertEqual(data_b["cache_hits"], data_a["counts"]["total"])
+        self.assertEqual(data_b["counts"], data_a["counts"])
+
+        third = script(*argv, "--no-cache", "--output-json", str(output_c))
+        self.assertEqual(third.returncode, 0, third.stderr)
+        data_c = json.loads(output_c.read_text())
+        self.assertEqual(data_c["cache_hits"], 0)
+        self.assertEqual(data_c["counts"], data_a["counts"])
+
+    def test_backend_auto_notes_fallback(self):
+        repo = self.make_repo()
+        output = self.tmp / "backend.json"
+        auto = script(
+            repo, "mutation_engine.py", "--source", "src/app.py",
+            "--test-cmd", f"{PYTHON} -c pass", "--max-mutants", "2",
+            "--backend", "auto", "--output-json", str(output),
+        )
+        self.assertEqual(auto.returncode, 0, auto.stderr)
+        self.assertIn("sregex", auto.stdout)
+        data = json.loads(output.read_text())
+        self.assertEqual(data["backend"], "sregex")
+
+        explicit = script(
+            repo, "mutation_engine.py", "--source", "src/app.py",
+            "--test-cmd", f"{PYTHON} -c pass", "--max-mutants", "2",
+            "--backend", "sregex",
+        )
+        self.assertEqual(explicit.returncode, 0, explicit.stderr)
+
+        unknown = script(
+            repo, "mutation_engine.py", "--source", "src/app.py",
+            "--test-cmd", f"{PYTHON} -c pass", "--backend", "stryker",
+        )
+        self.assertEqual(unknown.returncode, 2)
+        self.assertIn("invalid choice: 'stryker'", unknown.stderr)
+
+
 class TestWeakeningTests(RepoTestCase):
     def test_removed_assertion_and_added_skip(self):
         repo, _ = init_repo(self.tmp)

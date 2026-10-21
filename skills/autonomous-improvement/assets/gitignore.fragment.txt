@@ -5,3 +5,7 @@
 
 # Python bytecode, if the scripts are copied into the repo.
 __pycache__/
+
+# Verdict cache: keyed on (source bytes, test command); source or test change
+# invalidates it by construction.
+.autonomous/mutant-cache.json
