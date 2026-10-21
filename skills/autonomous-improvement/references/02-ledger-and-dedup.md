@@ -150,6 +150,18 @@ python3 scripts/autonomous/ledger.py check --target src/app.py
 - `check` exits 0 when the current composite hash is audited, 1 otherwise. When a
   disposition matches the current hash it says so on the next line, so a "no" is
   never mistaken for "never looked at".
+- **Risk-ranked discovery** (`next --rank risk`, default `lexicographic`
+  unchanged): eligible candidates are scored from git in one pass — commits
+  touching the file and lines changed over the last `--rank-window` commits
+  (commit-count window, so output is deterministic for a fixed repo state),
+  a word-match reference count as a fan-in proxy, LOC/branch-keyword size
+  proxies, and an uncovered-lines factor when config names `coverage_report`
+  (coverage.py JSON or lcov; absent → neutral). A candidate whose path is
+  named in an open issue enters the **intake lane** and outranks any score
+  in its tier. `priority_paths` remains a hard tier above the score — owner
+  intent beats heuristics. `--json` attaches `rank: {score, why: [...]}` to
+  every candidate so the Orchestrator can justify the pick without
+  re-deriving it. The score is a documented heuristic, not a measurement.
 
 ## Open-PR collision check
 

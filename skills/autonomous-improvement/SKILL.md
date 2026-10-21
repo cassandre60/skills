@@ -80,7 +80,7 @@ for Python, Dart/Flutter, TypeScript/JavaScript, and Go examples.
 
 ## Quick start (one round)
 
-1. `python3 scripts/autonomous/ledger.py next --stream A` selects the next unaudited target.
+1. `python3 scripts/autonomous/ledger.py next --stream A` selects the next unaudited target (`--rank risk` for git-churn/issue-intake ordering — see `references/02-ledger-and-dedup.md`).
 2. `python3 scripts/autonomous/orchestrator.py create-worktree --slug <slug> --type test` isolates it.
 3. `python3 scripts/autonomous/mutation_engine.py --source <target> --test-cmd "<targeted cmd>"` finds survivors.
 4. For one triaged survivor, prove the new test is red with the mutant and green on clean source.

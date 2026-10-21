@@ -467,6 +467,73 @@ class LedgerTests(RepoTestCase):
         self.assertEqual(result.returncode, 1)
 
 
+class RiskRankingTests(RepoTestCase):
+    """Issue #15: discovery order is risk, not alphabet."""
+
+    def _repo(self) -> Path:
+        repo, _ = python_repo(self.tmp)
+        write(repo / "src" / "a_stable.py", "def a(x):\n    return x\n")
+        write(repo / "src" / "z_hot.py", "def z(x):\n    return x\n")
+        write(repo / "tests" / "test_a_stable.py", "def test_a():\n    assert True\n")
+        write(repo / "tests" / "test_z_hot.py", "def test_z():\n    assert True\n")
+        commit(repo, "base")
+        for i in range(5):
+            write(
+                repo / "src" / "z_hot.py",
+                "def z(x):\n    return x\n" + "# touch\n" * (i + 1),
+            )
+            commit(repo, f"churn z_hot {i}")
+        return repo
+
+    def _next(self, repo: Path, *extra: str, env=None):
+        result = script(
+            repo, "ledger.py", "next", "--stream", "A", "--json", "--limit", "5",
+            *extra, env=env,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        return json.loads(result.stdout), result
+
+    def test_risk_rank_prefers_hot_file_over_alphabet(self):
+        repo = self._repo()
+        bin_dir = path_with_only(self.tmp, ("git",))
+        env = env_with_path(bin_dir)
+        lex, _ = self._next(repo, env=env)
+        self.assertEqual(lex["candidates"][0]["target"], "src/a_stable.py")
+        risk, first = self._next(repo, "--rank", "risk", env=env)
+        top = risk["candidates"][0]
+        self.assertEqual(top["target"], "src/z_hot.py")
+        self.assertTrue(
+            any("touched-in-" in why for why in top["rank"]["why"]), top["rank"]
+        )
+        # Deterministic for a fixed repo state.
+        _, second = self._next(repo, "--rank", "risk", env=env)
+        self.assertEqual(first.stdout, second.stdout)
+
+    def test_issue_intake_outranks_higher_score(self):
+        repo = self._repo()
+        prs = self.tmp / "prs.json"
+        prs.write_text("[]\n")
+        issues = self.tmp / "issues.json"
+        issues.write_text(json.dumps([
+            {"number": 88, "title": "crash in src/a_stable.py on startup", "body": ""}
+        ]) + "\n")
+        bin_dir = path_with_only(self.tmp, ("git",))
+        gh = write(
+            bin_dir / "gh",
+            "#!/bin/sh\n"
+            'case "$1 $2" in\n'
+            f'  "pr list") while IFS= read -r l; do printf \'%s\\n\' "$l"; done < {prs} ;;\n'
+            f'  "issue list") while IFS= read -r l; do printf \'%s\\n\' "$l"; done < {issues} ;;\n'
+            "  *) echo unexpected gh args >&2; exit 1 ;;\n"
+            "esac\n",
+        )
+        gh.chmod(0o755)
+        data, _ = self._next(repo, "--rank", "risk", env=env_with_path(bin_dir))
+        top = data["candidates"][0]
+        self.assertEqual(top["target"], "src/a_stable.py")
+        self.assertIn("mentioned-in-issue-#88", top["rank"]["why"])
+
+
 class MutantLedgerTests(RepoTestCase):
     """Per-mutant memory: survivors stay visible until killed or triaged."""
 

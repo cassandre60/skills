@@ -32,6 +32,7 @@ DEFAULT_CONFIG = {
     "analyze_extensions": [],
     "gate_cmd": None,
     "test_cmd": None,
+    "coverage_report": None,
     "test_for_source": [],
     "candidates": {
         "A": {"include": [], "exclude": [], "require_test": True, "priority_paths": []},

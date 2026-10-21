@@ -9,6 +9,7 @@
   "analyze_extensions": [".py"],
   "gate_cmd": null,
   "test_cmd": ["python3", "-m", "pytest", "-x", "-q"],
+  "coverage_report": null,
   "test_for_source": [
     {
       "src": "^src/(?:.*/)?([^/]+)\\.py$",
