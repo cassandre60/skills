@@ -82,6 +82,14 @@ state-machine deadlocks.
 
 ## Stream D — migration and data-preservation archeology (planned, unavailable)
 
+
 This needs fixture databases for every historical schema version and a
 migration harness. Until then, do not run it as per-PR busywork. Typical targets
 for later: zero-row-loss migrations, orphan-row checks, cascade behavior.
+
+For the full planned catalog (streams C–L, including defect repair,
+flakiness, performance, security, docs truthfulness, simplification,
+dependency evolution, and the capped meta stream), the stream contract a
+new stream must pass, and the autonomy tiers it earns, see
+`08-recursive-self-improvement.md`. C and D above keep their original
+sketches; `08` is the admission gate for all of them.

@@ -62,7 +62,7 @@ skills/
     assets/     # 8 files
     evals/      # 18 files
     examples/   # 2 files
-    references/ # 9 files
+    references/ # 10 files
     scripts/    # 12 files
     tests/      # 3 files
   cliproxy-integration/

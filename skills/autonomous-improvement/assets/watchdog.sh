@@ -156,5 +156,10 @@ for model in "${candidates[@]}"; do
   exit 0
 done
 
-echo "$(date -Is) every attempted model failed with a quota error; leaving heartbeat stale for the next tick" >>"$LOG"
+# Every attempt failed on quota, so nobody actually woke up. Undo the
+# attempt-marker above: backdate the heartbeat past the staleness threshold
+# so the next timer tick (bounded by last_nudge/MIN_INTERVAL) retries at
+# once instead of waiting out a freshness the session never earned.
+touch -d "@$(( $(date +%s) - MAX_AGE - 1 ))" "$HB"
+echo "$(date -Is) every attempted model failed with a quota error; heartbeat left stale for the next tick" >>"$LOG"
 exit 0

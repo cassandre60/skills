@@ -3,6 +3,10 @@ Description=Orchestrator watchdog (revive a stale agent session with one bounded
 
 [Service]
 Type=oneshot
+# The watchdog is configured entirely by ORCH_* variables (watchdog.sh header).
+# systemd services do not see shell-profile exports, so they live in this
+# file: edit it, no daemon-reload needed (it is read at every service start).
+EnvironmentFile=-%h/.local/share/orchestrator/watchdog.env
 ExecStart=%h/.local/share/orchestrator/watchdog.sh
 # Backstop if the script itself wedges; the script also wraps the nudge in `timeout`.
 TimeoutStartSec=2h
