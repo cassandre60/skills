@@ -11,6 +11,8 @@ prose, or checkbox tests. Two streams are active:
 - **A — mutation testing:** find behavior the suite does not protect.
 - **B — adversarial test audit:** find tests that cannot fail, assert mocks, or
   sleep instead of synchronizing.
+- **L — meta (gated):** own kill switch; claims replayed from recorded
+  fleet history; L4 surfaces stay issue-only — `meta.py`.
 
 Each round produces at most one small, evidence-backed PR. If there is no
 falsifiable gap, stop; that is a valid result.
@@ -144,17 +146,16 @@ The ledger is a git-tracked markdown table:
 - The hash is the blob at HEAD. `record` warns if the target is dirty;
   `--strict` makes that fatal.
 
-## Beyond testing (planned streams C–L)
+## Beyond testing (planned streams C, D, E, F, G, H, I, J, K)
 
-Testing is the bootstrap, not the ceiling: streams C–L generalize the same
-five laws to fuzzing, defect repair, flakiness, performance, security, docs
-truthfulness, simplification, dependency evolution, and — capped and
-eval-gated — the fleet improving itself. Each must pass the stream contract
-in `references/08-recursive-self-improvement.md` (deterministic finder,
-mechanical oracle, content-addressed memory, bounded blast radius, referee
-isolation) before its letter unlocks; `ledger.py` rejects C–L until then.
-Do not start work under a locked letter or promise it in a PR; offer A/B, or
-file the finding as an evidence-backed issue.
+Testing is the bootstrap, not the ceiling: the remaining streams (fuzzing,
+defect repair, flakiness, performance, security, docs truthfulness,
+simplification, dependency evolution) must pass the stream contract in
+`references/08-recursive-self-improvement.md` (deterministic finder,
+mechanical oracle, bounded blast radius, referee isolation) before their
+letter unlocks — L is gated behind its own kill switch (exists, defaults
+off); `ledger.py` rejects locked letters. Do not work under a locked letter
+or promise it in a PR; offer A/B, or file an evidence-backed issue.
 
 ## Unattended operation (advanced)
 

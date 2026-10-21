@@ -28,6 +28,7 @@ from support import (
     python_repo,
     row,
     run,
+    write_config,
     script,
     write,
     write_config,
@@ -1264,10 +1265,12 @@ class StreamRegistryTests(unittest.TestCase):
 
     def test_planned_streams_rejected_by_name(self):
         # The catalog (references/08) is wider than the tooling. Every
-        # non-available letter must refuse with its full name, so a session
+        # planned letter must refuse with its full name, so a session
         # cannot drift into un-tooled work under a planned letter.
+        # Gated letters (L) pass normalize on purpose: their caller-side
+        # kill switch owns the refusal (StreamLTests).
         for stream, info in common_module.STREAMS.items():
-            if info["status"] == "available":
+            if info["status"] != "planned":
                 continue
             with self.assertRaises(common_module.UsageError) as ctx:
                 common_module.normalize_stream(stream)
@@ -1544,6 +1547,145 @@ class CandidateOrderingTests(unittest.TestCase):
                 "src/z_last.py",
             ],
         )
+
+
+class StreamLTests(RepoTestCase):
+    """Stream L (issue #26): meta self-improvement, capped and kill-switched.
+
+    Replay = every claim in an L3 proposal is recomputed from the
+    recorded fleet history (rows, not folklore). L4-touching proposals
+    (eval gates, weakening tripwire, tier floors...) are issue-only EVEN
+    IF their numbers would pass. Stream L has its own kill switch,
+    independent of the fleet switch. Lessons carry evidence + scope +
+    re-validate-by and expired ones are demoted.
+    """
+
+    FIXTURE = SKILL_ROOT / "evals" / "fixtures" / "meta-fleet"
+
+    def meta_run(self, repo: Path, *args: str) -> subprocess.CompletedProcess:
+        return run(
+            [PYTHON, str(SKILL_ROOT / "scripts" / "autonomous" / "meta.py"), *args],
+            cwd=repo,
+        )
+
+    def copy_fixture(self) -> Path:
+        repo = self.tmp / "repo"
+        repo.mkdir()
+        shutil.copytree(self.FIXTURE, repo / "meta-fleet")
+        return repo
+
+    def write_fleet_config(self, repo: Path, fleet: dict) -> None:
+        cfg_dir = repo / "scripts" / "autonomous"
+        cfg_dir.mkdir(parents=True, exist_ok=True)
+        (cfg_dir / "config.json").write_text(json.dumps({"fleet": fleet}))
+
+    def test_kill_switch_is_independent_of_the_fleet_switch(self):
+        repo = self.copy_fixture()
+        self.write_fleet_config(repo, {"stream_l_enabled": False})
+        res = self.meta_run(
+            repo, "replay", "--fixture-dir", "meta-fleet",
+            "--proposal", "meta-fleet/proposals/good-diff-budget.json", "--json",
+        )
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("kill switch", res.stdout + res.stderr)
+        # Even with the fleet switch on, L needs its own flag AND no
+        # stream-L stop file.
+        self.write_fleet_config(repo, {"enabled": True, "stream_l_enabled": False})
+        res = self.meta_run(
+            repo, "replay", "--fixture-dir", "meta-fleet",
+            "--proposal", "meta-fleet/proposals/good-diff-budget.json", "--json",
+        )
+        self.assertNotEqual(res.returncode, 0)
+        self.write_fleet_config(repo, {"enabled": True, "stream_l_enabled": True})
+        (repo / ".autonomous").mkdir()
+        (repo / ".autonomous" / "STOP-STREAM-L").write_text("")
+        res = self.meta_run(
+            repo, "replay", "--fixture-dir", "meta-fleet",
+            "--proposal", "meta-fleet/proposals/good-diff-budget.json", "--json",
+        )
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("STOP-STREAM-L", res.stdout + res.stderr)
+
+    def test_l4_touching_proposal_is_issue_only_even_if_numbers_pass(self):
+        repo = self.copy_fixture()
+        self.write_fleet_config(repo, {"stream_l_enabled": True})
+        res = self.meta_run(
+            repo, "replay", "--fixture-dir", "meta-fleet",
+            "--proposal", "meta-fleet/proposals/bad-weakening.json", "--json",
+        )
+        self.assertNotEqual(res.returncode, 0, res.stdout + res.stderr)
+        blob = res.stdout + res.stderr
+        self.assertIn("L4", blob)
+        self.assertIn("issue-only", blob)
+        self.assertNotIn("draft_pr", blob)
+        # recorded as rejected, not silently dropped
+        journal = json.loads((repo / ".autonomous" / "l-journal.json").read_text())
+        self.assertEqual(journal["proposals"][0]["verdict"], "rejected")
+
+    def test_good_proposal_passes_replay_with_before_after_draft(self):
+        repo = self.copy_fixture()
+        self.write_fleet_config(repo, {"stream_l_enabled": True})
+        res = self.meta_run(
+            repo, "replay", "--fixture-dir", "meta-fleet",
+            "--proposal", "meta-fleet/proposals/good-diff-budget.json", "--json",
+        )
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        payload = json.loads(res.stdout)
+        self.assertEqual(payload["verdict"], "pass")
+        claims = payload["claims_replay"]
+        before = claims["median_owner_minutes"]["before_recorded"]
+        after = claims["median_owner_minutes"]["after_claimed"]
+        self.assertLess(after, before)
+        self.assertEqual(before, 40.0)  # recomputed from the recorded rows
+        self.assertEqual(payload["multi_objective"]["passes_floors"], True)
+        self.assertIn("draft", payload["draft_pr"]["title"].lower())
+        self.assertIn("40.0", payload["draft_pr"]["body"])
+        self.assertIn(str(after), payload["draft_pr"]["body"])
+
+    def test_groundless_claim_is_rejected_by_replay(self):
+        repo = self.copy_fixture()
+        self.write_fleet_config(repo, {"stream_l_enabled": True})
+        (repo / "meta-fleet" / "proposals" / "groundless.json").write_text(json.dumps({
+            "schema": "stream-l-proposal/1",
+            "kind": "param-tune",
+            "touches": [],
+            "basis": "6 of 12 rejections cite oversized diffs",
+            "claims": {"median_owner_minutes": {"after": 2, "before": 99}},
+        }))
+        res = self.meta_run(
+            repo, "replay", "--fixture-dir", "meta-fleet",
+            "--proposal", "meta-fleet/proposals/groundless.json", "--json",
+        )
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("recorded", res.stdout + res.stderr)
+        self.assertIn("before", res.stdout + res.stderr)
+
+    def test_expired_lessons_are_demoted(self):
+        repo = self.copy_fixture()
+        self.write_fleet_config(repo, {"stream_l_enabled": True})
+        res = self.meta_run(
+            repo, "lessons", "--fixture-dir", "meta-fleet", "--json",
+        )
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        payload = json.loads(res.stdout)
+        demoted = [entry["id"] for entry in payload["demoted"]]
+        kept = [entry["id"] for entry in payload["kept"]]
+        self.assertEqual(demoted, ["lsn-2025-keep-sse", "lsn-no-evidence"])
+        self.assertEqual(kept, ["lsn-fresh-budget"])
+        digest = res.stdout
+        self.assertIn("re-validate", digest)
+
+    def test_ledger_refuses_stream_l_without_its_switch(self):
+        repo = self.copy_fixture()
+        git(repo, "init", "-q", "-b", "main")
+        git(repo, "config", "user.email", "test@example.com")
+        git(repo, "config", "user.name", "Test User")
+        install_scripts(repo)
+        write_config(repo, {"fleet": {"enabled": True, "stream_l_enabled": False}})
+        res = script(repo, "ledger.py", "next", "--stream", "L")
+        self.assertEqual(res.returncode, 2, res.stdout + res.stderr)
+        self.assertIn("kill switch", res.stderr)
+        self.assertEqual(common_module.STREAMS["L"]["status"], "gated")
 
 
 class DocumentationInvariantTests(unittest.TestCase):

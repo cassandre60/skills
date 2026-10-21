@@ -1,0 +1,28 @@
+{
+  "schema": "fleet-history/1",
+  "recorded_session": "2026-10-snapshot",
+  "objective_weights": {
+    "owner_minutes": 1.0,
+    "ci_minutes": 0.5,
+    "tokens": 0.001
+  },
+  "floors": {
+    "min_acceptance_rate_14d": 0.5
+  },
+  "rows": [
+    {"id": "PR-701", "stream": "A", "kind": "mutation-audit", "files_touched": 3, "value": 8, "owner_minutes": 12, "ci_minutes": 9, "tokens": 2200, "outcome": "accepted"},
+    {"id": "PR-702", "stream": "A", "kind": "mutation-audit", "files_touched": 2, "value": 6, "owner_minutes": 10, "ci_minutes": 8, "tokens": 1800, "outcome": "accepted"},
+    {"id": "RW-711", "stream": "A", "kind": "mutation-rework", "files_touched": 4, "value": 0, "owner_minutes": 40, "ci_minutes": 15, "tokens": 3100, "outcome": "rework", "rework_reason": "oversized diff (merged only after manual surgery)"},
+    {"id": "RW-712", "stream": "A", "kind": "mutation-rework", "files_touched": 5, "value": 0, "owner_minutes": 38, "ci_minutes": 14, "tokens": 2900, "outcome": "rework", "rework_reason": "oversized diff (merged only after manual surgery)"},
+    {"id": "RW-713", "stream": "A", "kind": "mutation-rework", "files_touched": 3, "value": 0, "owner_minutes": 42, "ci_minutes": 16, "tokens": 3300, "outcome": "rework", "rework_reason": "oversized diff (merged only after manual surgery)"},
+    {"id": "PR-720", "stream": "A", "kind": "mutation-audit", "files_touched": 2, "value": 7, "owner_minutes": 11, "ci_minutes": 7, "tokens": 1500, "outcome": "accepted"},
+    {"id": "REJ-721", "stream": "A", "kind": "mutation-audit", "files_touched": 44, "value": 0, "owner_minutes": 5, "ci_minutes": 0, "tokens": 900, "outcome": "rejected", "rejection_reason": "out of scope: refactored unrelated helpers"},
+    {"id": "PR-730", "stream": "B", "kind": "adversarial-audit", "files_touched": 1, "value": 5, "owner_minutes": 9, "ci_minutes": 6, "tokens": 1200, "outcome": "accepted"},
+    {"id": "PR-731", "stream": "B", "kind": "adversarial-audit", "files_touched": 1, "value": 4, "owner_minutes": 8, "ci_minutes": 5, "tokens": 1100, "outcome": "accepted"},
+    {"id": "REJ-732", "stream": "B", "kind": "adversarial-audit", "files_touched": 1, "value": 0, "owner_minutes": 6, "ci_minutes": 0, "tokens": 800, "outcome": "rejected", "rejection_reason": "test asserts a mock, cannot fail"},
+    {"id": "PR-740", "stream": "C", "kind": "fuzz-shrink", "files_touched": 1, "value": 9, "owner_minutes": 7, "ci_minutes": 4, "tokens": 1000, "outcome": "accepted"},
+    {"id": "REJ-741", "stream": "F", "kind": "flake-fix", "files_touched": 60, "value": 0, "owner_minutes": 10, "ci_minutes": 0, "tokens": 950, "outcome": "rejected", "rejection_reason": "oversized diff: touched 60 files (budget 50)"},
+    {"id": "PR-750", "stream": "G", "kind": "perf-gate", "files_touched": 1, "value": 8, "owner_minutes": 6, "ci_minutes": 12, "tokens": 1400, "outcome": "accepted"},
+    {"id": "issue-88", "stream": "E", "kind": "defect-issue", "files_touched": 1, "value": 3, "owner_minutes": 20, "ci_minutes": 10, "tokens": 1600, "outcome": "accepted"}
+  ]
+}

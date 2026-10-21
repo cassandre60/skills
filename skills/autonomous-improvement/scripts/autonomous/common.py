@@ -437,7 +437,7 @@ STREAMS: Dict[str, Dict[str, Any]] = {
     "I": {"label": "I (Docs & Spec Truthfulness)", "status": "planned"},
     "J": {"label": "J (Simplification / Dead Code)", "status": "planned"},
     "K": {"label": "K (Dependency Evolution)", "status": "planned"},
-    "L": {"label": "L (Meta: Fleet Self-Improvement)", "status": "planned"},
+    "L": {"label": "L (Meta: Fleet Self-Improvement)", "status": "gated"},
 }
 _STREAM_ALIASES: Dict[str, str] = {"1": "A", "2": "B"}
 for _sid, _info in STREAMS.items():
@@ -456,12 +456,37 @@ def normalize_stream(value: str) -> str:
             f"unknown stream {value!r}; known streams: {known} (1/2 alias A/B)"
         )
     info = STREAMS[stream]
-    if info["status"] != "available":
+    if info["status"] not in ("available", "gated"):
         raise UsageError(
             f"stream {info['label']} is planned, not implemented "
             "(use A or B; see references/08-recursive-self-improvement.md)"
         )
     return stream
+
+
+def stream_l_switch_problem(root: Path, cfg: Dict[str, Any]) -> Optional[str]:
+    """Stream L's own kill switch; independent of the fleet switch.
+
+    L runs only when ``fleet.stream_l_enabled`` is true AND no
+    ``.autonomous/STOP-STREAM-L`` file is present. Flowing through the
+    fleet master switch is deliberately impossible: a loop that can not
+    be turned off per-stream when it touches its own evaluator is the
+    documented objective-hacking incident.
+    """
+    fleet = cfg.get("fleet", {}) or {}
+    if not bool(fleet.get("stream_l_enabled")):
+        return (
+            "stream L is gated behind its kill switch (independent of the "
+            "fleet switch): set fleet.stream_l_enabled=true in "
+            "scripts/autonomous/config.json to request it"
+        )
+    for candidate in (root / ".autonomous" / "STOP-STREAM-L", Path.cwd() / ".autonomous" / "STOP-STREAM-L"):
+        if candidate.exists():
+            return (
+                "stream L kill switch present (.autonomous/STOP-STREAM-L); "
+                "L stays off while the file exists"
+            )
+    return None
 
 
 def stream_label(stream: str) -> str:

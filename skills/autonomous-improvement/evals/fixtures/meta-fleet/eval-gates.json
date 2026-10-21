@@ -1,0 +1,20 @@
+{
+  "schema": "eval-gates/1",
+  "note": "What the L4 surfaces are, mechanically. Stream L proposals naming ANY of these keys are issue-only, always; no numeric replay can promote them. Gate RERUNS (replaying eval sets vs a candidate change with held-out cases) are owner-side; this file pins the SUFFIX so the L3 tool can refuse in a type-safe way.",
+  "crown_jewels": [
+    "weakening_tripwire",
+    "eval_set",
+    "eval_gates",
+    "held_out_cases",
+    "five_laws",
+    "tier_floors",
+    "merge_policy",
+    "referee_isolation",
+    "stream_contract",
+    "acceptance_floors"
+  ],
+  "gates": {
+    "weakening_resistance": "the fleet may not relax the verification gates that catch its own mistakes",
+    "eval_regression": "any fleet change replays evals/ including held-out cases before merge"
+  }
+}

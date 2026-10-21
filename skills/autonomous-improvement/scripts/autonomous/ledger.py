@@ -48,6 +48,7 @@ from common import (
     run,
     split_table_row as split_row,
     stream_label,
+    stream_l_switch_problem,
     test_for_source,
 )
 from mutants import open_mutants_by_file
@@ -363,6 +364,10 @@ def cmd_next(args: argparse.Namespace) -> int:
     root = repo_root()
     cfg = load_config(root, args.config)
     stream = normalize_stream(args.stream)
+    if stream == "L":
+        problem = stream_l_switch_problem(root, cfg)
+        if problem:
+            raise UsageError(problem)
     ledger = _ledger_path(root, cfg, args.ledger)
     audited = authoritative_rows(ledger)
     dispositions = authoritative_dispositions(ledger)

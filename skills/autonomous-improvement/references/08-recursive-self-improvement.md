@@ -39,7 +39,12 @@ at T2, and at T1 for anything referee-adjacent.
 
 ## The catalog
 
-Available now: **A** mutation, **B** adversarial test audit (`03`).
+Available now: **A** mutation, **B** adversarial test audit (`03`), and
+**L** meta — gated: stream L runs only behind its own kill switch
+(`fleet.stream_l_enabled` + no `.autonomous/STOP-STREAM-L`), replays every
+claim against the recorded fleet history, keeps L4 surfaces issue-only, and
+demotes expired/evidence-free lessons (`meta.py`). Every other letter
+(C–K) ships in its own PR; see those for their tooling.
 
 | Stream | Oracle in one line | Starts |
 |---|---|---|
