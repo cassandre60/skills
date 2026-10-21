@@ -1642,6 +1642,8 @@ class RepairStreamTests(RepoTestCase):
     def seeded_repo(self) -> Path:
         repo = self.copy_fixture()
         git(repo, "init", "-q", "-b", "main")
+        git(repo, "config", "user.email", "test@example.com")
+        git(repo, "config", "user.name", "Test User")
         git(repo, "add", "-A")
         git(repo, "commit", "-qm", "base: seeded median bug + bug reports")
         # The repro test is written AFTER the base commit so verify-red's
@@ -1762,6 +1764,8 @@ class RepairStreamTests(RepoTestCase):
     def test_stream_e_unlocked(self):
         repo = self.copy_fixture()
         git(repo, "init", "-q", "-b", "main")
+        git(repo, "config", "user.email", "test@example.com")
+        git(repo, "config", "user.name", "Test User")
         install_scripts(repo)
         res = script(repo, "ledger.py", "next", "--stream", "E", "--json")
         self.assertEqual(res.returncode, 0, res.stderr)
