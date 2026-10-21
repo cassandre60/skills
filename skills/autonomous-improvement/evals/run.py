@@ -190,6 +190,18 @@ def run_setup(
     case: typing.Dict[str, typing.Any], repo: pathlib.Path
 ) -> typing.List[typing.Dict[str, typing.Any]]:
     mapping = {"<skill>": str(SKILL_ROOT), "<repo>": str(repo)}
+    # The fixture repos are throwaway copies; a CI runner or bare container
+    # may have no git identity at all ("Author identity unknown" kills the
+    # git-commit setup line orthodoxly). Pin one for the harness unless the
+    # caller already set it.
+    env = dict(os.environ)
+    for var, default in (
+        ("GIT_AUTHOR_NAME", "eval-harness"),
+        ("GIT_AUTHOR_EMAIL", "eval-harness@example.invalid"),
+        ("GIT_COMMITTER_NAME", "eval-harness"),
+        ("GIT_COMMITTER_EMAIL", "eval-harness@example.invalid"),
+    ):
+        env.setdefault(var, default)
     artifacts = []
     for index, raw in enumerate(case.get("setup", [])):
         proc = subprocess.run(
@@ -197,6 +209,7 @@ def run_setup(
             cwd=str(repo),
             capture_output=True,
             text=True,
+            env=env,
         )
         artifacts.append(
             {

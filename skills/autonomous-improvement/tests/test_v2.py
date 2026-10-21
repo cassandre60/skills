@@ -1598,6 +1598,32 @@ class EvalHarnessTests(unittest.TestCase):
         self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
         self.assertIn("agent-only", res.stdout)
 
+    def test_deterministic_runs_without_git_identity(self):
+        # CI/containers may have no git identity at all; the harness pins a
+        # throwaway one for its throwaway fixture repos instead of failing
+        # every setup line with "Author identity unknown".
+        import os
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as bare_home:
+            env = dict(os.environ)
+            env["HOME"] = bare_home
+            env["GIT_CONFIG_GLOBAL"] = "/dev/null"
+            env["GIT_CONFIG_SYSTEM"] = "/dev/null"
+            proc = subprocess.run(
+                [
+                    str(PYTHON),
+                    str(SKILL_ROOT / "evals" / "run.py"),
+                    "--deterministic",
+                    "--case", "E7-3-dedup-second-run",
+                ],
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("1 passed", proc.stdout)
+
 
 class DocumentationInvariantTests(unittest.TestCase):
     def test_skill_is_short(self):
