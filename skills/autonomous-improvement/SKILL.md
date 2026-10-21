@@ -140,12 +140,17 @@ The ledger is a git-tracked markdown table:
 - The hash is the blob at HEAD. `record` warns if the target is dirty;
   `--strict` makes that fatal.
 
-## Planned (not available)
+## Beyond testing (planned streams C–L)
 
-- **Stream C** — property fuzzing / model checking.
-- **Stream D** — migration and data-preservation archeology.
-
-Do not start work under these names or promise them in a PR; offer Streams A/B.
+Testing is the bootstrap, not the ceiling: streams C–L generalize the same
+five laws to fuzzing, defect repair, flakiness, performance, security, docs
+truthfulness, simplification, dependency evolution, and — capped and
+eval-gated — the fleet improving itself. Each must pass the stream contract
+in `references/08-recursive-self-improvement.md` (deterministic finder,
+mechanical oracle, content-addressed memory, bounded blast radius, referee
+isolation) before its letter unlocks; `ledger.py` rejects C–L until then.
+Do not start work under a locked letter or promise it in a PR; offer A/B, or
+file the finding as an evidence-backed issue.
 
 ## Unattended operation (advanced)
 

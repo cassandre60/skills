@@ -332,28 +332,51 @@ def test_for_source(root: Path, cfg: Dict[str, Any], source: str) -> Optional[st
     return guesses[0] if guesses else None
 
 
+# Stream registry: the catalog from references/08-recursive-self-improvement.md.
+# A stream becomes "available" only when its finder + oracle + eval fixture
+# ship; until then normalize_stream rejects it by name, so no session can
+# start work under a letter that exists only as an encouraging paragraph.
+STREAMS: Dict[str, Dict[str, Any]] = {
+    "A": {"label": "A (Mutation)", "status": "available"},
+    "B": {"label": "B (Test Audit)", "status": "available"},
+    "C": {"label": "C (Property / Fuzz)", "status": "planned"},
+    "D": {"label": "D (Data / Migration)", "status": "planned"},
+    "E": {"label": "E (Defect Repair)", "status": "planned"},
+    "F": {"label": "F (Flake & Determinism)", "status": "planned"},
+    "G": {"label": "G (Performance)", "status": "planned"},
+    "H": {"label": "H (Security & Supply Chain)", "status": "planned"},
+    "I": {"label": "I (Docs & Spec Truthfulness)", "status": "planned"},
+    "J": {"label": "J (Simplification / Dead Code)", "status": "planned"},
+    "K": {"label": "K (Dependency Evolution)", "status": "planned"},
+    "L": {"label": "L (Meta: Fleet Self-Improvement)", "status": "planned"},
+}
+_STREAM_ALIASES: Dict[str, str] = {"1": "A", "2": "B"}
+for _sid, _info in STREAMS.items():
+    _STREAM_ALIASES[_sid] = _sid
+    _STREAM_ALIASES[f"STREAM {_sid}"] = _sid
+    _STREAM_ALIASES[str(_info["label"]).upper()] = _sid
+
+
 def normalize_stream(value: str) -> str:
     raw = str(value).strip()
     upper = raw.upper()
-    aliases = {
-        "1": "A",
-        "2": "B",
-        "A": "A",
-        "B": "B",
-        "STREAM A": "A",
-        "STREAM B": "B",
-        "A (MUTATION)": "A",
-        "B (TEST AUDIT)": "B",
-    }
-    if upper in aliases:
-        return aliases[upper]
-    if upper in ("C", "D", "3", "4", "STREAM C", "STREAM D"):
-        raise UsageError(f"stream {upper} is planned, not implemented (use A or B)")
-    raise UsageError(f"unknown stream {value!r}; use A or B (1/2 are aliases)")
+    stream = _STREAM_ALIASES.get(upper)
+    if stream is None:
+        known = ", ".join(STREAMS)
+        raise UsageError(
+            f"unknown stream {value!r}; known streams: {known} (1/2 alias A/B)"
+        )
+    info = STREAMS[stream]
+    if info["status"] != "available":
+        raise UsageError(
+            f"stream {info['label']} is planned, not implemented "
+            "(use A or B; see references/08-recursive-self-improvement.md)"
+        )
+    return stream
 
 
 def stream_label(stream: str) -> str:
-    return {"A": "A (Mutation)", "B": "B (Test Audit)"}[stream]
+    return str(STREAMS[stream]["label"])
 
 
 def configured_commands(value: Any, key: str) -> List[List[str]]:

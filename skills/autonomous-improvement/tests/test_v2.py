@@ -955,6 +955,38 @@ class WatchdogTests(RepoTestCase):
         self.assertFalse(marker.exists())
 
 
+class StreamRegistryTests(unittest.TestCase):
+    def test_available_streams_normalize(self):
+        self.assertEqual(common_module.normalize_stream("A"), "A")
+        self.assertEqual(common_module.normalize_stream("2"), "B")
+        self.assertEqual(common_module.normalize_stream("b (test audit)"), "B")
+
+    def test_planned_streams_rejected_by_name(self):
+        # The catalog (references/08) is wider than the tooling. Every
+        # non-available letter must refuse with its full name, so a session
+        # cannot drift into un-tooled work under a planned letter.
+        for stream, info in common_module.STREAMS.items():
+            if info["status"] == "available":
+                continue
+            with self.assertRaises(common_module.UsageError) as ctx:
+                common_module.normalize_stream(stream)
+            self.assertIn("planned, not implemented", str(ctx.exception))
+            self.assertIn(info["label"], str(ctx.exception))
+
+    def test_registry_matches_reference_catalog(self):
+        catalog = (
+            SKILL_ROOT / "references" / "08-recursive-self-improvement.md"
+        ).read_text().lower()
+        for info in common_module.STREAMS.values():
+            name = info["label"].split(" (", 1)[1].rstrip(")").lower()
+            # Registry labels are canonical ("Security & Supply Chain");
+            # the catalog may use a shortened form, so the first distinctive
+            # word (>3 chars) is enough to catch registry/catalog drift.
+            words = [w.strip(":/()") for w in name.replace("/", " ").split()]
+            distinctive = next(word for word in words if len(word) > 3)
+            self.assertIn(distinctive, catalog)
+
+
 class CandidateOrderingTests(unittest.TestCase):
     def test_priority_paths_rank_in_config_order(self):
         # Later priority_paths entries are lower priority than earlier ones:
