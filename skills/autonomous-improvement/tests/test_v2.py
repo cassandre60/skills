@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 import importlib
 import json
 import os
@@ -1666,6 +1667,52 @@ class FleetTests(RepoTestCase):
         data_kill = json.loads(res_kill.stdout)
         self.assertFalse(data_kill["dispatch"])
         self.assertIn("kill switch", data_kill["reason"].lower())
+
+    def test_govern_enforces_acceptance_floor(self):
+        repo, _ = self.make()
+        bin_dir = path_with_only(self.tmp, ("git",))
+        open_path = self.tmp / "gov-open.json"
+        all_path = self.tmp / "gov-all.json"
+        gh = write(
+            bin_dir / "gh",
+            f"#!{PYTHON}\n"
+            "import json, os, sys\n"
+            "args = sys.argv[1:]\n"
+            "state = args[args.index('--state') + 1] if '--state' in args else 'open'\n"
+            "path = os.environ['GH_ALL'] if state == 'all' else os.environ['GH_OPEN']\n"
+            "print(open(path).read())\n",
+        )
+        gh.chmod(0o755)
+        env = env_with_path(bin_dir, GH_OPEN=str(open_path), GH_ALL=str(all_path))
+        open_path.write_text("[]\n")
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+        def decided(merged: int, closed: int):
+            prs = [
+                {"number": i + 1, "headRefName": f"m{i}", "headRefOid": "x",
+                 "mergedAt": now, "closedAt": now, "createdAt": now}
+                for i in range(merged)
+            ] + [
+                {"number": 100 + i, "headRefName": f"c{i}", "headRefOid": "y",
+                 "mergedAt": None, "closedAt": now, "createdAt": now}
+                for i in range(closed)
+            ]
+            all_path.write_text(json.dumps(prs) + "\n")
+
+        # 4/10 accepted over 14d is below the 0.5 floor with enough decisions.
+        decided(merged=4, closed=6)
+        blocked = script(repo, "fleet.py", "govern", "--json", env=env)
+        self.assertEqual(blocked.returncode, 1, blocked.stdout + blocked.stderr)
+        data = json.loads(blocked.stdout)
+        self.assertFalse(data["dispatch"])
+        self.assertIn("acceptance", data["reason"])
+        self.assertEqual(data["acceptance"]["decided"], 10)
+
+        # Too few decisions to judge: the floor does not engage.
+        decided(merged=0, closed=4)
+        allowed = script(repo, "fleet.py", "govern", "--json", env=env)
+        self.assertEqual(allowed.returncode, 0, allowed.stdout + allowed.stderr)
+        self.assertTrue(json.loads(allowed.stdout)["dispatch"])
 
     def test_stats_computes_acceptance_rate(self):
         repo, _ = self.make()

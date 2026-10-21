@@ -393,6 +393,40 @@ def cmd_snapshot(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _acceptance_window(
+    root: Path, require_gh: bool, days: int = 14
+) -> Tuple[Optional[float], int]:
+    """(Merged share, decided count) over the window; rate None if unknown.
+
+    A PR is *decided* in the window when it merged (``mergedAt``) or closed
+    unmerged (``closedAt`` without ``mergedAt``) inside it.
+    """
+    prs_data, gh_warn = fetch_gh_prs(root, state="all", limit=200, require_gh=require_gh)
+    if gh_warn:
+        eprint(f"[warn] {gh_warn}; acceptance floor skipped")
+        return None, 0
+    now = datetime.datetime.now(datetime.timezone.utc)
+    merged = closed = 0
+    for pr in prs_data:
+        stamp = pr.get("mergedAt") or pr.get("closedAt")
+        if not stamp:
+            continue
+        try:
+            decided_at = datetime.datetime.fromisoformat(
+                str(stamp).replace("Z", "+00:00")
+            )
+        except ValueError:
+            continue
+        if (now - decided_at).total_seconds() > days * 86400:
+            continue
+        if pr.get("mergedAt"):
+            merged += 1
+        else:
+            closed += 1
+    decided = merged + closed
+    return (merged / decided if decided else None), decided
+
+
 def cmd_govern(args: argparse.Namespace) -> int:
     root = main_repo_root()
     cfg = load_config(root, args.config)
@@ -479,16 +513,47 @@ def cmd_govern(args: argparse.Namespace) -> int:
             eprint(f"[!] Governor: DISPATCH BLOCKED ({payload['reason']})")
         return EXIT_NEGATIVE
 
+    # 5. Acceptance floor: below-floor yield means tend/repair, not generate.
+    min_decided = int(fleet_cfg.get("acceptance_floor_min_decided", 5))
+    rate, decided = _acceptance_window(root, args.require_gh, days=14)
+    acceptance = {
+        "rate": rate,
+        "decided": decided,
+        "window_days": 14,
+        "floor": min_acceptance_rate_14d,
+    }
+    if rate is not None and decided >= min_decided and rate < min_acceptance_rate_14d:
+        payload = {
+            "dispatch": False,
+            "reason": (
+                f"acceptance below floor ({rate:.0%} over {decided} decided "
+                f"in 14d < {min_acceptance_rate_14d:.0%})"
+            ),
+            "open_prs": open_count,
+            "tend": tend,
+            "acceptance": acceptance,
+        }
+        if args.json:
+            print(json.dumps(payload, indent=2))
+        else:
+            eprint(f"[!] Governor: DISPATCH BLOCKED ({payload['reason']})")
+            if tend:
+                eprint(f"    Tend queue: {', '.join(f'PR #{n}' for n in tend)}")
+        return EXIT_NEGATIVE
+
     payload = {
         "dispatch": True,
         "reason": "within limits",
         "open_prs": open_count,
         "tend": tend,
+        "acceptance": acceptance,
     }
     if args.json:
         print(json.dumps(payload, indent=2))
     else:
         print(f"[+] Governor: DISPATCH ALLOWED (open PRs: {open_count}/{max_open_prs})")
+        if rate is not None:
+            print(f"    Acceptance (14d): {rate:.0%} over {decided} decided")
         if tend:
             print(f"    Tend queue: {', '.join(f'PR #{n}' for n in tend)}")
     return EXIT_OK

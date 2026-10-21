@@ -45,6 +45,7 @@ DEFAULT_CONFIG = {
         "max_open_prs": 5,
         "max_new_prs_per_day": 6,
         "min_acceptance_rate_14d": 0.5,
+        "acceptance_floor_min_decided": 5,
         "kill_switch_file": ".autonomous/STOP",
         "merge_policy": "never",
         "ledger_mode": "batched",
