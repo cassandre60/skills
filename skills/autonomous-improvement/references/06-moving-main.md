@@ -1,4 +1,4 @@
-# Reference 07 — Moving Main (working on a repo that keeps merging)
+# Reference 06 — Moving Main (working on a repo that keeps merging)
 
 The queue is derived state and main is a moving target. Any agent — a local tab, a laptop
 fleet, a second machine — can burn hours hardening a symptom that main already fixed at the

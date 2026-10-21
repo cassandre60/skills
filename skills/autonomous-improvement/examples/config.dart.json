@@ -33,9 +33,6 @@
       "priority_paths": []
     }
   },
-  "machine_budget": {
-    "max_concurrent_tests": 1
-  },
   "pr_required": {
     "COMPLETED": true,
     "SOUND": false

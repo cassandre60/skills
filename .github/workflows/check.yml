@@ -27,5 +27,10 @@ jobs:
       - name: Run the autonomous-improvement regression suite
         working-directory: skills/autonomous-improvement
         run: python3 -m unittest discover -s tests -v
+      - name: Run the behavioral evals (deterministic halves, red-proof included)
+        working-directory: skills/autonomous-improvement
+        run: |
+          python3 evals/run.py --deterministic
+          python3 evals/run.py --negative-control --case E7-8-protected-row
       - name: Run the watchdog model-rotation test
         run: bash skills/autonomous-improvement/tests/watchdog_rotation_test.sh
