@@ -430,7 +430,7 @@ STREAMS: Dict[str, Dict[str, Any]] = {
     "C": {"label": "C (Property / Fuzz)", "status": "planned"},
     "D": {"label": "D (Data / Migration)", "status": "planned"},
     "E": {"label": "E (Defect Repair)", "status": "planned"},
-    "F": {"label": "F (Flake & Determinism)", "status": "planned"},
+    "F": {"label": "F (Flake & Determinism)", "status": "available"},
     "G": {"label": "G (Performance)", "status": "planned"},
     "H": {"label": "H (Security & Supply Chain)", "status": "planned"},
     "I": {"label": "I (Docs & Spec Truthfulness)", "status": "planned"},
@@ -458,7 +458,7 @@ def normalize_stream(value: str) -> str:
     if info["status"] != "available":
         raise UsageError(
             f"stream {info['label']} is planned, not implemented "
-            "(use A or B; see references/08-recursive-self-improvement.md)"
+            "(use A, B, or F; see references/08-recursive-self-improvement.md)"
         )
     return stream
 

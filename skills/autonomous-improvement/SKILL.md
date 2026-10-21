@@ -148,9 +148,10 @@ truthfulness, simplification, dependency evolution, and — capped and
 eval-gated — the fleet improving itself. Each must pass the stream contract
 in `references/08-recursive-self-improvement.md` (deterministic finder,
 mechanical oracle, content-addressed memory, bounded blast radius, referee
-isolation) before its letter unlocks; `ledger.py` rejects C–L until then.
-Do not start work under a locked letter or promise it in a PR; offer A/B, or
-file the finding as an evidence-backed issue.
+isolation) before its letter unlocks; `ledger.py` rejects unshipped streams
+until then (A, B, and F are live; C, D, E, G–L stay locked).
+Do not start work under a locked letter or promise it in a PR; offer
+an unlocked stream (A/B/F), or file the finding as an evidence-backed issue.
 
 ## Unattended operation (advanced)
 

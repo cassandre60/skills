@@ -1625,6 +1625,133 @@ class EvalHarnessTests(unittest.TestCase):
             self.assertIn("1 passed", proc.stdout)
 
 
+class FlakeStreamTests(RepoTestCase):
+    """Stream F (issue #21): CI-history finder + N-run oracle + fixture.
+
+    The finder is 0-token math (static flake-idiom scan plus mixed-outcome
+    history mining) and can only EMIT candidates; the N-run oracle is the
+    verdict machine (0/N demanded after a fix; "passed twice" is not an
+    oracle). The fixture ships a deterministic pseudo-flake: a counter file
+    seeds the failure for exactly 3 of every 10 runs (~30%, no wall clock),
+    so CI itself stays stable.
+    """
+
+    FIXTURE = SKILL_ROOT / "evals" / "fixtures" / "flake-python"
+
+    def finder_run(self, *args: str) -> subprocess.CompletedProcess:
+        return script(SKILL_ROOT, "flakes.py", *args)
+
+    def oracle_run(self, test_script: Path, runs: int, *extra: str) -> subprocess.CompletedProcess:
+        return script(
+            SKILL_ROOT, "flakes.py", "oracle", "--test-script", str(test_script),
+            "--runs", str(runs), "--json", *extra,
+        )
+
+    def copy_fixture(self) -> Path:
+        repo = self.tmp / "repo"
+        shutil.copytree(self.FIXTURE, repo)
+        return repo
+
+    def test_finder_mines_mixed_outcome_history(self):
+        repo = self.copy_fixture()
+        res = self.finder_run("finder", "--history", str(repo / "history.json"), "--json")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        payload = json.loads(res.stdout)
+        candidates = {c["test"]: c for c in payload["candidates"] if c["kind"] == "history"}
+        self.assertIn("tests/test_counter_flake.py", candidates)
+        flaky = candidates["tests/test_counter_flake.py"]
+        self.assertEqual(set(flaky["outcomes"]), {"pass", "fail"})
+        self.assertIn("same_sha", flaky)
+        self.assertNotIn("tests/test_counter_fixed.py", candidates)
+
+    def test_finder_zero_false_positives_on_stable_history(self):
+        stable = self.tmp / "history-stable.json"
+        runs = {"schema": "stream-f/1", "runs": [
+            {"sha": f"v{i}", "job": "unit", "labels": {
+                "tests/test_counter_fixed.py": "pass"}} for i in range(6)
+        ]}
+        stable.write_text(json.dumps(runs))
+        res = self.finder_run("finder", "--history", str(stable), "--json")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(json.loads(res.stdout)["candidates"], [])
+
+    def test_finder_static_scan_flags_flake_idioms_only(self):
+        tests_dir = self.tmp / "tests"
+        tests_dir.mkdir()
+        (tests_dir / "test_waiter.py").write_text(
+            "import time\n\ndef test_waiter():\n    time.sleep(2)  # hope it loads\n"
+            "    assert True\n"
+        )
+        (tests_dir / "test_math.py").write_text(
+            "def test_math():\n    assert 1 + 1 == 2\n"
+        )
+        res = self.finder_run("finder", "--paths", str(tests_dir), "--json")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        candidates = json.loads(res.stdout)["candidates"]
+        flagged = {c["test"] for c in candidates if c["kind"] == "static"}
+        self.assertIn("tests/test_waiter.py", flagged)
+        self.assertNotIn("tests/test_math.py", flagged)
+        hit_exact = [
+            c for c in candidates
+            if c["kind"] == "static" and c["test"] == "tests/test_waiter.py"
+        ][0]
+        self.assertIn("time.sleep", hit_exact["evidence"]["hits"][0])
+
+    def test_oracle_reads_the_pseudo_flake(self):
+        repo = self.copy_fixture()
+        proc = self.oracle_run(repo / "tests" / "test_counter_flake.py", 10)
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        verdict = json.loads(proc.stdout)
+        self.assertEqual(verdict["verdict"], "flaky")
+        self.assertEqual(verdict["modes"]["isolated"]["counts"]["pass"], 7)
+        self.assertEqual(verdict["modes"]["isolated"]["counts"]["fail"], 3)
+        self.assertEqual(verdict["modes"]["isolated"]["flake_rate"], 0.3)
+
+    def test_oracle_demands_zero_after_fix(self):
+        repo = self.copy_fixture()
+        proc = self.oracle_run(repo / "tests" / "test_counter_fixed.py", 20)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        verdict = json.loads(proc.stdout)
+        self.assertEqual(verdict["verdict"], "stable")
+        self.assertEqual(verdict["modes"]["isolated"]["counts"]["fail"], 0)
+
+    def test_oracle_names_order_dependence(self):
+        work = self.tmp / "order"
+        (work / "state").mkdir(parents=True)
+        # Test fails only when peers ran first (marker file left behind);
+        # both the test and the peers command anchor on the oracle's cwd,
+        # so the matrix must be invoked with cwd=work (run() below, not
+        # support.script(), which pins cwd to the skill root).
+        (work / "test_order.py").write_text(
+            "import pathlib, sys\n"
+            "if pathlib.Path('state/peer-marker').exists():\n"
+            "    print('ran after peers'); sys.exit(1)\n"
+            "print('clean run')\n"
+        )
+        peers_cmd = (
+            f"{shutil.which('python3')} -c "
+            "\"import pathlib; pathlib.Path('state/peer-marker').write_text('x')\""
+        )
+        proc = run(
+            [PYTHON, str(SKILL_ROOT / "scripts" / "autonomous" / "flakes.py"),
+             "oracle", "--test-script", str(work / "test_order.py"),
+             "--runs", "5", "--json", "--peers-cmd", peers_cmd],
+            cwd=work,
+        )
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        verdict = json.loads(proc.stdout)
+        self.assertEqual(verdict["verdict"], "flaky")
+        self.assertEqual(verdict["cause_class"], "order-dependence")
+        self.assertEqual(verdict["modes"]["isolated"]["counts"]["fail"], 0)
+        self.assertGreater(verdict["modes"]["after_peers"]["counts"]["fail"], 0)
+
+    def test_stream_f_unlocked(self):
+        res = script(SKILL_ROOT, "ledger.py", "next", "--stream", "F")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("F", common_module.STREAMS)
+        self.assertEqual(common_module.STREAMS["F"]["status"], "available")
+
+
 class DocumentationInvariantTests(unittest.TestCase):
     def test_skill_is_short(self):
         lines = (SKILL_ROOT / "SKILL.md").read_text().splitlines()
