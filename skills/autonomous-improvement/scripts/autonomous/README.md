@@ -17,12 +17,14 @@ Files:
 
 | File | Purpose |
 |---|---|
-| `ledger.py` | `next` / `record` / `check`; content-hash dedup |
+| `fleet.py` | `snapshot` / `pr-state` / `govern` / `stats`; state spine and governor |
+| `ledger.py` | `next` / `record` / `check` / `sync-rejections`; content-hash dedup |
+| `mutants.py` | Per-mutant triage ledger: `ingest` / `record` / `open` / `check` |
 | `mutation_engine.py` | Per-line mutation runner with language rule packs |
 | `mutation_rules/*.json` | Python, Dart, TypeScript, JavaScript, Go |
 | `orchestrator.py` | Registered worktrees + configured gate sequence |
 | `test_weakening_check.py` | Local tripwire: removed assertions/skips/deleted tests |
-| `common.py` | Config loading, repo-root resolution, argv runner |
+| `common.py` | Config loading, repo-root resolution, table/argv helpers |
 | `config.example.json` | Python starting config |
 
 Requirements: Python >= 3.9, standard library only; `git`; optional `gh`.

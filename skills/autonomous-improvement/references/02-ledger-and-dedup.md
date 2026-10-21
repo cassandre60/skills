@@ -55,15 +55,47 @@ This is the difference between a colleague and a spammer: the fleet must not
 re-propose work the owner already declined. `--dry-run` previews the rows;
 `--json` reports them.
 
-## Per-mutant dispositions (not yet durable)
+## Per-mutant dispositions
 
-Mutant-level triage happens per run: `--output-json` records each mutant and its
-status, and Stream A triages survivors before recording an audit row. A survivor
-classified *equivalent* or *noise* is therefore evidence a human read it — but it
-lives only in that run's report, so a later engine run re-reports it. A durable
-ledger keyed `file:line:mutant-hash` → `KILLED-BY #pr | EQUIVALENT | NOISE` is
-the remaining half of this work item; until it lands, the audit row's summary is
-the only place that disposition survives.
+The work ledger is per file; the mutant ledger is per survivor. It is a second
+git-tracked, append-only table, `docs/AUTONOMOUS_MUTANTS.md` by default
+(`mutant_ledger_path`):
+
+```markdown
+| Date | Mutant ID | Source Hash | Disposition | PR / Issue | Reason |
+|---|---|---|---|---|---|
+```
+
+- **Mutant ID** is `file:line:sha256(mutated text)[:12]`, computed by
+  `mutants.py` from the mutation engine's `--output-json` report. Line numbers
+  are part of the id: an edit above the mutant makes it a new id.
+- **Dispositions** are `OPEN` (active), or terminal `KILLED-BY`, `EQUIVALENT`,
+  `NOISE`, `WONTFIX`. Newest row per id wins, exactly like the work ledger.
+- An `OPEN` row counts only while **Source Hash** matches the file's blob hash
+  at HEAD, so a content change drops stale survivors and a fresh run
+  repopulates them. Terminal rows are remembered forever for that exact id:
+  the same equivalent mutant is never re-triaged after an unrelated change.
+- `next` is file-level, so an audit row alone would hide the file. When a file
+  is audited **and** has open survivors at its current hash, `next` returns it
+  as a candidate with `"audit_state": "partial"` and `"open_mutants": N`
+  (human output says "partially audited") until each survivor is killed or
+  triaged. `check` prints the same warning.
+
+```bash
+python3 scripts/autonomous/mutation_engine.py --source src/app.py \
+  --test-cmd "pytest -xq tests/test_app.py" --output-json run.json
+python3 scripts/autonomous/mutants.py ingest --report run.json --json
+python3 scripts/autonomous/mutants.py open --json
+python3 scripts/autonomous/mutants.py record --id src/app.py:12:ab12cd34ef56 \
+  --disposition EQUIVALENT --reason 'mutation does not change observable behavior'
+python3 scripts/autonomous/mutants.py record --id src/app.py:20:0123456789ab \
+  --disposition KILLED-BY --pr '#42' --reason 'new assertion on the boundary'
+python3 scripts/autonomous/mutants.py check --id src/app.py:12:ab12cd34ef56
+```
+
+`ingest` is idempotent at the same hash and skips ids with a terminal row.
+`open --source PATH` narrows to one file. A missing mutant ledger means "no
+mutant-level memory" and is not an error, so adopting it is opt-in.
 
 ## Composite hash
 
@@ -146,10 +178,11 @@ why the in-progress status was removed from the schema.
 
 ## Parallel appends: merge=union
 
-Two agents appending below the header conflict by construction. Add:
+Two agents appending below the header conflict by construction. Add both ledgers:
 
 ```
 docs/AUTONOMOUS_WORK_LEDGER.md merge=union
+docs/AUTONOMOUS_MUTANTS.md merge=union
 ```
 
 from `assets/gitattributes.fragment.txt`. Union merge keeps both sides' inserted

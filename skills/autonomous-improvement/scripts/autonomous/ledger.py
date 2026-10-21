@@ -19,7 +19,6 @@ from __future__ import annotations
 import argparse
 import datetime
 import json
-import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,12 +29,15 @@ from common import (
     EXIT_OK,
     EnvError,
     Fatal,
+    SEPARATOR_RE,
     UsageError,
     candidate_paths,
     config_path,
+    escape_cell as esc,
     format_exit,
     git,
     hash_at_head,
+    insert_table_rows,
     is_dirty,
     load_config,
     match_any,
@@ -44,11 +46,12 @@ from common import (
     rel_path,
     repo_root,
     run,
+    split_table_row as split_row,
     stream_label,
     test_for_source,
 )
+from mutants import open_mutants_by_file
 
-SEPARATOR_RE = re.compile(r"^\|\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$")
 AUDITED_STATUSES = {"COMPLETED", "SOUND"}
 # Negative dispositions: "the fleet was told no". They are memory, not audits:
 # a disposition applies only while the composite hash still matches, so any
@@ -86,23 +89,6 @@ class LedgerRow:
     @property
     def composite(self) -> str:
         return self.content_hash.strip("` ")
-
-
-def esc(value: str) -> str:
-    """Escape one markdown table cell (and collapse line breaks)."""
-    value = str(value).replace("\r", " ").replace("\n", " ")
-    return value.replace("\\", "\\\\").replace("|", "\\|")
-
-
-def split_row(line: str) -> Optional[List[str]]:
-    stripped = line.strip()
-    if not stripped.startswith("|"):
-        return None
-    pieces = re.split(r"(?<!\\)\|", stripped)[1:-1]
-    return [
-        piece.strip().replace("\\|", "|").replace("\\\\", "\\")
-        for piece in pieces
-    ]
 
 
 def _clean_target(value: str) -> str:
@@ -385,30 +371,38 @@ def cmd_next(args: argparse.Namespace) -> int:
         print(f"[warning] {warning}", file=sys.stderr)
 
     records = _candidate_records(root, cfg, stream, audited)
+    mutant_index = open_mutants_by_file(root, cfg)
     eligible: List[Dict[str, Any]] = []
     skipped: List[Dict[str, Any]] = []
     for record in records:
         if record.get("skip"):
             skipped.append(record)
             continue
+        open_rows = mutant_index.get(record["target"]) or []
+        if open_rows:
+            record = dict(record, open_mutants=len(open_rows))
         if record["audited"]:
-            skipped.append(dict(record, skip="already audited at current content hash"))
-            continue
-        disposition = dispositions.get(record["target"])
-        if disposition and _matches(
-            disposition, record["source_hash"], record.get("test_hash")
-        ):
-            skipped.append(
-                dict(
-                    record,
-                    disposition=disposition.status,
-                    skip=(
-                        f"{disposition.status} at current content hash "
-                        f"({disposition.pr or 'no PR'}): {disposition.summary}"
-                    ),
+            if not open_rows:
+                skipped.append(dict(record, skip="already audited at current content hash"))
+                continue
+            # An audit is per file; open survivors still need killing or triage.
+            record["audit_state"] = "partial"
+        else:
+            disposition = dispositions.get(record["target"])
+            if disposition and _matches(
+                disposition, record["source_hash"], record.get("test_hash")
+            ):
+                skipped.append(
+                    dict(
+                        record,
+                        disposition=disposition.status,
+                        skip=(
+                            f"{disposition.status} at current content hash "
+                            f"({disposition.pr or 'no PR'}): {disposition.summary}"
+                        ),
+                    )
                 )
-            )
-            continue
+                continue
         claimed_by = _claimed(claims, record["target"], record.get("test"))
         if claimed_by:
             skipped.append(dict(record, skip=f"open PR {claimed_by}"))
@@ -443,6 +437,11 @@ def cmd_next(args: argparse.Namespace) -> int:
         print(f"Mapped test:         {record.get('test') or '—'}")
         print(f"Composite hash:      {record['composite_hash']}")
         print(f"Last audited hash:   {record.get('audited_hash') or 'NEVER'}")
+        if record.get("open_mutants"):
+            print(
+                f"Open mutants:        {record['open_mutants']} "
+                "(partially audited — kill or triage before calling it done)"
+            )
         print("=" * 60)
         if stream == "A" and record.get("test"):
             test_cmd = record.get("recommended_test_cmd")
@@ -499,33 +498,7 @@ def _insert_rows(ledger: Path, new_rows: List[str]) -> None:
             f"ledger not found: {ledger} "
             "(copy assets/AUTONOMOUS_WORK_LEDGER.template.md first)"
         )
-    with open(ledger, "r", encoding="utf-8", newline="") as handle:
-        content = handle.read()
-    newline = "\r\n" if "\r\n" in content else "\n"
-    lines = content.splitlines()
-
-    header_index: Optional[int] = None
-    for index, line in enumerate(lines):
-        cells = split_row(line)
-        if cells and cells[0].strip().lower() == "date":
-            header_index = index
-            break
-    if header_index is None:
-        raise Fatal(f"could not locate ledger table header in {ledger}")
-    separator_index: Optional[int] = None
-    for index in range(header_index + 1, len(lines)):
-        if SEPARATOR_RE.match(lines[index].strip()):
-            separator_index = index
-            break
-    if separator_index is None:
-        raise Fatal(f"could not locate ledger table separator in {ledger}")
-
-    insert_at = separator_index + 1
-    lines[insert_at:insert_at] = new_rows
-    with open(ledger, "w", encoding="utf-8", newline="") as handle:
-        handle.write(
-            newline.join(lines) + (newline if content.endswith(("\n", "\r\n")) else "")
-        )
+    insert_table_rows(ledger, new_rows)
 
 
 def cmd_record(args: argparse.Namespace) -> int:
@@ -628,6 +601,12 @@ def cmd_check(args: argparse.Namespace) -> int:
     row = authoritative_rows(ledger).get(target)
     if row and _matches(row, source_hash, companion_hash):
         print(f"[+] audited at {current}" + (" (legacy source-only row)" if row.legacy else ""))
+        open_rows = open_mutants_by_file(root, cfg).get(target) or []
+        if open_rows:
+            print(
+                f"[!] {len(open_rows)} open mutant(s) at this hash — the file is only "
+                "partially audited; run `mutants.py open`"
+            )
         return EXIT_OK
     if row:
         print(f"[!] not audited at {current}; newest row is {row.composite} ({row.date}, {row.status})")

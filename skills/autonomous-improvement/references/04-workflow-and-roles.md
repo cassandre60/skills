@@ -20,7 +20,9 @@ cd ../<repo>-<slug>
 <test_cmd> <test_file>                  # must pass on the base
 
 # 4. Find the gap. For Stream A, run the engine; for Stream B, read the file.
-python3 scripts/autonomous/mutation_engine.py --source <target> --test-cmd "<targeted test cmd>"
+python3 scripts/autonomous/mutation_engine.py --source <target> --test-cmd "<targeted test cmd>" \
+  --output-json .autonomous-last-run.json
+python3 scripts/autonomous/mutants.py ingest --report .autonomous-last-run.json
 
 # 5. Prove red/green for one finding:
 <test_cmd> <test_file> -k <name>        # RED with the mutant / defect applied
@@ -36,6 +38,8 @@ git push -u origin <type>/<slug>
 gh pr create --title "<type>(<area>): <summary>" --body "<evidence>"
 python3 scripts/autonomous/ledger.py record --stream A --target <target> \
   --status COMPLETED --pr '#<n>' --summary "<seed, counts, gap fixed>"
+python3 scripts/autonomous/mutants.py record --id <file:line:hash> \
+  --disposition KILLED-BY --pr '#<n>' --reason "<assertion that kills it>"
 git add -- docs/AUTONOMOUS_WORK_LEDGER.md
 git commit -m "docs: record <target> audit"
 git push

@@ -59,11 +59,11 @@ skills/
     CHANGELOG-v2.md
     LICENSE
     README.md
-    assets/     # 11 files
+    assets/     # 12 files
     evals/      # 18 files
     examples/   # 2 files
     references/ # 10 files
-    scripts/    # 13 files
+    scripts/    # 14 files
     tests/      # 3 files
   cliproxy-integration/
     SKILL.md

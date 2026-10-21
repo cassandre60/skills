@@ -18,15 +18,24 @@ user or started as busywork.
      --output-json .autonomous-last-run.json \
      --output-issue docs/tasks/mutant_issue.md
    ```
-3. Triage every `SURVIVED` mutant (see `01-mutation-engine.md`). For each real
-   gap:
+3. Triage every `SURVIVED` mutant (see `01-mutation-engine.md`). Record the run
+   and each verdict so the next run does not re-triage them:
+   ```bash
+   python3 scripts/autonomous/mutants.py ingest --report .autonomous-last-run.json
+   python3 scripts/autonomous/mutants.py record --id <file:line:hash> \
+     --disposition EQUIVALENT|NOISE --reason "<why it is not a gap>"
+   ```
+   For each real gap:
    - State the behavior the mutant breaks.
    - Write a test that is **red with the mutant applied** and **green on clean
      source**. It passes on `origin/main` by construction.
    - Cite the invariant it defends if the repo has one.
    - Keep the PR to one test file plus at most one fixture.
+   - After the PR lands, record the mutant `KILLED-BY` with the PR number.
 4. Record the audit as `COMPLETED` (with the PR) or `SOUND` (no PR needed).
-   Include the seed and scope in the summary.
+   Include the seed and scope in the summary. If survivors remain `OPEN`, `next`
+   re-surfaces the file as `partially audited`; that is deliberate. Triage them
+   before calling the file done.
 
 Do not mutate generated files (`*.g.dart`, `*.freezed.dart`, build output).
 Exclude them in config rather than adding engine special cases.

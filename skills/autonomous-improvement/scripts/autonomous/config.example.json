@@ -1,6 +1,7 @@
 {
   "base_ref": "origin/main",
   "ledger_path": "docs/AUTONOMOUS_WORK_LEDGER.md",
+  "mutant_ledger_path": "docs/AUTONOMOUS_MUTANTS.md",
   "origin_url": null,
   "setup_cmds": [],
   "format_check_cmd": ["ruff", "format", "--check", "."],

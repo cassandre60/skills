@@ -24,6 +24,7 @@ EXIT_ENV = 3
 DEFAULT_CONFIG = {
     "base_ref": "origin/main",
     "ledger_path": "docs/AUTONOMOUS_WORK_LEDGER.md",
+    "mutant_ledger_path": "docs/AUTONOMOUS_MUTANTS.md",
     "origin_url": None,
     "setup_cmds": [],
     "format_check_cmd": None,
@@ -246,6 +247,68 @@ def ls_files(root: Path) -> List[str]:
     if proc.returncode != 0:
         raise EnvError("git ls-files failed")
     return sorted(p for p in proc.stdout.split("\0") if p)
+
+
+# --- Markdown table helpers -------------------------------------------------
+# Both the work ledger and the mutant ledger are git-tracked, append-only
+# markdown tables. They must escape and split cells identically so a row written
+# by one tool is legible to the other and to a human reading the diff.
+
+SEPARATOR_RE = re.compile(r"^\|\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$")
+
+
+def escape_cell(value: str) -> str:
+    """Escape one markdown table cell (and collapse line breaks)."""
+    value = str(value).replace("\r", " ").replace("\n", " ")
+    return value.replace("\\", "\\\\").replace("|", "\\|")
+
+
+def split_table_row(line: str) -> Optional[List[str]]:
+    stripped = line.strip()
+    if not stripped.startswith("|"):
+        return None
+    pieces = re.split(r"(?<!\\)\|", stripped)[1:-1]
+    return [
+        piece.strip().replace("\\|", "|").replace("\\\\", "\\")
+        for piece in pieces
+    ]
+
+
+def insert_table_rows(path: Path, rows: List[str], header_first: str = "date") -> None:
+    """Insert rows directly below the markdown table header, preserving order.
+
+    Callers pass rows newest-first: every reader resolves a same-date tie by
+    preferring the topmost row, so the first row in ``rows`` must win.
+    """
+    if not path.exists():
+        raise Fatal(f"table not found: {path}")
+    with open(path, "r", encoding="utf-8", newline="") as handle:
+        content = handle.read()
+    newline = "\r\n" if "\r\n" in content else "\n"
+    lines = content.splitlines()
+
+    header_index: Optional[int] = None
+    for index, line in enumerate(lines):
+        cells = split_table_row(line)
+        if cells and cells[0].strip().lower() == header_first:
+            header_index = index
+            break
+    if header_index is None:
+        raise Fatal(f"could not locate table header in {path}")
+    separator_index: Optional[int] = None
+    for index in range(header_index + 1, len(lines)):
+        if SEPARATOR_RE.match(lines[index].strip()):
+            separator_index = index
+            break
+    if separator_index is None:
+        raise Fatal(f"could not locate table separator in {path}")
+
+    insert_at = separator_index + 1
+    lines[insert_at:insert_at] = rows
+    with open(path, "w", encoding="utf-8", newline="") as handle:
+        handle.write(
+            newline.join(lines) + (newline if content.endswith(("\n", "\r\n")) else "")
+        )
 
 
 def glob_to_regex(pattern: str) -> str:

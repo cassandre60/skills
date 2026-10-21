@@ -36,6 +36,7 @@ from support import (
 sys.path.insert(0, str(SCRIPTS))
 import common as common_module  # noqa: E402
 import ledger as ledger_module  # noqa: E402
+import mutants as mutants_module  # noqa: E402
 import mutation_engine as engine_module  # noqa: E402
 
 
@@ -464,6 +465,200 @@ class LedgerTests(RepoTestCase):
         repo, _ = self.make()
         result = script(repo, "ledger.py", "check", "--target", "src/app.py")
         self.assertEqual(result.returncode, 1)
+
+
+class MutantLedgerTests(RepoTestCase):
+    """Per-mutant memory: survivors stay visible until killed or triaged."""
+
+    SOURCE = "def f(a, b):\n    x = a + b\n    y = a - b\n    return x == y\n"
+
+    def make(self):
+        repo, _ = python_repo(self.tmp)
+        write(repo / "src" / "app.py", self.SOURCE)
+        write(
+            repo / "docs" / "AUTONOMOUS_MUTANTS.md",
+            "# Autonomous Mutant Ledger\n\n"
+            "| Date | Mutant ID | Source Hash | Disposition | PR / Issue | Reason |\n"
+            "|---|---|---|---|---|---|\n",
+        )
+        commit(repo)
+        return repo
+
+    def survivors(self):
+        return [
+            {
+                "file": "src/app.py",
+                "line": 2,
+                "column": 8,
+                "original": "    x = a + b",
+                "mutated": "    x = a - b",
+                "description": "arithmetic operator + -> -",
+            },
+            {
+                "file": "src/app.py",
+                "line": 3,
+                "column": 8,
+                "original": "    y = a - b",
+                "mutated": "    y = a + b",
+                "description": "arithmetic operator - -> +",
+            },
+            {
+                "file": "src/app.py",
+                "line": 4,
+                "column": 11,
+                "original": "    return x == y",
+                "mutated": "    return x != y",
+                "description": "comparison == -> !=",
+            },
+        ]
+
+    def report(self, repo):
+        payload = {
+            "source": "src/app.py",
+            "language": "python",
+            "test_cmd": "python3 -m pytest",
+            "survived": self.survivors(),
+        }
+        path = repo / "run.json"
+        path.write_text(json.dumps(payload) + "\n")
+        return path
+
+    def ids(self):
+        return [
+            mutants_module.mutant_id(item["file"], item["line"], item["mutated"])
+            for item in self.survivors()
+        ]
+
+    def ingest(self, repo, *args):
+        return script(repo, "mutants.py", "ingest", "--report", "run.json", *args)
+
+    def record(self, repo, mutant_id, disposition, *args):
+        return script(
+            repo,
+            "mutants.py",
+            "record",
+            "--id",
+            mutant_id,
+            "--disposition",
+            disposition,
+            "--reason",
+            "verified while triaging",
+            *args,
+        )
+
+    def test_ingest_is_idempotent_and_missing_ledger_is_ignored(self):
+        repo = self.make()
+        self.report(repo)
+
+        first = self.ingest(repo, "--json")
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        payload = json.loads(first.stdout)
+        self.assertEqual([item["id"] for item in payload["opened"]], self.ids())
+        self.assertEqual(payload["already_open"], 0)
+
+        again = self.ingest(repo, "--json")
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        payload = json.loads(again.stdout)
+        self.assertEqual(payload["opened"], [])
+        self.assertEqual(payload["already_open"], 3)
+
+        rows = mutants_module.parse_mutants(repo / "docs" / "AUTONOMOUS_MUTANTS.md")
+        self.assertEqual([row.disposition for row in rows], ["OPEN", "OPEN", "OPEN"])
+
+        # A repo that never adopts the mutant ledger keeps exactly the old
+        # behavior: no file, no open mutants, no error.
+        (repo / "docs" / "AUTONOMOUS_MUTANTS.md").unlink()
+        nxt = script(repo, "ledger.py", "next", "--stream", "A", "--json")
+        self.assertEqual(nxt.returncode, 0, nxt.stderr)
+
+    def test_open_survives_stale_hash_and_terminal_triage_is_remembered(self):
+        repo = self.make()
+        self.report(repo)
+        first, second, third = self.ids()
+        self.assertEqual(self.ingest(repo).returncode, 0)
+
+        triaged = self.record(repo, second, "EQUIVALENT")
+        self.assertEqual(triaged.returncode, 0, triaged.stdout + triaged.stderr)
+
+        opened = script(repo, "mutants.py", "open", "--json")
+        self.assertEqual(opened.returncode, 0, opened.stderr)
+        payload = json.loads(opened.stdout)
+        self.assertEqual(payload["total"], 2)
+        self.assertEqual(
+            [item["id"] for item in payload["files"][0]["open"]], [first, third]
+        )
+        self.assertEqual(script(repo, "mutants.py", "check", "--id", second).returncode, 0)
+
+        # Change line 1 only: the file hash moves, the mutant lines do not.
+        write(repo / "src" / "app.py", self.SOURCE.replace("def f(", "def g(", 1))
+        commit(repo, "unrelated change")
+
+        rerun = self.ingest(repo, "--json")
+        self.assertEqual(rerun.returncode, 0, rerun.stdout + rerun.stderr)
+        payload = json.loads(rerun.stdout)
+        self.assertEqual(payload["already_triaged"], 1)
+        self.assertEqual([item["id"] for item in payload["opened"]], [first, third])
+
+        # Kill the rest and the file has no active survivors left.
+        for mutant_id in (first, third):
+            killed = self.record(repo, mutant_id, "KILLED-BY", "--pr", "#42")
+            self.assertEqual(killed.returncode, 0, killed.stdout + killed.stderr)
+        opened = script(repo, "mutants.py", "open", "--json")
+        self.assertEqual(json.loads(opened.stdout)["total"], 0)
+        for mutant_id in self.ids():
+            self.assertEqual(script(repo, "mutants.py", "check", "--id", mutant_id).returncode, 0)
+
+    def test_next_resurfaces_a_partially_audited_file(self):
+        repo = self.make()
+        self.report(repo)
+        self.assertEqual(self.ingest(repo).returncode, 0)
+
+        # Fix one of the three survivors in this PR, then record the file audit.
+        first, second, third = self.ids()
+        killed = self.record(repo, first, "KILLED-BY", "--pr", "#41")
+        self.assertEqual(killed.returncode, 0, killed.stdout + killed.stderr)
+        audited = script(
+            repo, "ledger.py", "record", "--stream", "A", "--target", "src/app.py",
+            "--status", "COMPLETED", "--pr", "#41", "--summary", "fixed one survivor",
+        )
+        self.assertEqual(audited.returncode, 0, audited.stdout + audited.stderr)
+
+        nxt = script(repo, "ledger.py", "next", "--stream", "A", "--json")
+        self.assertEqual(nxt.returncode, 0, nxt.stderr)
+        candidates = json.loads(nxt.stdout)["candidates"]
+        self.assertEqual([item["target"] for item in candidates], ["src/app.py"])
+        self.assertEqual(candidates[0]["audit_state"], "partial")
+        self.assertEqual(candidates[0]["open_mutants"], 2)
+
+        checked = script(repo, "ledger.py", "check", "--target", "src/app.py")
+        self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+        self.assertIn("open mutant(s)", checked.stdout)
+
+        for mutant_id in (second, third):
+            triaged = self.record(repo, mutant_id, "NOISE")
+            self.assertEqual(triaged.returncode, 0, triaged.stdout + triaged.stderr)
+
+        nxt = script(repo, "ledger.py", "next", "--stream", "A", "--json")
+        payload = json.loads(nxt.stdout)
+        self.assertEqual(payload["candidates"], [])
+        skipped = [item for item in payload["skipped"] if item["target"] == "src/app.py"]
+        self.assertEqual(skipped[0]["skip"], "already audited at current content hash")
+
+    def test_record_validates_id_and_requires_evidence(self):
+        repo = self.make()
+        bogus = script(
+            repo, "mutants.py", "record",
+            "--id", "not-a-mutant", "--disposition", "NOISE", "--reason", "nope",
+        )
+        self.assertEqual(bogus.returncode, 2)
+        self.assertIn("mutant id must look like", bogus.stderr)
+
+        missing_reason = script(
+            repo, "mutants.py", "record",
+            "--id", self.ids()[0], "--disposition", "NOISE",
+        )
+        self.assertEqual(missing_reason.returncode, 2)
+        self.assertIn("--reason", missing_reason.stderr)
 
 
 class OrchestratorTests(RepoTestCase):

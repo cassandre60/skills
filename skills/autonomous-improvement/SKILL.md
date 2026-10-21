@@ -97,7 +97,8 @@ your targeted test command once per mutant.
 
 - `KILLED`: the suite noticed. No work.
 - `SURVIVED`: a candidate gap. **Triage first** — equivalent mutants, string or
-  comment noise, and regex false positives are real.
+  comment noise, and regex false positives are real. Record the verdict with
+  `mutants.py record`; open survivors keep the file in `next`.
 - `UNCOMPILABLE`: an anchored compiler-error pattern matched; excluded from the
   kill rate. Never "fix" these with tests.
 - `TIMEOUT`: reported separately; counted as killed by default. Change with
@@ -134,9 +135,9 @@ The ledger is a git-tracked markdown table:
 - One row per audit; new rows go directly below the header (newest first).
 - The authoritative row for a target is the newest by date; on a tie, the
   topmost row wins.
-- Statuses are exactly `COMPLETED` and `SOUND`. There is no in-progress
-  status: claim a target by opening a draft PR early, because a claim written
-  in one worktree is invisible to other agents until merged.
+- Statuses are audits (`COMPLETED`, `SOUND`) or hash-scoped refusals
+  (`REJECTED`, `WONTFIX`, `SUPERSEDED`). No in-progress status: claim a target
+  by opening a draft PR early; `sync-rejections` records closed PRs.
 - Cells are escaped (`\|`, `\\`); rows must stay append-only. Add the
   `merge=union` fragment from `assets/gitattributes.fragment.txt` so parallel
   appends merge without conflicts.
