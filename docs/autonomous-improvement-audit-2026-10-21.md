@@ -454,24 +454,24 @@ B1 priority ranking (+test), B3 watchdog `EnvironmentFile` + installer writes `w
 B4 installer `install()` recursion (+staged-install regression test), B5 heartbeat honesty
 (+rotation-test assertion), B6 skill suites wired into CI, Quick Start ↔ batch-rule wording.
 
-**P0 — make the machine complete & self-limiting** (issues filed with this audit):
-1. Ship fleet state as code: snapshot script + timer, JSON schemas for journal/PR-state (F1, F2).
-2. Negative ledger + per-mutant dispositions, synced from closed PRs/issues (F5).
-3. Governor + metrics: WIP/rate caps, kill switch, `fleet.py stats`, owner digest (F6, F7).
+**P0 — make the machine complete & self-limiting** (issues filed with this audit, 2026-10-21):
+1. [#11](https://github.com/cassandre60/skills/issues/11) Ship fleet state as code: snapshot script + timer, JSON schemas for journal/PR-state (F1, F2).
+2. [#12](https://github.com/cassandre60/skills/issues/12) Negative ledger + per-mutant dispositions, synced from closed PRs/issues (F5).
+3. [#13](https://github.com/cassandre60/skills/issues/13) Governor + metrics: WIP/rate caps, kill switch, `fleet.py stats`, owner digest (F6, F7).
 
 **P1 — make every PR cheaper to trust:**
-4. `evidence.py` (performed red/green + pass-to-pass) and `verify-gate` enforcement (F9).
-5. Risk-ranked discovery + issue/CI intake for `ledger next` (F8).
-6. Real-mutator adapters, baseline-relative timeouts, survivor re-confirmation,
+4. [#14](https://github.com/cassandre60/skills/issues/14) `evidence.py` (performed red/green + pass-to-pass) and `verify-gate` enforcement (F9).
+5. [#15](https://github.com/cassandre60/skills/issues/15) Risk-ranked discovery + issue/CI intake for `ledger next` (F8).
+6. [#16](https://github.com/cassandre60/skills/issues/16) Real-mutator adapters, baseline-relative timeouts, survivor re-confirmation,
    incremental verdict cache (F10).
-7. `fleet.py publish` + draft-PR claiming + Stream-B 0-token scanner (F3, F11);
+7. [#17](https://github.com/cassandre60/skills/issues/17) `fleet.py publish` + draft-PR claiming + Stream-B 0-token scanner (F3, F11);
    `ledger_mode` + `merge_policy` config (F4, F18).
 
 **P2 — re-platform & prove it:**
-8. Stateless-wake Orchestrator + harness adapter table (opencode/Claude Code/Codex headless);
+8. [#18](https://github.com/cassandre60/skills/issues/18) Stateless-wake Orchestrator + harness adapter table (opencode/Claude Code/Codex headless);
    event-driven wakes (F12, F14).
-9. `doctor` preflight + sandboxing guidance for the VM (F15).
-10. Eval harness v2: orchestrator-behavior cases, trigger evals, with/without-skill runs on the
+9. [#19](https://github.com/cassandre60/skills/issues/19) `doctor` preflight + sandboxing guidance for the VM (F15).
+10. [#20](https://github.com/cassandre60/skills/issues/20) Eval harness v2: orchestrator-behavior cases, trigger evals, with/without-skill runs on the
     fleet's actual models (F17).
 
 **Metrics to run the machine by** (from `fleet.py stats`, reviewed weekly):
