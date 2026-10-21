@@ -1,0 +1,8 @@
+#!/bin/bash
+# Stub `loginctl` for the fleet doctor eval fixture (issue #19).
+if [ "${DOCTOR_STUB_LINGER:-yes}" = "yes" ]; then
+  echo "yes"
+  exit 0
+fi
+echo "no"
+exit 0

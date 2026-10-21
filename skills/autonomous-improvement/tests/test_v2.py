@@ -1546,6 +1546,102 @@ class CandidateOrderingTests(unittest.TestCase):
         )
 
 
+class DoctorTests(RepoTestCase):
+    """Issue #19: fleet doctor preflight — advice becomes checks.
+
+    Stubbed gh/loginctl/systemctl on PATH plus a temp state dir. Hard
+    failures (linger off, over-scoped token, orphan worktrees) are named
+    and exit != 0; the all-good staging exits 0. The Orchestrator cold
+    start consults the doctor and reports instead of dispatching.
+    """
+
+    FIXTURE = SKILL_ROOT / "evals" / "fixtures" / "doctor-vm"
+
+    def stage(self, **env_extra: str) -> Path:
+        repo = self.tmp / "repo"
+        repo.mkdir(exist_ok=True)
+        shutil.copytree(self.FIXTURE, repo / "doctor-vm")
+        install_scripts(repo)
+        write_config(repo, {"fleet": {"merge_policy": "never"}})
+        git(repo, "init", "-q", "-b", "main")
+        git(repo, "config", "user.email", "test@example.com")
+        git(repo, "config", "user.name", "Test User")
+        git(repo, "remote", "add", "origin", "https://github.com/cassandre60/skills.git")
+        commit(repo, "base")
+        state = repo / ".autonomous" / "state"
+        state.mkdir(parents=True, exist_ok=True)
+        (state / "clock_reference").write_text(str(int(time.time())))
+        (state / "opencode_session_id").write_text("ses_TEST\n")
+        self.env_extra = env_extra
+        return repo
+
+    def doctor(self, repo: Path, *args: str) -> subprocess.CompletedProcess:
+        stub_bin = repo / "doctor-vm" / "bin"
+        env = dict(os.environ)
+        env["PATH"] = f"{stub_bin}:{os.environ['PATH']}"
+        env.update(self.env_extra)
+        return script(repo, "fleet.py", "doctor", "--json", *args, env=env)
+
+    def test_all_good_staging_exits_zero(self):
+        repo = self.stage()
+        res = self.doctor(repo)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        payload = json.loads(res.stdout)
+        self.assertTrue(payload["dispatch_ok"])
+        self.assertEqual(payload["hard_failures"], [])
+        names = {check["name"] for check in payload["checks"]}
+        for expected in ("gh-auth", "token-scopes", "branch-protection",
+                         "linger", "watchdog-timer", "worktree-registry",
+                         "disk-headroom", "model-ladder"):
+            self.assertIn(expected, names)
+        linger = next(c for c in payload["checks"] if c["name"] == "linger")
+        self.assertTrue(linger["ok"])
+
+    def test_missing_linger_is_a_named_hard_failure(self):
+        repo = self.stage(DOCTOR_STUB_LINGER="no")
+        res = self.doctor(repo)
+        self.assertNotEqual(res.returncode, 0, res.stdout + res.stderr)
+        payload = json.loads(res.stdout)
+        self.assertFalse(payload["dispatch_ok"])
+        self.assertIn("linger", payload["hard_failures"])
+        linger = next(c for c in payload["checks"] if c["name"] == "linger")
+        self.assertEqual(linger["severity"], "hard")
+        self.assertFalse(linger["ok"])
+
+    def test_overscoped_token_is_a_hard_failure(self):
+        repo = self.stage()
+        scopes = repo / "doctor-vm" / "scopes-overbroad.txt"
+        scopes.write_text("'repo', 'admin:org'")
+        self.env_extra = {"DOCTOR_STUB_SCOPES_FILE": str(scopes)}
+        res = self.doctor(repo)
+        payload = json.loads(res.stdout)
+        self.assertNotEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertIn("token-scopes", payload["hard_failures"])
+
+    def test_orphan_worktree_registry_is_a_hard_failure(self):
+        repo = self.stage()
+        wtree = self.tmp / "orphan"
+        git(repo, "worktree", "add", "-q", str(wtree), "-b", "orphan-branch")
+        shutil.rmtree(wtree)
+        res = self.doctor(repo)
+        payload = json.loads(res.stdout)
+        self.assertNotEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertIn("worktree-registry", payload["hard_failures"])
+
+    def test_govern_refuses_to_dispatch_when_doctor_is_enforced(self):
+        repo = self.stage(DOCTOR_STUB_LINGER="no")
+        write_config(repo, {"fleet": {"merge_policy": "never", "doctor": {"enforce": True}}})
+        stub_bin = repo / "doctor-vm" / "bin"
+        env = dict(os.environ)
+        env["PATH"] = f"{stub_bin}:{os.environ['PATH']}"
+        env.update(self.env_extra)
+        res = script(repo, "fleet.py", "govern", "--json", env=env)
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        payload = json.loads(res.stdout)
+        self.assertFalse(payload["dispatch"])
+        self.assertIn("doctor", payload["reason"].lower())
+
+
 class DocumentationInvariantTests(unittest.TestCase):
     def test_skill_is_short(self):
         lines = (SKILL_ROOT / "SKILL.md").read_text().splitlines()
