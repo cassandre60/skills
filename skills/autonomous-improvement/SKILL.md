@@ -82,7 +82,7 @@ for Python, Dart/Flutter, TypeScript/JavaScript, and Go examples.
 3. `python3 scripts/autonomous/mutation_engine.py --source <target> --test-cmd "<targeted cmd>"` finds survivors.
 4. For one triaged survivor, prove the new test is red with the mutant and green on clean source.
 5. Commit, then run `python3 scripts/autonomous/orchestrator.py verify-gate --worktree .`.
-6. Push the branch and open the PR, then record the audit on that branch and push the ledger commit.
+6. Push the branch and open the PR; then record the audit on that branch — or, if the ledger is a protected path, report the row text for the wave's batched ledger PR (see `04`).
 
 Full commands, worktree cleanup, and the evidence contract: `references/04-workflow-and-roles.md`.
 

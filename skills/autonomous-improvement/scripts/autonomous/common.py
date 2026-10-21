@@ -258,14 +258,14 @@ def _sorted_by_priority(paths: Iterable[str], priorities: Iterable[str]) -> List
     priorities = [p for p in priorities if p]
 
     def key(path: str) -> Tuple[int, str]:
-        first = 0
-        for priority in priorities:
+        # The config order IS the priority order: a path matching an earlier
+        # entry outranks one matching a later entry. Paths matching nothing
+        # sort after every prioritized path, lexicographically.
+        for rank, priority in enumerate(priorities):
             prefix = priority.rstrip("/")
             if path == prefix or path.startswith(prefix + "/") or glob_match(path, priority):
-                break
-        else:
-            first = 1
-        return (first, path)
+                return (rank, path)
+        return (len(priorities), path)
 
     return sorted(paths, key=key)
 

@@ -34,6 +34,7 @@ from support import (
 )
 
 sys.path.insert(0, str(SCRIPTS))
+import common as common_module  # noqa: E402
 import ledger as ledger_module  # noqa: E402
 import mutation_engine as engine_module  # noqa: E402
 
@@ -908,6 +909,37 @@ class WatchdogTests(RepoTestCase):
         self.assertTrue(marker.exists())
         self.assertEqual(marker.read_text(), "ses_123")
 
+    def test_installer_completes_and_wires_env_file(self):
+        # Regression: the installer used to define a shell function named
+        # install(), shadowing /usr/bin/install, so its own `install -m`
+        # calls recursed until bash died (exit 139). Stage a full install
+        # with stubbed systemctl & friends and assert it completes and the
+        # unit reads its ORCH_* configuration from watchdog.env.
+        if not shutil.which("bash") or not shutil.which("install"):
+            self.skipTest("bash/install not available")
+        bin_dir = self.tmp / "bin"
+        home = self.tmp / "home"
+        bin_dir.mkdir()
+        home.mkdir()
+        for tool in ("systemctl", "systemd-analyze"):
+            stub = write(bin_dir / tool, "#!/bin/sh\nexit 0\n")
+            stub.chmod(0o755)
+        loginctl = write(bin_dir / "loginctl", "#!/bin/sh\necho no\n")
+        loginctl.chmod(0o755)
+        env = dict(os.environ)
+        env.update(HOME=str(home), PATH=f"{bin_dir}:{os.environ['PATH']}")
+        env.pop("XDG_CONFIG_HOME", None)
+        result = run([str(ASSETS / "install-watchdog.sh")], cwd=self.tmp, env=env)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        unit = home / ".config/systemd/user/orchestrator-watchdog.service"
+        self.assertTrue(unit.exists())
+        self.assertIn("EnvironmentFile=", unit.read_text())
+        self.assertIn("watchdog.env", unit.read_text())
+        env_file = home / ".local/share/orchestrator/watchdog.env"
+        self.assertTrue(env_file.exists())
+        self.assertIn("ORCH_MODEL_LADDER", env_file.read_text())
+        self.assertTrue((home / ".local/share/orchestrator/watchdog.sh").exists())
+
     def test_no_session_id_is_a_noop(self):
         state = self.tmp / "state"
         state.mkdir()
@@ -921,6 +953,35 @@ class WatchdogTests(RepoTestCase):
         result = run([str(ASSETS / "watchdog.sh")], cwd=self.tmp, env=env)
         self.assertEqual(result.returncode, 0)
         self.assertFalse(marker.exists())
+
+
+class CandidateOrderingTests(unittest.TestCase):
+    def test_priority_paths_rank_in_config_order(self):
+        # Later priority_paths entries are lower priority than earlier ones:
+        # the order the owner wrote them in is the queue order. Files outside
+        # every priority path come last. (Previously the sort key collapsed
+        # all priority matches to one bucket and re-sorted alphabetically.)
+        # "src/zeta" outranks "src/alpha" only via the config order;
+        # alphabetical order would put alpha first, so this fails unless
+        # the priority index itself is part of the sort key.
+        paths = [
+            "src/z_last.py",
+            "src/alpha/billing.py",
+            "src/zeta/auth.py",
+            "lib/legacy.py",
+        ]
+        ordered = common_module._sorted_by_priority(
+            paths, ["src/zeta", "src/alpha"]
+        )
+        self.assertEqual(
+            ordered,
+            [
+                "src/zeta/auth.py",
+                "src/alpha/billing.py",
+                "lib/legacy.py",
+                "src/z_last.py",
+            ],
+        )
 
 
 class DocumentationInvariantTests(unittest.TestCase):

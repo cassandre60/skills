@@ -78,6 +78,14 @@ if grep -q '^opencode/alpha-free ' "$TMP/state/model_failures" 2>/dev/null &&
 else
   fail "not every failing model was recorded"
 fi
+# Nobody woke up, so the heartbeat must not have earned freshness from the
+# attempt marker: the next tick has to find it stale and retry.
+HB_AGE=$(( $(date +%s) - $(stat -c %Y "$TMP/state/last_beat") ))
+if [ "$HB_AGE" -gt 60 ]; then
+  ok "heartbeat left stale after an all-quota-failure tick"
+else
+  fail "heartbeat looks fresh (${HB_AGE}s) after every model failed"
+fi
 
 # --- case 3: models in cooldown -> single session-default attempt -------
 write_fake_opencode "alpha-free" "beta-free"

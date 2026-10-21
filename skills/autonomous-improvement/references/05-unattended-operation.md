@@ -107,6 +107,11 @@ foreground path sidesteps the cgroup problem entirely.
 - `watchdog.lock` — flock file.
 - `model_failures` — `model timestamp` per quota-failed model (cooldown list).
 - `last_nudge` — timestamp of the last nudge round (storm protection).
+- `watchdog.env` — the `ORCH_*` variables, read by the systemd service via
+  `EnvironmentFile=` at every start. Shell-profile exports never reach a
+  systemd service; the installer writes this file (mode `0600`) if absent.
+  This is where `ORCH_MODEL_LADDER` must live for the timer-launched
+  watchdog to see it.
 
 The nudge command is `ORCH_RESUME_CMD`, a `bash` snippet where `$1` is the
 session id, `$2` the message and `$3` the model for this attempt (`""` = the
