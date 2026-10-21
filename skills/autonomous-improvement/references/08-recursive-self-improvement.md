@@ -39,7 +39,16 @@ at T2, and at T1 for anything referee-adjacent.
 
 ## The catalog
 
-Available now: **A** mutation, **B** adversarial test audit (`03`).
+Available now: **A** mutation, **B** adversarial test audit (`03`), **F**
+flake & determinism (`flakes.py`: finder + N-run oracle), and **I** docs &
+spec truthfulness (`docs_truth.py`: executable examples + symbol/spec-drift
+finder). The stream-I oracle is the rerun: findings flip to a clean pass
+after a docs-only fix; the finder never edits. Fix direction is
+evidence-decided: if code moved intentionally (git blame/history), fix docs;
+if the docs state the contract and the code drifted, that's a defect issue —
+never silently "fix" the spec to match a regression; ambiguous direction
+stays issue-only with both histories attached. Docs-only PRs stay docs-only;
+prose quality (clarity, tone) has no oracle and is out of scope.
 
 | Stream | Oracle in one line | Starts |
 |---|---|---|
@@ -54,7 +63,7 @@ Available now: **A** mutation, **B** adversarial test audit (`03`).
 | **K** Dependency evolution | build + targeted suite green on the bump; majors one per PR | T2 |
 | **L** Meta (fleet self-improvement) | proposal beats incumbent on history replay; eval set does not regress | T1/T2 capped |
 
-`ledger.py` rejects C–L with "planned, not implemented" until a stream ships
+`ledger.py` rejects unshipped letters with "planned, not implemented" until a stream ships
 its finder + oracle + eval fixture. A stream that exists only as an
 encouraging paragraph produces cosmetic churn with a fancy name — do not
 start work under these letters before their tooling lands; offer A/B, or

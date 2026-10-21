@@ -1546,6 +1546,156 @@ class CandidateOrderingTests(unittest.TestCase):
         )
 
 
+class DocsTruthStreamTests(unittest.TestCase):
+    """Stream I (issue #24): docs & spec truthfulness finder.
+
+    The finder is deterministic and can only EMIT candidates (never edit —
+    zero-diff is asserted); the direction call (fix docs vs file a defect
+    issue) stays with the owner/agent via git history, and --scaffold-issue
+    prints the artifact that carries both side's evidence. The oracle is the
+    rerun: findings must flip to a clean pass after a docs-only fix.
+    """
+
+    FIXTURE = SKILL_ROOT / "evals" / "fixtures" / "docs-drift-python"
+
+    def setUp(self) -> None:
+        import tempfile
+
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+
+    def check(self, cwd: Path, *args: str) -> subprocess.CompletedProcess:
+        return run(
+            [PYTHON, str(SKILL_ROOT / "scripts" / "autonomous" / "docs_truth.py"), "check", *args],
+            cwd=cwd,
+        )
+
+    def copy_fixture(self) -> Path:
+        repo = self.tmp / "repo"
+        shutil.copytree(self.FIXTURE, repo)
+        return repo
+
+    def tree_digest(self, root: Path) -> str:
+        import hashlib
+
+        parts = []
+        for path in sorted(root.rglob("*")):
+            rel = str(path.relative_to(root))
+            if ".git/" in rel:
+                continue
+            data = path.read_bytes() if path.is_file() else b"<dir>"
+            parts.append(f"{rel}:{hashlib.sha256(data).hexdigest()}")
+        return hashlib.sha256("\n".join(parts).encode()).hexdigest()
+
+    def test_symbol_drift_flagged_with_file_and_line(self):
+        repo = self.copy_fixture()
+        res = self.check(repo, "--json")
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        payload = json.loads(res.stdout)
+        drift = [c for c in payload["candidates"] if c["kind"] == "symbol-drift"]
+        self.assertEqual(len(drift), 1, json.dumps(payload["candidates"])[:400])
+        self.assertEqual(drift[0]["file"], "README.md")
+        self.assertEqual(drift[0]["name"], "load_table")
+        self.assertIn("src/config.py", drift[0]["evidence"]["module_file"])
+
+    def test_fixed_docs_pass_clean(self):
+        repo = self.copy_fixture()
+        readme = repo / "README.md"
+        readme.write_text(readme.read_text().replace("load_table", "load_config"))
+        res = self.check(repo, "--json")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(json.loads(res.stdout)["candidates"], [])
+
+    def test_scaffold_issue_artifact_and_zero_diff(self):
+        repo = self.copy_fixture()
+        before = self.tree_digest(repo)
+        res = self.check(repo, "--json", "--scaffold-issue")
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        body = res.stderr
+        self.assertIn("Stream I candidate issue", body)
+        self.assertIn("do not silently", body)
+        self.assertIn("README.md", body)
+        self.assertEqual(self.tree_digest(repo), before, "the finder must never edit the repo")
+
+    def test_missing_link_flagged_only_when_target_missing(self):
+        work = self.tmp / "links"
+        (work / "docs").mkdir(parents=True)
+        (work / "src").mkdir()
+        (work / "src" / "app.py").write_text("def run():\n    return 1\n")
+        (work / "docs" / "guide.md").write_text(
+            "See [the spec](/SPEC.md) or [deep](../missing/deep.md).\n"  # noqa
+        )
+        (work / "docs" / "other.md").write_text("")
+        # one good one bad, resolved against the doc's own directory
+        (work / "README.md").write_text(
+            "good: [other](docs/other.md)\nbad: [ghost](docs/ghost.md)\n"
+        )
+        res = self.check(work, "--json")
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        payload = json.loads(res.stdout)
+        links = {c["evidence"]["target"]: c for c in payload["candidates"] if c["kind"] == "missing-link"}
+        self.assertIn("docs/ghost.md", links)
+        self.assertNotIn("docs/other.md", links)
+        self.assertNotIn("../missing/deep.md", links or {})
+
+    def test_spec_trace_runs_both_directions_when_spec_present(self):
+        work = self.tmp / "spec"
+        work.mkdir()
+        (work / "SPEC.md").write_text(
+            "# SPEC trace\n\n- G05 the referee rule\n- G06 the ledger append rule\n"
+        )
+        tests_dir = work / "tests"
+        tests_dir.mkdir()
+        (tests_dir / "test_referee.py").write_text(
+            "# covers G05 only\n"
+            "def test_referee():\n"
+            "    # G05 citation\n"
+            "    assert True\n\n"
+            "def test_orphan():\n"
+            "    # cites Z99 which no spec line defines\n"
+            "    assert True\n"
+        )
+        res = self.check(work, "--spec", str(work / "SPEC.md"),
+                         "--paths", str(tests_dir),
+                         "--source", str(work / "src"),
+                         "--json")
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        payload = json.loads(res.stdout)
+        spec_findings = {c["name"]: c for c in payload["candidates"] if c["kind"].startswith("spec-")}
+        self.assertIn("G06", spec_findings)  # defined in spec, cited by no test
+        self.assertIn("Z99", spec_findings)  # cited in tests, defined no spec id
+        self.assertNotIn("G05", spec_findings)
+
+    def test_runnable_example_failure_flagged(self):
+        work = self.tmp / "runnable"
+        (work / "src").mkdir(parents=True)
+        (work / "src" / "app.py").write_text("def add(a, b):\n    return a + b\n")
+        (work / "README.md").write_text(
+            "# Example\n\n"
+            "```python  # runnable\n"
+            "from src.app import add\n"
+            "assert add(1, 2) == 4\n"
+            "```\n"
+        )
+        res = self.check(work, "--json")
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        payload = json.loads(res.stdout)
+        kinds = {c["kind"] for c in payload["candidates"]}
+        self.assertIn("example-failure", kinds)
+
+    def test_dogfood_clean_on_this_repo(self):
+        repo_root = SKILL_ROOT.parent.parent
+        res = self.check(
+            repo_root,
+            "--json",
+            "--paths", "README.md", "docs",
+            "--source", "skills/autonomous-improvement/scripts/autonomous",
+        )
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(json.loads(res.stdout)["candidates"], [])
+
+
 class DocumentationInvariantTests(unittest.TestCase):
     def test_skill_is_short(self):
         lines = (SKILL_ROOT / "SKILL.md").read_text().splitlines()
