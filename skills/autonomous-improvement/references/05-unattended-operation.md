@@ -336,6 +336,26 @@ wake until it is answered.
 
 When a fleet is cancelled (rate limits, harness restart):
 
+0. **Forensics before reports.** A tab that returned an empty report may
+   still be running: check for a live mutation engine, a moving file mtime,
+   and dirty files in its worktree. A killed tab leaves its worktree in a
+   state no report describes.
+   - **A tab killed mid-mutation leaves the MUTANT APPLIED.** The engine
+     restores only when it receives a signal it can act on. Before reusing,
+     reporting on, or handing off any worktree, check
+     `git diff origin/main -- lib` — it must be empty — and restore it
+     otherwise. A mutant that reaches a PR is a production bug wearing a
+     test's clothes.
+   - **One engine per file.** Two tabs mutating the same file corrupt each
+     other's measurements (uncompilable verdicts flip to survivors). Before
+     re-dispatching a task whose previous attempt may be alive, confirm it
+     is dead by forensics; if it is not, use a FRESH worktree and branch,
+     and tell the new tab which worktree the old one owns.
+   - **Stop the zombie explicitly.** A live tab keeps burning the machine
+     and may open a duplicate PR. Resume its session with an explicit stop
+     instruction (kill its processes, restore the worktree, do not push) —
+   and verify the result yourself.
+
 1. Inventory what survived: worktrees, journal, open PRs/issues, ledger rows.
 2. Never rerun codegen in an existing worktree. Check `git status`/branch first.
 3. Re-arm the wake grid in the first half of the relaunch turn, **then** dispatch.
