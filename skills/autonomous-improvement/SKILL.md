@@ -137,7 +137,7 @@ The ledger is a git-tracked markdown table:
   topmost row wins.
 - Statuses are audits (`COMPLETED`, `SOUND`) or hash-scoped refusals
   (`REJECTED`, `WONTFIX`, `SUPERSEDED`). No in-progress status: claim a target
-  by opening a draft PR early; `sync-rejections` records closed PRs.
+  via `fleet.py claim` (draft PR at minute 1); `sync-rejections` records closed PRs.
 - Cells are escaped (`\|`, `\\`); rows must stay append-only. Add the
   `merge=union` fragment from `assets/gitattributes.fragment.txt` so parallel
   appends merge without conflicts.

@@ -1729,6 +1729,218 @@ class FleetTests(RepoTestCase):
         self.assertIn("TestModel-A", stats["by_model"])
 
 
+class FleetClaimPublishTests(RepoTestCase):
+    """Issue #17: the claim and the transport are code, not prose."""
+
+    def _gh_stub(self, state: Path) -> Dict[str, str]:
+        bin_dir = path_with_only(self.tmp, ("git",))
+        stub = write(
+            bin_dir / "gh",
+            f"#!{PYTHON}\n"
+            "import json, os, sys\n"
+            "state_path = os.environ['GH_STATE']\n"
+            "state = json.loads(open(state_path).read()) if os.path.exists(state_path) else {'prs': [], 'issues': [], 'calls': []}\n"
+            "args = sys.argv[1:]\n"
+            "state['calls'].append(args)\n"
+            "def save():\n"
+            "    open(state_path, 'w').write(json.dumps(state))\n"
+            "def opt(name):\n"
+            "    return args[args.index(name) + 1] if name in args else None\n"
+            "def body_of():\n"
+            "    f = opt('--body-file')\n"
+            "    return open(f).read() if f else (opt('--body') or '')\n"
+            "cmd = tuple(args[:2])\n"
+            "if cmd == ('label', 'create'):\n"
+            "    save()\n"
+            "elif cmd == ('pr', 'list'):\n"
+            "    want = opt('--state') or 'open'\n"
+            "    print(json.dumps([p for p in state['prs'] if want == 'all' or p.get('state', 'OPEN').lower() == want]))\n"
+            "    save()\n"
+            "elif cmd == ('pr', 'create'):\n"
+            "    n = 100 + len(state['prs'])\n"
+            "    state['prs'].append({'number': n, 'title': opt('--title') or '', 'body': body_of(), 'headRefName': opt('--head') or '', 'files': [], 'state': 'OPEN', 'draft': '--draft' in args})\n"
+            "    save()\n"
+            "    print(f'https://example.test/pull/{n}')\n"
+            "elif cmd == ('pr', 'edit'):\n"
+            "    n = int(args[2])\n"
+            "    pr = next(p for p in state['prs'] if p['number'] == n)\n"
+            "    pr['body'] = body_of()\n"
+            "    if opt('--title'): pr['title'] = opt('--title')\n"
+            "    save()\n"
+            "elif cmd == ('pr', 'ready'):\n"
+            "    n = int(args[2])\n"
+            "    next(p for p in state['prs'] if p['number'] == n)['draft'] = False\n"
+            "    save()\n"
+            "elif cmd == ('issue', 'list'):\n"
+            "    print(json.dumps(state['issues']))\n"
+            "    save()\n"
+            "elif cmd == ('issue', 'create'):\n"
+            "    n = 200 + len(state['issues'])\n"
+            "    state['issues'].append({'number': n, 'title': opt('--title') or '', 'body': body_of()})\n"
+            "    save()\n"
+            "    print(f'https://example.test/issues/{n}')\n"
+            "else:\n"
+            "    print(f'unexpected gh args: {args}', file=sys.stderr)\n"
+            "    save()\n"
+            "    sys.exit(1)\n",
+        )
+        stub.chmod(0o755)
+        state.write_text(json.dumps({"prs": [], "issues": [], "calls": []}))
+        return env_with_path(bin_dir, GH_STATE=str(state))
+
+    def _repo(self) -> Path:
+        repo, _ = python_repo(self.tmp, with_origin=True)
+        commit(repo)
+        push(repo)
+        return repo
+
+    def _state(self, path: Path) -> Dict[str, Any]:
+        return json.loads(path.read_text())
+
+    def test_claim_opens_one_draft_pr_and_refuses_claimed_target(self):
+        repo = self._repo()
+        state = self.tmp / "gh-state.json"
+        env = self._gh_stub(state)
+        result = script(
+            repo, "fleet.py", "claim", "--target", "src/app.py",
+            "--stream", "A", "--json", env=env,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        data = json.loads(result.stdout.strip().splitlines()[-1])
+        self.assertEqual(data["target"], "src/app.py")
+        current = self._state(state)
+        creates = [c for c in current["calls"] if c[:2] == ["pr", "create"]]
+        self.assertEqual(len(creates), 1)
+        self.assertIn("--draft", creates[0])
+        pr = current["prs"][0]
+        self.assertTrue(pr["draft"])
+        self.assertIn("src/app.py", pr["body"])
+        self.assertIn(data["composite"], pr["body"])
+        self.assertTrue(Path(data["worktree"]).exists())
+        remote = git(repo, "ls-remote", "origin", f"refs/heads/{data['branch']}")
+        self.assertIn(data["branch"], remote.stdout)
+
+        # A target already in an open PR's files is refused, no new draft.
+        seeded = self._state(state)
+        seeded["prs"].append({
+            "number": 7, "title": "other", "headRefName": "test/other",
+            "files": [{"path": "src/app.py"}], "state": "OPEN", "draft": True,
+            "body": "",
+        })
+        state.write_text(json.dumps(seeded))
+        refused = script(
+            repo, "fleet.py", "claim", "--target", "src/app.py",
+            "--stream", "A", "--slug", "second", env=env,
+        )
+        self.assertNotEqual(refused.returncode, 0)
+        creates = [c for c in self._state(state)["calls"] if c[:2] == ["pr", "create"]]
+        self.assertEqual(len(creates), 1)
+        script(repo, "orchestrator.py", "cleanup-worktree", "--slug", data["slug"], "--force")
+
+    def test_publish_issue_mode_is_idempotent(self):
+        repo = self._repo()
+        state = self.tmp / "gh-state.json"
+        env = self._gh_stub(state)
+        report = repo / "engine.json"
+        report.write_text(json.dumps({
+            "source": "src/app.py",
+            "survived": [{
+                "file": "src/app.py", "line": 2, "column": 11,
+                "original": "    return a == b", "mutated": "    return a != b",
+                "description": "equality flip",
+            }],
+        }))
+        args = ("fleet.py", "publish", "--issues-from", str(report), "--json")
+        first = script(repo, *args, env=env)
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        second = script(repo, *args, env=env)
+        self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
+        current = self._state(state)
+        self.assertEqual(len(current["issues"]), 1)
+        self.assertIn("Mutant-Key:", current["issues"][0]["body"])
+        outcomes = json.loads(second.stdout.strip().splitlines()[-1])
+        self.assertEqual(outcomes[0]["action"], "existing")
+        self.assertEqual(outcomes[0]["number"], current["issues"][0]["number"])
+
+    def test_publish_pr_mode_renders_evidence_and_flips_ready(self):
+        repo = self._repo()
+        state = self.tmp / "gh-state.json"
+        env = self._gh_stub(state)
+        seeded = self._state(state)
+        seeded["prs"].append({
+            "number": 7, "title": "WIP", "headRefName": "test/a-app",
+            "files": [], "state": "OPEN", "draft": True, "body": "stub",
+        })
+        state.write_text(json.dumps(seeded))
+        import hashlib
+
+        artifact = {
+            "schema": 1, "kind": "mutant", "verdict": "killed",
+            "base_ref": "origin/main",
+            "base_sha": git(repo, "rev-parse", "HEAD").stdout.strip(),
+            "test_cmd": "pytest -q", "pass_to_pass_cmd": "pytest -q",
+            "mutant": {
+                "file": "src/app.py", "line": 2,
+                "original": "    return a == b", "mutated": "    return a != b",
+                "description": "equality flip",
+                "source_sha256": hashlib.sha256(
+                    (repo / "src" / "app.py").read_bytes()
+                ).hexdigest(),
+            },
+            "runs": {
+                "red": {"exit": 1, "summary": "1 failed"},
+                "green": {"exit": 0, "summary": "1 passed"},
+                "pass_to_pass": {"exit": 0, "summary": "1 passed"},
+            },
+        }
+        write(repo / ".autonomous" / "evidence.json", json.dumps(artifact))
+        result = script(
+            repo, "fleet.py", "publish", "--pr", "7",
+            "--title", "test: kill equality mutant in app.py", env=env,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        pr = self._state(state)["prs"][0]
+        self.assertFalse(pr["draft"])
+        self.assertEqual(pr["title"], "test: kill equality mutant in app.py")
+        self.assertIn("killed", pr["body"])
+        self.assertIn(artifact["base_sha"], pr["body"])
+
+        # Stale evidence must never flip a draft ready.
+        seeded = self._state(state)
+        seeded["prs"][0]["draft"] = True
+        state.write_text(json.dumps(seeded))
+        write(repo / "src" / "app.py", "def f(a, b):\n    return bool(a == b)\n")
+        refused = script(repo, "fleet.py", "publish", "--pr", "7", env=env)
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertTrue(self._state(state)["prs"][0]["draft"])
+
+
+class StreamBScanTests(RepoTestCase):
+    """Issue #17: Stream B gets a 0-token shortlist, not a full file read."""
+
+    def test_finds_seeded_smells_in_fixture(self):
+        repo, _ = python_repo(self.tmp)
+        fixture = SKILL_ROOT / "evals" / "fixtures" / "vacuous-tests" / "tests" / "test_import.py"
+        result = script(repo, "stream_b_scan.py", str(fixture), "--json")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        findings = json.loads(result.stdout)
+        by_kind = {(f["kind"], f["line"]) for f in findings}
+        self.assertIn(("no-assertion", 6), by_kind)
+        self.assertIn(("sleeps", 14), by_kind)
+        self.assertIn(("vacuous-assert", 15), by_kind)
+
+    def test_clean_test_file_has_no_findings(self):
+        repo, _ = python_repo(self.tmp)
+        clean = write(
+            repo / "tests" / "test_clean.py",
+            "from src.app import f\n\n\ndef test_f():\n"
+            "    assert f(1, 1) is True\n    assert f(1, 2) is False\n",
+        )
+        result = script(repo, "stream_b_scan.py", str(clean), "--json")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(json.loads(result.stdout), [])
+
+
 class CandidateOrderingTests(unittest.TestCase):
     def test_priority_paths_rank_in_config_order(self):
         # Later priority_paths entries are lower priority than earlier ones:

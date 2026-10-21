@@ -129,3 +129,8 @@ A regex engine should not block PRs until it has two green runs with zero false
 positives on that repo and a triage log. Prefer an AST-based mutator for a
 blocking gate. If this engine is promoted, run it diff-scoped and record the seed
 and shard in CI logs.
+
+`--output-issue` is **deprecated**: it wrote one survivor to a local markdown
+file nothing consumed. File survivors as real, deduped GitHub issues with
+`fleet.py publish --issues-from <engine.json>` instead (or ingest them into
+the mutant ledger with `mutants.py ingest`).

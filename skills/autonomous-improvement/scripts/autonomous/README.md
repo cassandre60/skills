@@ -18,7 +18,8 @@ Files:
 | File | Purpose |
 |---|---|
 | `evidence.py` | `mutant` / `defect` / `check`; fail-to-pass evidence artifact (`.autonomous/evidence.json`) |
-| `fleet.py` | `snapshot` / `pr-state` / `govern` / `stats`; state spine and governor |
+| `fleet.py` | `snapshot` / `pr-state` / `govern` / `stats` / `claim` / `publish`; state spine, governor, PR transport |
+| `stream_b_scan.py` | Stream B mechanical pre-filter (vacuous/sleep/mock smells) |
 | `ledger.py` | `next` / `record` / `check` / `sync-rejections`; content-hash dedup |
 | `mutants.py` | Per-mutant triage ledger: `ingest` / `record` / `open` / `check` |
 | `mutation_engine.py` | Per-line mutation runner with language rule packs |

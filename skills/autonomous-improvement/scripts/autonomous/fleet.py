@@ -12,6 +12,9 @@ Usage:
   python3 scripts/autonomous/fleet.py pr-state [--json] [--pr <num>]
   python3 scripts/autonomous/fleet.py govern [--json]
   python3 scripts/autonomous/fleet.py stats [--json] [--days <N>]
+  python3 scripts/autonomous/fleet.py claim --target <path> --stream A [--json]
+  python3 scripts/autonomous/fleet.py publish --pr <num> [--title <title>]
+  python3 scripts/autonomous/fleet.py publish --issues-from <engine.json> [--json]
 """
 
 from __future__ import annotations
@@ -22,6 +25,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -35,10 +39,17 @@ from common import (
     eprint,
     format_exit,
     git,
+    hash_at_head,
     load_config,
     load_worktree_registry,
     main_repo_root,
+    normalize_stream,
+    path_at_head,
+    rel_path,
+    repo_root,
     run,
+    stream_label,
+    test_for_source,
     write_json_atomic,
 )
 
@@ -599,6 +610,277 @@ def cmd_stats(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+# --- Claim + publish transport (issue #17) --------------------------------
+# The claim mechanism used to be prose ("open a draft PR early") that the
+# canonical protocol contradicted by opening the PR at the end. claim makes
+# the documented mechanism real at minute 1; publish renders the final body
+# from the evidence artifact (never free text) and is the only path that
+# flips draft -> ready.
+
+CLAIM_LABEL = "autonomous-improvement"
+
+
+def _gh(root: Path, argv: List[str], what: str) -> str:
+    proc = run(["gh"] + argv, cwd=root, quiet=True)
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout).strip().splitlines()
+        raise EnvError(f"gh {what} failed: {detail[0] if detail else proc.returncode}")
+    return proc.stdout
+
+
+def _ensure_label(root: Path) -> None:
+    # Best effort: the label is a filter aid, never worth failing a claim over.
+    run(["gh", "label", "create", CLAIM_LABEL, "--force"], cwd=root, quiet=True)
+
+
+def _body_file(text: str) -> str:
+    handle = tempfile.NamedTemporaryFile(
+        "w", suffix=".md", prefix="fleet-body-", delete=False, encoding="utf-8"
+    )
+    handle.write(text)
+    handle.close()
+    return handle.name
+
+
+def _pr_number_from_url(output: str) -> Optional[int]:
+    match = re.search(r"/(\d+)\s*$", output.strip())
+    return int(match.group(1)) if match else None
+
+
+def cmd_claim(args: argparse.Namespace) -> int:
+    from ledger import _claimed, _gh_claims, composite_hash
+
+    root = main_repo_root()
+    cfg = load_config(root, args.config)
+    stream = normalize_stream(args.stream)
+    target = rel_path(root, args.target)
+    if not path_at_head(root, target):
+        raise UsageError(f"claim target does not exist at HEAD: {target}")
+
+    claims, _warning = _gh_claims(root, require_gh=True)
+    test = test_for_source(root, cfg, target) if stream == "A" else None
+    claimed_by = _claimed(claims, target, test)
+    if claimed_by:
+        eprint(f"[!] {target} is already claimed by open PR {claimed_by}")
+        return EXIT_NEGATIVE
+
+    slug = args.slug or re.sub(
+        r"[^a-z0-9]+", "-", f"{stream.lower()}-{Path(target).stem}".lower()
+    ).strip("-")
+    registry = load_worktree_registry(root)
+    if any(entry.get("slug") == slug for entry in registry):
+        raise Fatal(f"slug already claimed locally: {slug}")
+
+    orchestrator = Path(__file__).with_name("orchestrator.py")
+    run(
+        [sys.executable, str(orchestrator), "create-worktree",
+         "--slug", slug, "--type", "test"],
+        cwd=root,
+        check=True,
+    )
+    entry = next(
+        item for item in load_worktree_registry(root) if item.get("slug") == slug
+    )
+    worktree = Path(str(entry["path"]))
+    branch = str(entry["branch"])
+
+    source_hash = hash_at_head(root, target) or ""
+    test_hash = hash_at_head(root, test) if test and path_at_head(root, test) else None
+    composite = composite_hash(source_hash, test_hash)
+
+    git(["commit", "--allow-empty", "-m", f"wip(autonomous): claim {target}"],
+        cwd=worktree, check=True, quiet=True)
+    git(["push", "-u", "origin", branch], cwd=worktree, check=True, quiet=True)
+
+    body = (
+        "## Claim (WIP)\n\n"
+        f"Target: `{target}` · Stream: {stream_label(stream)} · "
+        f"Composite: `{composite}`\n\n"
+        "Draft opened at claim time by `fleet.py claim`: it is the collision "
+        "claim, the visibility, and the CI trigger in one. The final body is "
+        "rendered by `fleet.py publish` from `.autonomous/evidence.json`; "
+        "this stub is replaced then, and only then does the PR flip ready.\n"
+    )
+    _ensure_label(root)
+    output = _gh(
+        root,
+        ["pr", "create", "--draft", "--head", branch,
+         "--title", f"WIP: {stream_label(stream)} claim {target}",
+         "--body-file", _body_file(body), "--label", CLAIM_LABEL],
+        "pr create",
+    )
+    number = _pr_number_from_url(output)
+    payload = {
+        "target": target,
+        "stream": stream,
+        "slug": slug,
+        "branch": branch,
+        "worktree": str(worktree),
+        "composite": composite,
+        "pr": number,
+        "url": output.strip(),
+    }
+    if args.json:
+        print(json.dumps(payload))
+    else:
+        print(f"[+] Claimed {target} as draft PR #{number} ({payload['url']})")
+        print(f"    worktree: {worktree} · branch: {branch} · composite: {composite}")
+    return EXIT_OK
+
+
+def _render_evidence_body(data: Dict[str, Any]) -> str:
+    runs = data["runs"]
+    lines = ["## Summary", ""]
+    if data["kind"] == "mutant":
+        mutant = data["mutant"]
+        lines.append(
+            f"Kills the surviving mutant at `{mutant['file']}:{mutant['line']}`"
+            + (f" ({mutant['description']})" if mutant.get("description") else "")
+            + " with a test-only change."
+        )
+        lines += [
+            "",
+            "```diff",
+            f"-{mutant['original']}",
+            f"+{mutant['mutated']}",
+            "```",
+        ]
+        red_label = "mutant applied"
+    else:
+        files = ", ".join(f"`{item['path']}`" for item in data.get("test_files") or [])
+        lines.append(f"Fixes a defect reproduced on the unmodified base. Repro: {files}.")
+        red_label = "unmodified base"
+    lines += [
+        "",
+        "## Evidence (`.autonomous/evidence.json`, schema 1)",
+        "",
+        f"- Base: `{data.get('base_sha')}` ({data.get('base_ref')})",
+        f"- Red ({red_label}): exit {runs['red']['exit']} — {runs['red'].get('summary', '')}",
+        f"- Green (this branch): exit {runs['green']['exit']} — {runs['green'].get('summary', '')}",
+        f"- Pass-to-pass: exit {runs['pass_to_pass']['exit']} — {runs['pass_to_pass'].get('summary', '')}",
+        f"- Test cmd: `{data.get('test_cmd')}`",
+        f"- Verdict: **{data.get('verdict')}**",
+        "",
+        "Rendered by `fleet.py publish` from the evidence artifact; "
+        "re-validate with `python3 scripts/autonomous/evidence.py check`.",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _list_all(root: Path, kind: str) -> List[Dict[str, Any]]:
+    output = _gh(
+        root,
+        [kind, "list", "--state", "all", "--json", "number,title,body",
+         "--limit", "200"],
+        f"{kind} list",
+    )
+    try:
+        data = json.loads(output)
+    except json.JSONDecodeError:
+        raise EnvError(f"gh {kind} list returned invalid JSON")
+    return [item for item in data if isinstance(item, dict)] if isinstance(data, list) else []
+
+
+def _find_key(items: List[Dict[str, Any]], key: str) -> Optional[int]:
+    for item in items:
+        text = f"{item.get('title') or ''}\n{item.get('body') or ''}"
+        if key in text and isinstance(item.get("number"), int):
+            return item["number"]
+    return None
+
+
+def _publish_issues(root: Path, args: argparse.Namespace) -> int:
+    from mutants import mutant_id
+
+    report_path = Path(args.issues_from)
+    if not report_path.is_absolute():
+        report_path = root / report_path
+    if not report_path.exists():
+        raise Fatal(f"engine report not found: {report_path}")
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    survived = report.get("survived") if isinstance(report, dict) else None
+    if not isinstance(survived, list):
+        raise Fatal(f"report has no survived list: {report_path}")
+
+    issues = _list_all(root, "issue")
+    prs = _list_all(root, "pr")
+    _ensure_label(root)
+    outcomes: List[Dict[str, Any]] = []
+    for entry in survived:
+        file_rel = rel_path(root, str(entry.get("file") or report.get("source") or ""))
+        line = int(entry.get("line") or 0)
+        mutated = str(entry.get("mutated") or "")
+        key = mutant_id(file_rel, line, mutated)
+        number = _find_key(issues, key)
+        kind = "issue"
+        if number is None:
+            number = _find_key(prs, key)
+            kind = "pr"
+        if number is not None:
+            outcomes.append({"key": key, "action": "existing", "kind": kind, "number": number})
+            continue
+        description = str(entry.get("description") or "surviving mutant")
+        body = (
+            f"Mutant-Key: `{key}`\n\n"
+            f"A mutant survived the test suite at `{file_rel}:{line}` "
+            f"({description}):\n\n"
+            "```diff\n"
+            f"-{entry.get('original') or ''}\n"
+            f"+{mutated}\n"
+            "```\n\n"
+            "Kill it with a test that is red with the mutant applied and green "
+            "on clean source (`evidence.py mutant`), or record a triage "
+            "disposition with `mutants.py record`. Filed by `fleet.py publish`.\n"
+        )
+        output = _gh(
+            root,
+            ["issue", "create", "--title", f"[mutant] {file_rel}:{line} — {description}",
+             "--body-file", _body_file(body), "--label", CLAIM_LABEL],
+            "issue create",
+        )
+        number = _pr_number_from_url(output)
+        issues.append({"number": number, "title": "", "body": body})
+        outcomes.append({"key": key, "action": "created", "kind": "issue", "number": number})
+
+    if args.json:
+        print(json.dumps(outcomes))
+    else:
+        for outcome in outcomes:
+            print(f"[*] {outcome['key']}: {outcome['action']} {outcome['kind']} #{outcome['number']}")
+    return EXIT_OK
+
+
+def cmd_publish(args: argparse.Namespace) -> int:
+    root = repo_root()
+    if args.issues_from:
+        return _publish_issues(root, args)
+    if args.pr is None:
+        raise UsageError("publish needs --pr <num> or --issues-from <engine.json>")
+
+    from evidence import validate_evidence_file
+
+    evidence_path = Path(args.evidence) if args.evidence else root / ".autonomous" / "evidence.json"
+    if not evidence_path.is_absolute():
+        evidence_path = root / evidence_path
+    data, problems = validate_evidence_file(root, evidence_path)
+    if problems or data is None:
+        listing = "\n  ".join(problems or ["no artifact"])
+        raise Fatal(
+            "evidence artifact is not publishable; the draft stays draft:\n  " + listing
+        )
+    body = _render_evidence_body(data)
+    if args.dry_run:
+        print(body, end="")
+        return EXIT_OK
+    edit = ["pr", "edit", str(args.pr), "--body-file", _body_file(body)]
+    if args.title:
+        edit += ["--title", args.title]
+    _gh(root, edit, "pr edit")
+    _gh(root, ["pr", "ready", str(args.pr)], "pr ready")
+    print(f"[+] PR #{args.pr} published: evidence rendered, flipped ready.")
+    return EXIT_OK
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         prog="fleet.py",
@@ -634,6 +916,26 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_stats.add_argument("--json", action="store_true", help="emit JSON")
     p_stats.add_argument("--require-gh", action="store_true", help="fail if gh is unavailable")
 
+    # claim
+    p_claim = subparsers.add_parser("claim", help="open a draft PR claiming a target")
+    p_claim.add_argument("--config", help="path to config.json")
+    p_claim.add_argument("--target", required=True, help="repo-relative target path")
+    p_claim.add_argument("--stream", required=True, help="A/B (1/2 accepted as aliases)")
+    p_claim.add_argument("--slug", help="worktree slug (default: derived from target)")
+    p_claim.add_argument("--json", action="store_true", help="emit JSON as the last line")
+
+    # publish
+    p_pub = subparsers.add_parser(
+        "publish", help="render evidence into a PR and flip it ready, or file survivor issues"
+    )
+    p_pub.add_argument("--config", help="path to config.json")
+    p_pub.add_argument("--pr", type=int, help="draft PR number to publish")
+    p_pub.add_argument("--title", help="final PR title")
+    p_pub.add_argument("--evidence", help="evidence artifact path")
+    p_pub.add_argument("--dry-run", action="store_true", help="print the rendered body only")
+    p_pub.add_argument("--issues-from", help="engine JSON: file one issue per survivor (deduped)")
+    p_pub.add_argument("--json", action="store_true", help="emit JSON as the last line")
+
     args = parser.parse_args(argv)
 
     try:
@@ -645,6 +947,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             return cmd_govern(args)
         if args.command == "stats":
             return cmd_stats(args)
+        if args.command == "claim":
+            return cmd_claim(args)
+        if args.command == "publish":
+            return cmd_publish(args)
         raise UsageError(f"unknown command: {args.command}")
     except (UsageError, EnvError, Fatal) as exc:
         return format_exit(exc)
