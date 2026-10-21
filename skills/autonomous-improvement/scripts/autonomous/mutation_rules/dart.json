@@ -8,22 +8,22 @@
   "skip_line_prefixes": ["import ", "export ", "part ", "@"],
   "rules": [
     {
-      "pattern": "(?P<a>[A-Za-z_][A-Za-z0-9_.]*)\\s*==\\s*null\\b",
+      "pattern": "(?P<a>[A-Za-z_][A-Za-z0-9_.]*(?:\\[[^\\[\\]]*\\])?)\\s*==\\s*null\\b",
       "replacement": "\\g<a> != null",
       "description": "Invert null check: '== null' -> '!= null'"
     },
     {
-      "pattern": "(?P<a>[A-Za-z_][A-Za-z0-9_.]*)\\s*!=\\s*null\\b",
+      "pattern": "(?P<a>[A-Za-z_][A-Za-z0-9_.]*(?:\\[[^\\[\\]]*\\])?)\\s*!=\\s*null\\b",
       "replacement": "\\g<a> == null",
       "description": "Invert null check: '!= null' -> '== null'"
     },
     {
-      "pattern": "(?P<a>-?[A-Za-z_][A-Za-z0-9_.]*|-?[0-9]+)\\s*==\\s*(?P<b>-?[A-Za-z_][A-Za-z0-9_.]*|-?[0-9]+)",
+      "pattern": "(?P<a>-?[A-Za-z_][A-Za-z0-9_.]*(?:\\[[^\\[\\]]*\\])?|-?[0-9]+)\\s*==\\s*(?P<b>-?[A-Za-z_][A-Za-z0-9_.]*(?:\\[[^\\[\\]]*\\])?|-?[0-9]+)",
       "replacement": "\\g<a> != \\g<b>",
       "description": "Invert equality: '==' -> '!='"
     },
     {
-      "pattern": "(?P<a>-?[A-Za-z_][A-Za-z0-9_.]*|-?[0-9]+)\\s*!=\\s*(?P<b>-?[A-Za-z_][A-Za-z0-9_.]*|-?[0-9]+)",
+      "pattern": "(?P<a>-?[A-Za-z_][A-Za-z0-9_.]*(?:\\[[^\\[\\]]*\\])?|-?[0-9]+)\\s*!=\\s*(?P<b>-?[A-Za-z_][A-Za-z0-9_.]*(?:\\[[^\\[\\]]*\\])?|-?[0-9]+)",
       "replacement": "\\g<a> == \\g<b>",
       "description": "Invert inequality: '!=' -> '=='"
     },
