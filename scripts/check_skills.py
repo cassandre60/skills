@@ -34,6 +34,12 @@ SECRET_PATTERNS = [
     (re.compile(r"github_pat_[a-zA-Z0-9_]{60,}"), "Fine-grained GitHub token"),
 ]
 
+# Eval fixtures may deliberately hold fake credentials so scanners can be
+# tested against them. A file may opt out by putting this exact marker in
+# one of its first five lines — the marker is the audit trail that makes the
+# opt-out reviewable.
+SYNTHETIC_CREDENTIAL_MARKER = "synthetic credential — not a real secret"
+
 def split_frontmatter(text: str) -> tuple[str | None, str]:
     """Split SKILL.md into (frontmatter, body).
 
@@ -95,6 +101,11 @@ def check_secrets(skill_dir: Path, issues: list):
         try:
             content = path.read_text(encoding="utf-8", errors="ignore")
         except Exception:
+            continue
+        if any(
+            SYNTHETIC_CREDENTIAL_MARKER in line
+            for line in content.splitlines()[:5]
+        ):
             continue
         for pattern, label in SECRET_PATTERNS:
             if pattern.search(content):

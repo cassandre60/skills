@@ -5,3 +5,7 @@
 
 # Python bytecode, if the scripts are copied into the repo.
 __pycache__/
+
+# Autonomy state: repair/red-green evidence and advisory dedup records are
+# run state, not repository truth — they must never appear as a PR diff.
+.autonomous/

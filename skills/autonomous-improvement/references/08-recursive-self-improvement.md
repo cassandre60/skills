@@ -39,7 +39,13 @@ at T2, and at T1 for anything referee-adjacent.
 
 ## The catalog
 
-Available now: **A** mutation, **B** adversarial test audit (`03`).
+Available now: **A** mutation, **B** adversarial test audit (`03`), **H**
+security & supply chain (`advisory.py`: stub-advisory pin audit + secret
+scan that redacts by construction; secrets stay issue-only) and **K**
+dependency evolution (oracle-first bumps: green on the bumped scratch copy
+is PR evidence, red is a Breakage issue delivered once). **F** flake and
+**I** docs-truth ship in their separate PRs; E likewise — see those for
+their tooling.
 
 | Stream | Oracle in one line | Starts |
 |---|---|---|
@@ -54,7 +60,7 @@ Available now: **A** mutation, **B** adversarial test audit (`03`).
 | **K** Dependency evolution | build + targeted suite green on the bump; majors one per PR | T2 |
 | **L** Meta (fleet self-improvement) | proposal beats incumbent on history replay; eval set does not regress | T1/T2 capped |
 
-`ledger.py` rejects C–L with "planned, not implemented" until a stream ships
+`ledger.py` rejects unshipped letters with "planned, not implemented" until a stream ships
 its finder + oracle + eval fixture. A stream that exists only as an
 encouraging paragraph produces cosmetic churn with a fancy name — do not
 start work under these letters before their tooling lands; offer A/B, or

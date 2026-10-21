@@ -1546,6 +1546,141 @@ class CandidateOrderingTests(unittest.TestCase):
         )
 
 
+class SecurityStreamTests(RepoTestCase):
+    """Streams H+K (issue #23): advisory finders + oracle-first bumps.
+
+    The secret scan must redact by construction: the raw secret string may
+    not appear in ANY emitted artifact (stdout/stderr/evidence). The dep
+    audit reads a stub advisory JSON; the bump is oracle-first - a green
+    bump yields evidence on a SCRATCH copy of the tree, a red bump yields
+    an issue artifact and no PR. Identical candidates dedup through a
+    state file under .autonomous/ so the second run is a no-op.
+    """
+
+    FIXTURE = SKILL_ROOT / "evals" / "fixtures" / "security-python"
+
+    def adv_run(self, repo: Path, *args: str) -> subprocess.CompletedProcess:
+        return run(
+            [PYTHON, str(SKILL_ROOT / "scripts" / "autonomous" / "advisory.py"), *args],
+            cwd=repo,
+        )
+
+    def copy_fixture(self) -> Path:
+        repo = self.tmp / "repo"
+        shutil.copytree(self.FIXTURE, repo)
+        return repo
+
+    def all_output(self, res: subprocess.CompletedProcess) -> str:
+        return res.stdout + res.stderr
+
+    def test_secret_scan_flags_and_never_prints_the_secret(self):
+        repo = self.copy_fixture()
+        before = {
+            p: p.read_bytes()
+            for p in repo.rglob("*") if p.is_file()
+        }
+        res = self.adv_run(repo, "secrets", "--json")
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        payload = json.loads(res.stdout)
+        secrets = [c for c in payload["candidates"] if c["kind"] == "secret"]
+        self.assertTrue(secrets, payload["candidates"])
+        flagged = secrets[0]
+        self.assertEqual(flagged["file"], "config/settings.py")
+        # Redaction is by construction: the raw scalar is never an artifact.
+        blob = self.all_output(res)
+        self.assertNotIn("sk-live-d16b60f5", blob)
+        self.assertNotIn("sk-live-", blob)
+        self.assertIn("[redacted", json.dumps(payload))
+        for path, data in before.items():
+            self.assertEqual(path.read_bytes(), data, f"{path} was edited")
+
+    def test_dep_audit_flags_only_vulnerable_stubs(self):
+        repo = self.copy_fixture()
+        res = self.adv_run(
+            repo, "deps", "--advisory", "docs/advisory-stub.json",
+            "--manifest", "requirements.txt", "--json",
+        )
+        self.assertEqual(res.returncode, 1, self.all_output(res))
+        payload = json.loads(res.stdout)
+        flagged = [c for c in payload["candidates"] if c["kind"] == "dep-vuln"]
+        names = {c["name"] for c in flagged}
+        self.assertIn("vulnerable-lib", names)
+        self.assertNotIn("stable-lib", names)
+        vuln = next(c for c in flagged if c["name"] == "vulnerable-lib")
+        self.assertEqual(vuln["evidence"]["advisory_id"], "FAKE-2026-1")
+        self.assertEqual(vuln["evidence"]["version"], "2.1.1")
+
+    def test_dep_run_twice_dedups_to_noop(self):
+        repo = self.copy_fixture()
+        first = self.adv_run(
+            repo, "deps", "--advisory", "docs/advisory-stub.json",
+            "--manifest", "requirements.txt", "--json",
+            "--state", ".autonomous/advisory-seen.json",
+        )
+        self.assertEqual(first.returncode, 1, self.all_output(first))
+        seen = repo / ".autonomous" / "advisory-seen.json"
+        self.assertTrue(seen.is_file())
+        hashes_first = set(json.loads(seen.read_text())["seen"])
+        self.assertGreaterEqual(len(hashes_first), 1)
+        second = self.adv_run(
+            repo, "deps", "--advisory", "docs/advisory-stub.json",
+            "--manifest", "requirements.txt", "--json",
+            "--state", ".autonomous/advisory-seen.json",
+        )
+        self.assertEqual(second.returncode, 0, self.all_output(second))
+        self.assertEqual(json.loads(second.stdout)["candidates"], [])
+        self.assertIn("deduped", self.all_output(second))
+
+    def test_bump_green_records_evidence_and_does_not_edit_repo(self):
+        repo = self.copy_fixture()
+        original = (repo / "requirements.txt").read_text()
+        res = self.adv_run(
+            repo, "bump", "--json",
+            "--dep", "vulnerable-lib", "--to", "2.2.0",
+            "--manifest", "requirements.txt",
+            "--test-cmd", f"{PYTHON} tests/test_pin.py --expect 2.2.0",
+            "--changelog", "CHANGELOG.md",
+        )
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        payload = json.loads(res.stdout)
+        self.assertEqual(payload["status"], "green")
+        self.assertEqual(payload["from"], "2.1.1")
+        self.assertEqual(payload["to"], "2.2.0")
+        self.assertIn("risk note", payload["evidence"]["changelog"])
+        self.assertEqual((repo / "requirements.txt").read_text(), original,
+                         "the real tree must stay untouched; the bump ran on a copy")
+
+    def test_bump_red_becomes_issue_artifact_without_pr(self):
+        repo = self.copy_fixture()
+        original = (repo / "requirements.txt").read_text()
+        res = self.adv_run(
+            repo, "bump", "--json",
+            "--dep", "vulnerable-lib", "--to", "3.0.0",
+            "--manifest", "requirements.txt",
+            "--test-cmd", f"{PYTHON} tests/test_pin.py --expect 2.2.0",
+            "--changelog", "CHANGELOG.md",
+        )
+        self.assertNotEqual(res.returncode, 0, res.stdout + res.stderr)
+        blob = res.stdout + res.stderr
+        self.assertIn("## Breakage", blob, "red bumps must produce the issue draft")
+        self.assertIn("pip install", blob)  # the suggested repro for the owner
+        self.assertIn("3.0.0", blob)
+        self.assertEqual((repo / "requirements.txt").read_text(), original)
+        self.assertEqual(json.loads(res.stdout)["status"], "red")
+
+    def test_streams_h_and_k_available(self):
+        repo = self.copy_fixture()
+        git(repo, "init", "-q", "-b", "main")
+        git(repo, "config", "user.email", "test@example.com")
+        git(repo, "config", "user.name", "Test User")
+        self.assertEqual(common_module.STREAMS["H"]["status"], "available")
+        self.assertEqual(common_module.STREAMS["K"]["status"], "available")
+        install_scripts(repo)
+        for stream in ("H", "K"):
+            res = script(repo, "ledger.py", "next", "--stream", stream, "--json")
+            self.assertEqual(res.returncode, 0, res.stderr)
+
+
 class DocumentationInvariantTests(unittest.TestCase):
     def test_skill_is_short(self):
         lines = (SKILL_ROOT / "SKILL.md").read_text().splitlines()
