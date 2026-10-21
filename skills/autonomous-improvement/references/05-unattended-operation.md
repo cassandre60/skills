@@ -336,6 +336,15 @@ wake until it is answered.
 
 When a fleet is cancelled (rate limits, harness restart):
 
+0b. **A failed read is not a deletion.** The state directory can
+    intermittently return ENOENT for a path that is demonstrably present
+    (verified 2026-10-21, twice: a `cat` of the journal failed while the file
+    was there and intact on the next read). So: re-read before you act. Do
+    not restore, rebuild or re-initialise a state dir on the strength of one
+    failed open — you would overwrite a good journal with a partial one.
+    Keep a second copy of the journal on a DIFFERENT filesystem (a tmpfs
+    `/tmp` copy is enough) after each write, and restore from that copy if the
+    original ever really does go missing.
 0. **Forensics before reports.** A tab that returned an empty report may
    still be running: check for a live mutation engine, a moving file mtime,
    and dirty files in its worktree. A killed tab leaves its worktree in a
