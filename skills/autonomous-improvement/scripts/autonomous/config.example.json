@@ -9,6 +9,8 @@
   "analyze_extensions": [".py"],
   "gate_cmd": null,
   "test_cmd": ["python3", "-m", "pytest", "-x", "-q"],
+  "mutation_backend": null,
+  "mutation_backends": {},
   "coverage_report": null,
   "test_for_source": [
     {

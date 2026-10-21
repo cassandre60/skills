@@ -91,9 +91,9 @@ Full commands, worktree cleanup, and the evidence contract: `references/04-workf
 
 ## Stream A — mutation testing
 
-The engine is regex-based, with per-language rule packs under
-`scripts/autonomous/mutation_rules/`. It mutates one line at a time and runs
-your targeted test command once per mutant.
+The engine is regex-based, with per-language rule packs under `scripts/autonomous/mutation_rules/`
+(Stryker reports normalize via `--backend stryker`; `auto` falls back to regex). One line at a
+time, baseline-relative timeouts, survivor confirmation, verdict cache.
 
 - `KILLED`: the suite noticed. No work.
 - `SURVIVED`: a candidate gap. **Triage first** — equivalent mutants, string or

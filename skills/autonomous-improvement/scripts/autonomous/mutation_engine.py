@@ -22,11 +22,13 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import hashlib
 import json
 import os
 import random
 import re
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -44,6 +46,9 @@ from common import (
     Fatal,
     UsageError,
     git as _git,
+    load_config,
+    repo_root,
+    write_json_atomic,
 )
 
 RULES_DIR = Path(__file__).resolve().parent / "mutation_rules"
@@ -507,6 +512,8 @@ def _print_summary(
     print(f"Total mutants evaluated: {counts['total']}")
     print(f"Killed:                  {counts['killed']}")
     print(f"Survived:                {counts['survived']}")
+    if counts.get("unconfirmed"):
+        print(f"Unconfirmed (flaky, excluded): {counts['unconfirmed']}")
     print(f"Uncompilable (excluded): {counts['uncompilable']}")
     print(f"Timed out:               {counts['timeout']}")
     if kill_rate is not None:
@@ -515,12 +522,55 @@ def _print_summary(
         print("NOTE: every survivor needs human triage — equivalent mutants and regex noise exist.")
 
 
+def _apply_mutation(source: Path, original: bytes, mutation: "Mutation") -> None:
+    lines = original.splitlines(keepends=True)
+    lines[mutation.line_no - 1] = mutation.mutated_text.encode("utf-8")
+    source.write_bytes(b"".join(
+        line if isinstance(line, bytes) else line.encode("utf-8") for line in lines
+    ))
+
+
+# --- Verdict cache (issue #16) ---------------------------------------------
+# Verdicts are reused only for the exact (source bytes, test command) pair
+# that produced them; any edit to either changes the scope and the mutant is
+# re-verdicted. Only killed and *confirmed* survived verdicts are stored —
+# a flaky pass must never poison later runs.
+
+def _cache_scope(source: str, original: bytes, test_cmd: str) -> str:
+    digest = hashlib.sha256()
+    digest.update(source.encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(original)
+    digest.update(b"\0")
+    digest.update(test_cmd.encode("utf-8"))
+    return digest.hexdigest()[:32]
+
+
+def _mutant_cache_key(mutation: "Mutation") -> str:
+    digest = hashlib.sha256(mutation.mutated_text.encode("utf-8")).hexdigest()[:12]
+    return f"{mutation.line_no}:{mutation.column}:{digest}"
+
+
+def _load_cache(path: Path) -> Dict[str, Any]:
+    if not path.exists():
+        return {"version": 1, "entries": {}}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"version": 1, "entries": {}}
+    if not isinstance(data, dict) or data.get("version") != 1:
+        return {"version": 1, "entries": {}}
+    if not isinstance(data.get("entries"), dict):
+        data["entries"] = {}
+    return data
+
+
 def run_mutation_pass(
     source_path: str,
     test_cmd: str,
     language: Optional[str] = None,
     max_mutants: int = 30,
-    timeout: float = 60.0,
+    timeout: Optional[float] = None,
     baseline_timeout: float = 600.0,
     seed: int = 0,
     shard: Optional[Tuple[int, int]] = None,
@@ -529,6 +579,11 @@ def run_mutation_pass(
     allow_dirty: bool = False,
     timeout_counts_as: str = "killed",
     spread: bool = False,
+    timeout_factor: float = 5.0,
+    timeout_floor: float = 20.0,
+    confirm_survivors: int = 1,
+    use_cache: bool = True,
+    cache_file: str = ".autonomous/mutant-cache.json",
 ) -> Dict[str, Any]:
     source = Path(source_path)
     if not source.exists():
@@ -554,6 +609,17 @@ def run_mutation_pass(
         )
     print(f"    [+] baseline passed ({baseline_elapsed:.1f}s)")
 
+    # Baseline-relative per-mutant timeout (cargo-mutants rule): a fixed
+    # timeout flatters the suite on a loaded box, manufacturing kill rate.
+    effective_timeout = (
+        timeout if timeout is not None
+        else max(timeout_factor * baseline_elapsed, timeout_floor)
+    )
+    print(
+        f"[*] Per-mutant timeout: {effective_timeout:.1f}s "
+        f"({'fixed' if timeout is not None else f'max({timeout_factor}x baseline, {timeout_floor}s floor)'})"
+    )
+
     only_lines = parse_line_filter(lines_filter)
     if diff_base:
         diff_set = diff_lines(source, diff_base)
@@ -572,18 +638,44 @@ def run_mutation_pass(
 
     killed: List[Dict[str, Any]] = []
     survived: List[Dict[str, Any]] = []
+    unconfirmed: List[Dict[str, Any]] = []
     uncompilable: List[Dict[str, Any]] = []
     timeouts: List[Dict[str, Any]] = []
+    fresh_survivors: List[Mutation] = []
+
+    cache_path = Path(cache_file)
+    cache = _load_cache(cache_path) if use_cache else {"version": 1, "entries": {}}
+    scope = _cache_scope(str(source), source.read_bytes(), test_cmd)
+    scope_entries: Dict[str, Any] = cache["entries"].setdefault(scope, {})
+    cache_hits = 0
+    cache_dirty = False
+
+    def store(mutation: Mutation, verdict: str) -> None:
+        nonlocal cache_dirty
+        if use_cache:
+            scope_entries[_mutant_cache_key(mutation)] = {
+                "verdict": verdict,
+                "mutant": mutation.to_dict(),
+            }
+            cache_dirty = True
 
     with SourceGuard(source):
         original = source.read_bytes()
         for position, mutation in enumerate(mutations, start=1):
-            lines = original.splitlines(keepends=True)
-            lines[mutation.line_no - 1] = mutation.mutated_text.encode("utf-8")
-            source.write_bytes(b"".join(
-                line if isinstance(line, bytes) else line.encode("utf-8") for line in lines
-            ))
-            rc, out, err, elapsed, timed_out = _run_test_cmd(argv, timeout)
+            if use_cache:
+                hit = scope_entries.get(_mutant_cache_key(mutation))
+                if hit and hit.get("verdict") in ("killed", "survived"):
+                    cache_hits += 1
+                    (killed if hit["verdict"] == "killed" else survived).append(
+                        hit.get("mutant") or mutation.to_dict()
+                    )
+                    print(
+                        f"  [{position}/{len(mutations)}] {hit['verdict'].upper()} "
+                        f"(cache): line {mutation.line_no}: {mutation.description}"
+                    )
+                    continue
+            _apply_mutation(source, original, mutation)
+            rc, out, err, elapsed, timed_out = _run_test_cmd(argv, effective_timeout)
             source.write_bytes(original)
 
             if timed_out:
@@ -601,17 +693,58 @@ def run_mutation_pass(
                     )
                 else:
                     killed.append(mutation.to_dict())
+                    store(mutation, "killed")
                     print(
                         f"  [{position}/{len(mutations)}] KILLED ({elapsed:.1f}s): "
                         f"line {mutation.line_no}: {mutation.description}"
                     )
             else:
-                survived.append(mutation.to_dict())
+                fresh_survivors.append(mutation)
                 print(
                     f"  [{position}/{len(mutations)}] SURVIVED: line {mutation.line_no}: "
                     f"{mutation.original_text.strip()} -> {mutation.mutated_text.strip()} "
                     f"({mutation.description})"
                 )
+
+    # Survivor confirmation: one pass on a flaky suite is a coin flip, not a
+    # gap. A survivor counts only if the clean suite stays green across
+    # extra runs AND the mutant still passes when re-applied.
+    if fresh_survivors and confirm_survivors > 0:
+        with SourceGuard(source):
+            original = source.read_bytes()
+            for mutation in fresh_survivors:
+                confirmed = True
+                for _ in range(confirm_survivors):
+                    source.write_bytes(original)
+                    rc, _o, _e, _t, timed_out = _run_test_cmd(argv, effective_timeout)
+                    if timed_out or rc != 0:
+                        confirmed = False
+                        break
+                if confirmed:
+                    _apply_mutation(source, original, mutation)
+                    rc, _o, _e, _t, timed_out = _run_test_cmd(argv, effective_timeout)
+                    source.write_bytes(original)
+                    if timed_out or rc != 0:
+                        confirmed = False
+                if confirmed:
+                    survived.append(mutation.to_dict())
+                    store(mutation, "survived")
+                else:
+                    unconfirmed.append(mutation.to_dict())
+                    print(
+                        f"  [confirm] UNCONFIRMED (flaky?): line {mutation.line_no}: "
+                        f"{mutation.description}"
+                    )
+    else:
+        for mutation in fresh_survivors:
+            survived.append(mutation.to_dict())
+            store(mutation, "survived")
+
+    if use_cache and cache_dirty:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        write_json_atomic(cache_path, cache)
+    if cache_hits:
+        print(f"[*] Verdict cache: {cache_hits} hit(s) reused")
 
     timeout_killed = len(timeouts) if timeout_counts_as == "killed" else 0
     timeout_survived = len(timeouts) if timeout_counts_as == "survived" else 0
@@ -620,6 +753,7 @@ def run_mutation_pass(
     counts = {
         "killed": len(killed),
         "survived": len(survived),
+        "unconfirmed": len(unconfirmed),
         "uncompilable": len(uncompilable),
         "timeout": len(timeouts),
         "total": len(mutations),
@@ -628,6 +762,7 @@ def run_mutation_pass(
 
     return {
         "source": str(source),
+        "backend": "sregex",
         "language": pack["name"],
         "test_cmd": test_cmd,
         "seed": seed,
@@ -635,8 +770,12 @@ def run_mutation_pass(
         "counts": counts,
         "kill_rate": kill_rate,
         "timeout_counts_as": timeout_counts_as,
+        "timeout_effective_s": round(effective_timeout, 3),
+        "baseline_s": round(baseline_elapsed, 3),
+        "cache_hits": cache_hits,
         "killed": killed,
         "survived": survived,
+        "unconfirmed": unconfirmed,
         "uncompilable": uncompilable,
         "timeout": timeouts,
     }
@@ -692,6 +831,147 @@ def _parse_shard(value: Optional[str]) -> Optional[Tuple[int, int]]:
     return index, total
 
 
+# --- External backends (issue #16) -----------------------------------------
+# The regex engine stays the guaranteed-available backend. External mutators
+# normalize into the same verdict schema, so triage/ledger/evidence flows do
+# not change. Supported today: Stryker's mutation-report JSON. Configure via
+# config `mutation_backend` + `mutation_backends.<name>.{cmd,report}` (argv
+# array, `{source}` substituted) or --backend-cmd/--backend-report.
+
+_STRYKER_STATUS = {
+    "Killed": "killed",
+    "Survived": "survived",
+    "NoCoverage": "survived",
+    "CompileError": "uncompilable",
+    "RuntimeError": "uncompilable",
+    "Timeout": "timeout",
+}
+
+
+def run_stryker_backend(
+    source_path: str,
+    test_cmd: str,
+    cmd: Optional[List[str]],
+    report_path: str,
+    timeout_counts_as: str = "killed",
+) -> Dict[str, Any]:
+    source = Path(source_path)
+    if not source.exists():
+        raise UsageError(f"source file not found: {source_path}")
+    if cmd:
+        argv = [str(part).replace("{source}", str(source)) for part in cmd]
+        print(f"[*] Running external mutator: {' '.join(argv)}")
+        proc = subprocess.run(argv, capture_output=True, text=True)
+        if proc.returncode != 0:
+            detail = (proc.stderr or proc.stdout).strip()[:2000]
+            raise EnvError(f"external mutator failed (exit {proc.returncode}): {detail}")
+    report_file = Path(report_path.replace("{source}", str(source)))
+    if not report_file.exists():
+        raise EnvError(
+            f"stryker report not found: {report_file} "
+            "(configure mutation_backends.stryker.cmd/report or --backend-report)"
+        )
+    try:
+        report = json.loads(report_file.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise EnvError(f"stryker report is not valid JSON: {exc}")
+    files = report.get("files") if isinstance(report, dict) else None
+    if not isinstance(files, dict) or not files:
+        raise UsageError("stryker report has no files object")
+    wanted = str(source)
+    entry = files.get(wanted)
+    matched_key = wanted
+    if entry is None:
+        for key, value in files.items():
+            if key.endswith(wanted) or wanted.endswith(key):
+                entry, matched_key = value, key
+                break
+    if entry is None:
+        raise UsageError(
+            f"stryker report has no entry for {wanted} (has: {', '.join(sorted(files))})"
+        )
+
+    source_lines = source.read_text(encoding="utf-8", errors="ignore").splitlines()
+    buckets: Dict[str, List[Dict[str, Any]]] = {
+        "killed": [], "survived": [], "uncompilable": [], "timeout": [],
+    }
+    for mutant in entry.get("mutants") or []:
+        verdict = _STRYKER_STATUS.get(str(mutant.get("status") or ""))
+        if verdict is None:
+            continue
+        location = mutant.get("location") or {}
+        start = location.get("start") or {}
+        end = location.get("end") or {}
+        line_no = int(start.get("line") or 0)
+        original_line = (
+            source_lines[line_no - 1] if 1 <= line_no <= len(source_lines) else ""
+        )
+        mutated_line = original_line
+        replacement = str(mutant.get("replacement") or "")
+        if (
+            end.get("line") == start.get("line")
+            and isinstance(start.get("column"), int)
+            and isinstance(end.get("column"), int)
+        ):
+            mutated_line = (
+                original_line[: start["column"] - 1]
+                + replacement
+                + original_line[end["column"] - 1:]
+            )
+        buckets[verdict].append(
+            {
+                "file": matched_key,
+                "line": line_no,
+                "column": int(start.get("column") or 0),
+                "original": original_line,
+                "mutated": mutated_line,
+                "description": f"{mutant.get('mutatorName') or 'mutant'} (stryker)",
+            }
+        )
+
+    timeout_killed = len(buckets["timeout"]) if timeout_counts_as == "killed" else 0
+    timeout_survived = len(buckets["timeout"]) if timeout_counts_as == "survived" else 0
+    denominator = (
+        len(buckets["killed"]) + len(buckets["survived"])
+        + timeout_killed + timeout_survived
+    )
+    kill_rate = (
+        (len(buckets["killed"]) + timeout_killed) / denominator * 100.0
+        if denominator else None
+    )
+    counts = {
+        "killed": len(buckets["killed"]),
+        "survived": len(buckets["survived"]),
+        "unconfirmed": 0,
+        "uncompilable": len(buckets["uncompilable"]),
+        "timeout": len(buckets["timeout"]),
+        "total": sum(len(items) for items in buckets.values()),
+    }
+    _print_summary(
+        str(source), buckets["killed"], buckets["survived"],
+        buckets["uncompilable"], buckets["timeout"], counts, kill_rate,
+    )
+    return {
+        "source": str(source),
+        "backend": "stryker",
+        "language": str(entry.get("language") or "external"),
+        "test_cmd": test_cmd,
+        "seed": 0,
+        "shard": None,
+        "counts": counts,
+        "kill_rate": kill_rate,
+        "timeout_counts_as": timeout_counts_as,
+        "timeout_effective_s": None,
+        "baseline_s": None,
+        "cache_hits": 0,
+        "killed": buckets["killed"],
+        "survived": buckets["survived"],
+        "unconfirmed": [],
+        "uncompilable": buckets["uncompilable"],
+        "timeout": buckets["timeout"],
+    }
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Regex-based mutation engine with per-language rule packs (triage required)"
@@ -708,7 +988,22 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--diff-base", help="only mutate lines changed in <ref>...HEAD")
     parser.add_argument("--lines", help="only mutate these line ranges, e.g. 10-20,42")
     parser.add_argument("--allow-dirty", action="store_true", help="allow a dirty source file")
-    parser.add_argument("--timeout", type=float, default=60.0, help="per-mutant timeout in seconds")
+    parser.add_argument("--timeout", type=float, default=None,
+                        help="fixed per-mutant timeout in seconds "
+                             "(default: baseline-relative, see --timeout-factor/--timeout-floor)")
+    parser.add_argument("--timeout-factor", type=float, default=5.0,
+                        help="per-mutant timeout = factor x baseline (default: 5)")
+    parser.add_argument("--timeout-floor", type=float, default=20.0,
+                        help="minimum per-mutant timeout in seconds (default: 20)")
+    parser.add_argument("--confirm-survivors", type=int, default=1,
+                        help="extra clean runs + re-application before a survivor counts (default: 1)")
+    parser.add_argument("--no-cache", action="store_true", help="bypass the verdict cache")
+    parser.add_argument("--cache-file", default=".autonomous/mutant-cache.json",
+                        help="verdict cache path (default: .autonomous/mutant-cache.json)")
+    parser.add_argument("--backend", choices=["auto", "sregex", "stryker"], default="auto",
+                        help="mutation backend (default: auto = configured external or regex)")
+    parser.add_argument("--backend-cmd", help="external mutator command ({source} substituted)")
+    parser.add_argument("--backend-report", help="external mutator report path")
     parser.add_argument("--baseline-timeout", type=float, default=600.0, help="baseline timeout in seconds")
     parser.add_argument(
         "--timeout-counts-as",
@@ -728,21 +1023,60 @@ def main() -> int:
     args = parser.parse_args()
     try:
         shard = _parse_shard(args.shard)
-        results = run_mutation_pass(
-            source_path=args.source,
-            test_cmd=args.test_cmd,
-            language=args.lang,
-            max_mutants=args.max_mutants,
-            timeout=args.timeout,
-            baseline_timeout=args.baseline_timeout,
-            seed=args.seed,
-            shard=shard,
-            diff_base=args.diff_base,
-            lines_filter=args.lines,
-            allow_dirty=args.allow_dirty,
-            timeout_counts_as=args.timeout_counts_as,
-            spread=args.spread,
-        )
+        cfg: Dict[str, Any] = {}
+        try:
+            cfg = load_config(repo_root())
+        except Exception:
+            cfg = {}
+        specs = cfg.get("mutation_backends") or {}
+        spec = specs.get("stryker") if isinstance(specs, dict) else None
+        spec = spec if isinstance(spec, dict) else {}
+        backend = args.backend
+        if backend == "auto":
+            configured_cmd = spec.get("cmd") if cfg.get("mutation_backend") == "stryker" else None
+            if configured_cmd and shutil.which(str(configured_cmd[0])):
+                backend = "stryker"
+            else:
+                print("[*] backend: sregex (auto — no usable external mutator configured/found)")
+                backend = "sregex"
+        if backend == "stryker":
+            cmd: Optional[List[str]] = None
+            if args.backend_cmd:
+                cmd = _split_test_cmd(args.backend_cmd)
+            elif spec.get("cmd"):
+                cmd = [str(part) for part in spec["cmd"]]
+            report = (
+                args.backend_report or spec.get("report")
+                or "reports/mutation/mutation.json"
+            )
+            results = run_stryker_backend(
+                source_path=args.source,
+                test_cmd=args.test_cmd,
+                cmd=cmd,
+                report_path=str(report),
+                timeout_counts_as=args.timeout_counts_as,
+            )
+        else:
+            results = run_mutation_pass(
+                source_path=args.source,
+                test_cmd=args.test_cmd,
+                language=args.lang,
+                max_mutants=args.max_mutants,
+                timeout=args.timeout,
+                baseline_timeout=args.baseline_timeout,
+                seed=args.seed,
+                shard=shard,
+                diff_base=args.diff_base,
+                lines_filter=args.lines,
+                allow_dirty=args.allow_dirty,
+                timeout_counts_as=args.timeout_counts_as,
+                spread=args.spread,
+                timeout_factor=args.timeout_factor,
+                timeout_floor=args.timeout_floor,
+                confirm_survivors=args.confirm_survivors,
+                use_cache=not args.no_cache,
+                cache_file=args.cache_file,
+            )
         if args.output_json:
             path = Path(args.output_json)
             path.parent.mkdir(parents=True, exist_ok=True)

@@ -32,6 +32,8 @@ DEFAULT_CONFIG = {
     "analyze_extensions": [],
     "gate_cmd": None,
     "test_cmd": None,
+    "mutation_backend": None,
+    "mutation_backends": {},
     "coverage_report": None,
     "test_for_source": [],
     "candidates": {

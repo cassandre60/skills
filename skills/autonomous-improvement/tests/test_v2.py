@@ -1059,6 +1059,167 @@ class MutationEngineTests(RepoTestCase):
             data["survived"],
         )
 
+    def test_baseline_relative_timeout_beats_fixed(self):
+        repo, _ = python_repo(self.tmp)
+        commit(repo)
+        (repo / "orig.txt").write_text((repo / "src" / "app.py").read_text())
+        stub = write(
+            repo / "slowkill.py",
+            "import pathlib, sys, time\n"
+            "if pathlib.Path('src/app.py').read_text() != pathlib.Path('orig.txt').read_text():\n"
+            "    time.sleep(1.0)\n"
+            "    sys.exit(1)\n"
+            "sys.exit(0)\n",
+        )
+        fixed_out = self.tmp / "fixed.json"
+        fixed = script(
+            repo, "mutation_engine.py", "--source", "src/app.py",
+            "--test-cmd", f"{PYTHON} {stub}", "--max-mutants", "1",
+            "--timeout", "0.3", "--confirm-survivors", "0", "--no-cache",
+            "--output-json", str(fixed_out),
+        )
+        self.assertEqual(fixed.returncode, 0, fixed.stderr)
+        self.assertEqual(json.loads(fixed_out.read_text())["counts"]["timeout"], 1)
+
+        rel_out = self.tmp / "relative.json"
+        relative = script(
+            repo, "mutation_engine.py", "--source", "src/app.py",
+            "--test-cmd", f"{PYTHON} {stub}", "--max-mutants", "1",
+            "--timeout-floor", "2", "--confirm-survivors", "0", "--no-cache",
+            "--output-json", str(rel_out),
+        )
+        self.assertEqual(relative.returncode, 0, relative.stderr)
+        data = json.loads(rel_out.read_text())
+        self.assertEqual(data["counts"]["timeout"], 0)
+        self.assertEqual(data["counts"]["killed"], 1)
+        self.assertGreaterEqual(data["timeout_effective_s"], 2)
+
+    def test_flaky_survivor_is_not_confirmed(self):
+        repo, _ = python_repo(self.tmp)
+        commit(repo)
+        counter = repo / "counter.txt"
+        stub = write(
+            repo / "flake.py",
+            "import pathlib, sys\n"
+            f"path = pathlib.Path({str(counter)!r})\n"
+            "n = int(path.read_text()) if path.exists() else 0\n"
+            "path.write_text(str(n + 1))\n"
+            "sys.exit(1 if n % 3 == 2 else 0)\n",
+        )
+        out = self.tmp / "flake.json"
+        result = script(
+            repo, "mutation_engine.py", "--source", "src/app.py",
+            "--test-cmd", f"{PYTHON} {stub}", "--max-mutants", "1",
+            "--no-cache", "--output-json", str(out),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = json.loads(out.read_text())
+        self.assertEqual(data["counts"]["survived"], 0)
+        self.assertEqual(data["counts"]["unconfirmed"], 1)
+
+        counter.write_text("0")
+        out0 = self.tmp / "flake0.json"
+        result0 = script(
+            repo, "mutation_engine.py", "--source", "src/app.py",
+            "--test-cmd", f"{PYTHON} {stub}", "--max-mutants", "1",
+            "--confirm-survivors", "0", "--no-cache",
+            "--output-json", str(out0),
+        )
+        self.assertEqual(result0.returncode, 0, result0.stderr)
+        self.assertEqual(json.loads(out0.read_text())["counts"]["survived"], 1)
+
+    def test_verdict_cache_reuses_second_run(self):
+        repo, _ = python_repo(self.tmp)
+        commit(repo)
+        (repo / "orig.txt").write_text((repo / "src" / "app.py").read_text())
+        calls = repo / "calls.txt"
+        stub = write(
+            repo / "counting.py",
+            "import pathlib, sys\n"
+            f"path = pathlib.Path({str(calls)!r})\n"
+            "path.write_text((path.read_text() if path.exists() else '') + 'x\\n')\n"
+            "sys.exit(1 if pathlib.Path('src/app.py').read_text() != pathlib.Path('orig.txt').read_text() else 0)\n",
+        )
+        args = (
+            "mutation_engine.py", "--source", "src/app.py",
+            "--test-cmd", f"{PYTHON} {stub}", "--max-mutants", "3",
+            "--confirm-survivors", "0",
+        )
+        out1 = self.tmp / "cache1.json"
+        first = script(repo, *args, "--output-json", str(out1))
+        self.assertEqual(first.returncode, 0, first.stderr)
+        data1 = json.loads(out1.read_text())
+        self.assertEqual(data1["cache_hits"], 0)
+        self.assertGreater(data1["counts"]["killed"], 0)
+        calls1 = len(calls.read_text().splitlines())
+
+        out2 = self.tmp / "cache2.json"
+        second = script(repo, *args, "--output-json", str(out2))
+        self.assertEqual(second.returncode, 0, second.stderr)
+        data2 = json.loads(out2.read_text())
+        self.assertEqual(data2["cache_hits"], data1["counts"]["total"])
+        self.assertEqual(data2["counts"]["killed"], data1["counts"]["killed"])
+        # Only the baseline ran again; every verdict came from the cache.
+        self.assertEqual(len(calls.read_text().splitlines()), calls1 + 1)
+
+    def test_backend_auto_falls_back_to_regex(self):
+        repo, _ = python_repo(self.tmp)
+        commit(repo)
+        out = self.tmp / "auto.json"
+        result = script(
+            repo, "mutation_engine.py", "--source", "src/app.py",
+            "--test-cmd", f"{PYTHON} -c pass", "--max-mutants", "1",
+            "--backend", "auto", "--confirm-survivors", "0", "--no-cache",
+            "--output-json", str(out),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("sregex", result.stdout)
+        self.assertEqual(json.loads(out.read_text())["backend"], "sregex")
+
+    def test_stryker_backend_normalizes_report(self):
+        repo, _ = python_repo(self.tmp)
+        write(repo / "src" / "app.ts", "function eq(a, b) {\n  return a === b;\n}\n")
+        commit(repo)
+        report = {
+            "files": {
+                "src/app.ts": {
+                    "language": "typescript",
+                    "mutants": [
+                        {
+                            "id": "0", "mutatorName": "EqualityOperator",
+                            "replacement": "!==",
+                            "location": {"start": {"line": 2, "column": 12},
+                                         "end": {"line": 2, "column": 15}},
+                            "status": "Survived",
+                        },
+                        {
+                            "id": "1", "mutatorName": "BooleanLiteral",
+                            "replacement": "false",
+                            "location": {"start": {"line": 2, "column": 3},
+                                         "end": {"line": 2, "column": 18}},
+                            "status": "Killed",
+                        },
+                    ],
+                }
+            }
+        }
+        report_path = repo / "mutation.json"
+        report_path.write_text(json.dumps(report))
+        out = self.tmp / "stryker.json"
+        result = script(
+            repo, "mutation_engine.py", "--source", "src/app.ts",
+            "--test-cmd", f"{PYTHON} -c pass",
+            "--backend", "stryker", "--backend-report", str(report_path),
+            "--output-json", str(out),
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        data = json.loads(out.read_text())
+        self.assertEqual(data["backend"], "stryker")
+        self.assertEqual(data["counts"]["killed"], 1)
+        self.assertEqual(data["counts"]["survived"], 1)
+        self.assertEqual(data["survived"][0]["mutated"], "  return a !== b;")
+        self.assertEqual(data["survived"][0]["line"], 2)
+
     def test_timeout_state_and_missing_executable(self):
         repo, _ = python_repo(self.tmp)
         write(repo / "src" / "app.py", "def f(a, b):\n    return a == b\n")
