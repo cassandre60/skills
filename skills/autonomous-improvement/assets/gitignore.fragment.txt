@@ -5,3 +5,6 @@
 
 # Python bytecode, if the scripts are copied into the repo.
 __pycache__/
+
+# Fleet machine state (evidence artifacts, snapshots, kill switch).
+.autonomous/

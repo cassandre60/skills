@@ -970,6 +970,27 @@ class MutationEngineTests(RepoTestCase):
         self.assertFalse(keys[0] & keys[1])
         self.assertEqual(keys[0] | keys[1], { (item["line"], item["column"]) for item in all_mutants })
 
+    def test_same_size_mutant_not_masked_by_bytecode_cache(self):
+        # Regression: `==` -> `!=` keeps size and, within one second, the
+        # mtime a .pyc validates against; the engine must not execute stale
+        # bytecode and report the mutant as a false survivor.
+        repo, _ = python_repo(self.tmp)
+        commit(repo)
+        output = self.tmp / "pycache.json"
+        result = script(
+            repo, "mutation_engine.py", "--source", "src/app.py",
+            "--test-cmd",
+            f'{PYTHON} -c "from src.app import f; assert f(1, 1) is True; assert f(1, 2) is False"',
+            "--max-mutants", "10", "--output-json", str(output),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = json.loads(output.read_text())
+        self.assertGreaterEqual(data["counts"]["killed"], 1)
+        self.assertFalse(
+            any("!=" in item["mutated"] for item in data["survived"]),
+            data["survived"],
+        )
+
     def test_timeout_state_and_missing_executable(self):
         repo, _ = python_repo(self.tmp)
         write(repo / "src" / "app.py", "def f(a, b):\n    return a == b\n")
@@ -1174,6 +1195,130 @@ class TestWeakeningTests(RepoTestCase):
         commit(repo, "stronger")
         result = script(repo, "test_weakening_check.py", "--base", "main")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
+class EvidenceTests(RepoTestCase):
+    """Issue #14: the verify-before/after contract as an artifact, not prose."""
+
+    TEST_CMD = f'{PYTHON} -c "from src.app import f; assert f(1, 1) is True; assert f(1, 2) is False"'
+
+    def _repo(self) -> Path:
+        repo, _ = python_repo(self.tmp)
+        commit(repo, "base")
+        return repo
+
+    def _engine_report(self, repo: Path, mutated: str) -> Path:
+        report = {
+            "source": "src/app.py",
+            "survived": [
+                {
+                    "file": "src/app.py",
+                    "line": 2,
+                    "column": 11,
+                    "original": "    return a == b",
+                    "mutated": mutated,
+                    "description": "fixture mutant",
+                }
+            ],
+        }
+        path = repo / "engine.json"
+        path.write_text(json.dumps(report), encoding="utf-8")
+        return path
+
+    def test_mutant_evidence_artifact_records_three_runs(self):
+        repo = self._repo()
+        report = self._engine_report(repo, "    return a != b")
+        result = script(
+            repo, "evidence.py", "mutant",
+            "--engine-json", str(report), "--index", "0",
+            "--test-cmd", self.TEST_CMD,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        artifact = json.loads((repo / ".autonomous" / "evidence.json").read_text())
+        self.assertEqual(artifact["schema"], 1)
+        self.assertEqual(artifact["kind"], "mutant")
+        self.assertEqual(artifact["verdict"], "killed")
+        self.assertNotEqual(artifact["runs"]["red"]["exit"], 0)
+        self.assertEqual(artifact["runs"]["green"]["exit"], 0)
+        self.assertEqual(artifact["runs"]["pass_to_pass"]["exit"], 0)
+        self.assertEqual(artifact["mutant"]["mutated"], "    return a != b")
+        # The mutant must never survive the evidence run itself.
+        self.assertEqual(
+            (repo / "src" / "app.py").read_text(), "def f(a, b):\n    return a == b\n"
+        )
+        self.assertFalse((repo / "src" / "app.py.mutbak").exists())
+
+    def test_mutant_not_killed_exits_nonzero(self):
+        repo = self._repo()
+        report = self._engine_report(repo, "    return not (a != b)")
+        result = script(
+            repo, "evidence.py", "mutant",
+            "--engine-json", str(report), "--index", "0",
+            "--test-cmd", self.TEST_CMD,
+        )
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        artifact = json.loads((repo / ".autonomous" / "evidence.json").read_text())
+        self.assertEqual(artifact["verdict"], "not-killed")
+        self.assertEqual(artifact["runs"]["red"]["exit"], 0)
+
+    def test_check_rejects_artifact_after_source_changes(self):
+        repo = self._repo()
+        report = self._engine_report(repo, "    return a != b")
+        made = script(
+            repo, "evidence.py", "mutant",
+            "--engine-json", str(report), "--index", "0",
+            "--test-cmd", self.TEST_CMD,
+        )
+        self.assertEqual(made.returncode, 0, made.stdout + made.stderr)
+        ok = script(repo, "evidence.py", "check")
+        self.assertEqual(ok.returncode, 0, ok.stdout + ok.stderr)
+        write(repo / "src" / "app.py", "def f(a, b):\n    return bool(a == b)\n")
+        stale = script(repo, "evidence.py", "check")
+        self.assertNotEqual(stale.returncode, 0)
+        self.assertIn("source changed", stale.stdout + stale.stderr)
+
+    def test_defect_evidence_requires_red_on_base(self):
+        repo, _ = python_repo(self.tmp)
+        write(repo / "src" / "app.py", "def f(a, b):\n    return False\n")
+        commit(repo, "buggy base")
+        write(repo / "src" / "app.py", "def f(a, b):\n    return a == b\n")
+        result = script(
+            repo, "evidence.py", "defect",
+            "--base", "HEAD",
+            "--test-file", "tests/test_app.py",
+            "--test-cmd", self.TEST_CMD,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        artifact = json.loads((repo / ".autonomous" / "evidence.json").read_text())
+        self.assertEqual(artifact["kind"], "defect")
+        self.assertEqual(artifact["verdict"], "reproduced-and-fixed")
+        self.assertNotEqual(artifact["runs"]["red"]["exit"], 0)
+        self.assertEqual(artifact["runs"]["green"]["exit"], 0)
+        # The throwaway base worktree must be gone afterwards.
+        listed = git(repo, "worktree", "list", "--porcelain")
+        self.assertEqual(listed.stdout.count("worktree "), 1)
+
+    def test_verify_gate_fails_on_weakening_edit(self):
+        repo, _ = python_repo(self.tmp, with_origin=True)
+        cfg = load_example()
+        cfg["format_check_cmd"] = None
+        cfg["analyze_cmd"] = None
+        cfg["gate_cmd"] = None
+        write_config(repo, cfg)
+        commit(repo)
+        push(repo)
+        created = script(repo, "orchestrator.py", "create-worktree", "--slug", "weak")
+        self.assertEqual(created.returncode, 0, created.stderr)
+        worktree = repo.parent / f"{repo.name}-weak"
+        write(
+            worktree / "tests" / "test_app.py",
+            "from src.app import f\n\ndef test_f():\n    pass\n",
+        )
+        commit(worktree, "weaken the test")
+        result = script(repo, "orchestrator.py", "verify-gate", "--worktree", str(worktree))
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("weakening", result.stdout + result.stderr)
+        script(repo, "orchestrator.py", "cleanup-worktree", "--slug", "weak", "--force")
 
 
 @unittest.skipUnless(

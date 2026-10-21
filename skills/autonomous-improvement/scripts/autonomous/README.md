@@ -17,6 +17,7 @@ Files:
 
 | File | Purpose |
 |---|---|
+| `evidence.py` | `mutant` / `defect` / `check`; fail-to-pass evidence artifact (`.autonomous/evidence.json`) |
 | `fleet.py` | `snapshot` / `pr-state` / `govern` / `stats`; state spine and governor |
 | `ledger.py` | `next` / `record` / `check` / `sync-rejections`; content-hash dedup |
 | `mutants.py` | Per-mutant triage ledger: `ingest` / `record` / `open` / `check` |

@@ -266,6 +266,48 @@ def cmd_verify_gate(args: argparse.Namespace) -> int:
         _run_step("analyze", analyze + analyzable, worktree)
 
     _run_step("gate", command(cfg.get("gate_cmd"), "gate_cmd"), worktree)
+
+    # The referee checks (issue #14): a format-clean diff that weakens tests
+    # or rides on stale evidence must not pass just because analyze is happy.
+    vg = cfg.get("verify_gate") or {}
+    weakening_mode = str(vg.get("weakening", "fail"))
+    if weakening_mode != "off":
+        import test_weakening_check as twc
+
+        findings = twc.check(root, base, twc._test_globs(cfg))
+        if findings:
+            listing = "\n  ".join(
+                f"{f['kind']}: {f['file']}" + (f" — {f.get('text')}" if f.get("text") else "")
+                for f in findings
+            )
+            if weakening_mode == "warn":
+                print(f"[warn] test-weakening signals against {base}:\n  {listing}")
+            else:
+                raise Fatal(
+                    f"test-weakening signals against {base} "
+                    "(set verify_gate.weakening to warn/off to downgrade):\n  " + listing
+                )
+        else:
+            print(f"[*] weakening check: clean against {base}")
+
+    evidence_mode = str(vg.get("evidence", "warn"))
+    if evidence_mode != "off":
+        from evidence import validate_evidence_file
+
+        evidence_path = root / ".autonomous" / "evidence.json"
+        data, problems = validate_evidence_file(root, evidence_path)
+        if data is None and evidence_mode != "fail":
+            print(
+                "[warn] no evidence artifact (.autonomous/evidence.json); "
+                "generate one with evidence.py before claiming the contract"
+            )
+        elif problems:
+            # A present-but-invalid artifact always fails: stale evidence is
+            # worse than none, because it looks like proof.
+            raise Fatal("evidence artifact invalid:\n  " + "\n  ".join(problems))
+        else:
+            print(f"[*] evidence: valid ({data['kind']}, verdict {data['verdict']})")
+
     print("[+] Local gates passed cleanly.")
     return EXIT_OK
 

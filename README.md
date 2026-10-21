@@ -63,7 +63,7 @@ skills/
     evals/      # 18 files
     examples/   # 2 files
     references/ # 10 files
-    scripts/    # 14 files
+    scripts/    # 15 files
     tests/      # 3 files
   cliproxy-integration/
     SKILL.md

@@ -72,6 +72,14 @@ against a base nobody will merge is not evidence. See
 For Stream A, do not claim the test "fails on main". It passes on main; the
 mutant is the defect. This is Law 1's test-only branch.
 
+The red/green/pass-to-pass triple is an **artifact**, not PR prose:
+`evidence.py mutant|defect` runs all three itself and writes the exits,
+base sha, and covered-file hashes to `.autonomous/evidence.json`;
+`verify-gate` re-validates that artifact (a stale one fails the gate even
+when format/analyze are clean) and runs the test-weakening tripwire against
+the diff base. A pasted "1 passed" line is a claim; the artifact is the
+proof a Sentinel can re-check in seconds.
+
 ## Roles
 
 Who runs a round depends on why the session exists:

@@ -39,6 +39,7 @@ DEFAULT_CONFIG = {
     },
     "machine_budget": {"max_concurrent_tests": 1},
     "pr_required": {"COMPLETED": True, "SOUND": False},
+    "verify_gate": {"weakening": "fail", "evidence": "warn"},
     "fleet": {
         "max_open_prs": 5,
         "max_new_prs_per_day": 6,

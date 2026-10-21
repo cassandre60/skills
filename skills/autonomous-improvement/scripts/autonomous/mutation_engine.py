@@ -456,9 +456,15 @@ def _run_test_cmd(
 ) -> Tuple[int, str, str, float, bool]:
     global _active_pgid
     start = time.time()
+    # A same-size mutant applied within the same second keeps the (mtime,
+    # size) pair a .pyc validates against; without this, a fast Python test
+    # command can execute the unmutated bytecode and report a false survivor.
+    env = dict(os.environ)
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
     try:
         proc = subprocess.Popen(
             argv,
+            env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,

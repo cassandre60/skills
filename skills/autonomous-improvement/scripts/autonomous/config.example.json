@@ -39,6 +39,10 @@
     "COMPLETED": true,
     "SOUND": false
   },
+  "verify_gate": {
+    "weakening": "fail",
+    "evidence": "warn"
+  },
   "fleet": {
     "max_open_prs": 5,
     "max_new_prs_per_day": 6,
