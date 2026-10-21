@@ -302,13 +302,25 @@ commits, no progress for >3h), never by prompting a tab mid-flight.
 
 ## Snapshot accumulator (no-model evidence)
 
-A second `--user` timer, hourly, that needs no model tokens: append to an
-append-only log (`snapshots.log`) the state the orchestrator must not lose to
-a freeze — current `main` sha, open PRs with head branches, per-worktree
-own-commit and dirty counts. While the orchestrator cannot read anything,
-the log keeps accruing; the recovery wake replays it instead of rebuilding
-state from `gh`. Verified 2026-10-20: snapshots caught a full merge wave
-while the orchestrator was frozen.
+A second `--user` timer, hourly, that needs no model tokens: run by
+`assets/orchestrator-snapshot.service` and `assets/orchestrator-snapshot.timer`
+(installed automatically alongside the watchdog by `assets/install-watchdog.sh`),
+invoking `python3 scripts/autonomous/fleet.py snapshot`.
+
+It appends to `snapshots.jsonl` and atomically updates `snapshot.json` with the
+state the orchestrator must not lose to a freeze — current `main` sha, open PRs
+with head branches and check states, and per-worktree own-commit and dirty counts.
+While the orchestrator cannot read anything, the log keeps accruing; the recovery
+wake replays it instead of rebuilding state from `gh`. Verified 2026-10-20:
+snapshots caught a full merge wave while the orchestrator was frozen.
+
+Before dispatching new work, the orchestrator runs:
+```sh
+python3 scripts/autonomous/fleet.py govern --json
+```
+which evaluates the kill switch (`.autonomous/STOP`), WIP caps (`fleet.max_open_prs`),
+and acceptance floors. For fleet reporting, `fleet.py stats --days 14` computes
+acceptance rates and renders the weekly owner digest.
 
 ## Sentinel review checklist (per worker PR)
 

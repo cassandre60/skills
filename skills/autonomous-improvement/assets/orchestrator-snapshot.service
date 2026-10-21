@@ -1,0 +1,8 @@
+[Unit]
+Description=Orchestrator hourly snapshot accumulator (deterministic fleet state)
+
+[Service]
+Type=oneshot
+EnvironmentFile=-%h/.local/share/orchestrator/watchdog.env
+ExecStart=%h/.local/share/orchestrator/snapshot.sh
+TimeoutStartSec=15m

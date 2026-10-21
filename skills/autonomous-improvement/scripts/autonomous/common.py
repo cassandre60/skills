@@ -38,6 +38,14 @@ DEFAULT_CONFIG = {
     },
     "machine_budget": {"max_concurrent_tests": 1},
     "pr_required": {"COMPLETED": True, "SOUND": False},
+    "fleet": {
+        "max_open_prs": 5,
+        "max_new_prs_per_day": 6,
+        "min_acceptance_rate_14d": 0.5,
+        "kill_switch_file": ".autonomous/STOP",
+        "merge_policy": "never",
+        "ledger_mode": "batched",
+    },
 }
 
 
@@ -135,6 +143,24 @@ def main_repo_root(start: Optional[os.PathLike] = None) -> Path:
     if common.name == ".git":
         return common.parent
     return root
+
+
+def worktree_registry_path(root: Path) -> Path:
+    return git_common_dir(root) / "autonomous-worktrees.json"
+
+
+def load_worktree_registry(root: Path) -> List[Dict[str, Any]]:
+    path = worktree_registry_path(root)
+    if not path.exists():
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (json.JSONDecodeError, OSError) as exc:
+        raise Fatal(f"cannot read worktree registry {path}: {exc}")
+    if not isinstance(data, list):
+        raise Fatal(f"worktree registry is not a JSON list: {path}")
+    return [item for item in data if isinstance(item, dict)]
 
 
 def _deep_merge(defaults: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:

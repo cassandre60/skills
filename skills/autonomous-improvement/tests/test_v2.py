@@ -939,6 +939,9 @@ class WatchdogTests(RepoTestCase):
         self.assertTrue(env_file.exists())
         self.assertIn("ORCH_MODEL_LADDER", env_file.read_text())
         self.assertTrue((home / ".local/share/orchestrator/watchdog.sh").exists())
+        snap_unit = home / ".config/systemd/user/orchestrator-snapshot.service"
+        self.assertTrue(snap_unit.exists())
+        self.assertTrue((home / ".local/share/orchestrator/snapshot.sh").exists())
 
     def test_no_session_id_is_a_noop(self):
         state = self.tmp / "state"
@@ -985,6 +988,235 @@ class StreamRegistryTests(unittest.TestCase):
             words = [w.strip(":/()") for w in name.replace("/", " ").split()]
             distinctive = next(word for word in words if len(word) > 3)
             self.assertIn(distinctive, catalog)
+
+
+class FleetTests(RepoTestCase):
+    def make(self, with_origin: bool = False):
+        repo, origin = python_repo(self.tmp, with_origin=with_origin)
+        commit(repo)
+        return repo, origin
+
+    def test_pr_state_evaluates_checks_and_catches_older_sha(self):
+        repo, _ = self.make()
+        payload = [
+            {
+                "number": 1,
+                "title": "Stream A: test PR 1",
+                "headRefName": "task/pr-1",
+                "headRefOid": "commit_sha_1",
+                "checks_sha": "commit_sha_1",
+                "statusCheckRollup": [
+                    {"name": "test", "status": "COMPLETED", "conclusion": "SUCCESS"}
+                ],
+            },
+            {
+                "number": 2,
+                "title": "Stream A: test PR 2",
+                "headRefName": "task/pr-2",
+                "headRefOid": "commit_sha_2_new",
+                "checks_sha": "commit_sha_2_old",
+                "statusCheckRollup": [
+                    {"name": "test", "status": "COMPLETED", "conclusion": "SUCCESS"}
+                ],
+            },
+            {
+                "number": 3,
+                "title": "Stream A: test PR 3",
+                "headRefName": "task/pr-3",
+                "headRefOid": "commit_sha_3",
+                "checks_sha": "commit_sha_3",
+                "statusCheckRollup": [
+                    {"name": "unit-tests", "status": "COMPLETED", "conclusion": "FAILURE"}
+                ],
+            },
+            {
+                "number": 4,
+                "title": "Stream A: test PR 4",
+                "headRefName": "task/pr-4",
+                "headRefOid": "commit_sha_4",
+                "checks_sha": "commit_sha_4",
+                "statusCheckRollup": [
+                    {
+                        "name": "referee-protected-gate",
+                        "status": "COMPLETED",
+                        "conclusion": "FAILURE",
+                    }
+                ],
+            },
+        ]
+        json_path = self.tmp / "prs.json"
+        json_path.write_text(json.dumps(payload) + "\n")
+        bin_dir = path_with_only(self.tmp, ("git",))
+        gh = write(
+            bin_dir / "gh",
+            "#!/bin/sh\nwhile IFS= read -r line; do printf '%s\\n' \"$line\"; done < \"$GH_JSON\"\n",
+        )
+        gh.chmod(0o755)
+        env = env_with_path(bin_dir, GH_JSON=str(json_path))
+
+        result = script(repo, "fleet.py", "pr-state", "--json", env=env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = json.loads(result.stdout)
+        by_pr = {item["pr"]: item for item in data}
+
+        self.assertEqual(by_pr[1]["checks"], "green")
+        self.assertEqual(by_pr[1]["head_sha"], "commit_sha_1")
+
+        # Law 1 / Issue #11: ONLY green run is for older sha -> MUST BE PENDING, NEVER GREEN
+        self.assertEqual(by_pr[2]["checks"], "pending")
+        self.assertEqual(by_pr[2]["head_sha"], "commit_sha_2_new")
+        self.assertEqual(by_pr[2]["checks_sha"], "commit_sha_2_old")
+
+        self.assertEqual(by_pr[3]["checks"], "red")
+        self.assertEqual(by_pr[3]["red_kind"], "in-diff")
+
+        self.assertEqual(by_pr[4]["checks"], "red")
+        self.assertEqual(by_pr[4]["red_kind"], "referee")
+
+    def test_snapshot_records_dirty_worktree_without_gh(self):
+        repo, origin = init_repo(self.tmp, name="main-repo", with_origin=True)
+        install_scripts(repo)
+        write_config(repo)
+        commit(repo, "init")
+        push(repo)
+
+        result_wt = script(
+            repo,
+            "orchestrator.py",
+            "create-worktree",
+            "--slug",
+            "task-alpha",
+            "--type",
+            "test",
+        )
+        self.assertEqual(result_wt.returncode, 0, result_wt.stderr)
+        wt_path = self.tmp / "main-repo-task-alpha"
+        self.assertTrue(wt_path.exists())
+
+        write(wt_path / "dirty.txt", "untracked dirty content\n")
+
+        bin_dir = path_with_only(self.tmp, ("git",))
+        env = env_with_path(bin_dir)
+
+        state_dir = self.tmp / "state"
+        result_snap = script(
+            repo, "fleet.py", "snapshot", "--state-dir", str(state_dir), env=env
+        )
+        self.assertEqual(result_snap.returncode, 0, result_snap.stderr)
+        self.assertIn("gh", (result_snap.stdout + result_snap.stderr).lower())
+
+        snap_file = state_dir / "snapshot.json"
+        self.assertTrue(snap_file.exists())
+        snap_data = json.loads(snap_file.read_text())
+
+        self.assertIn("main_sha", snap_data)
+        self.assertEqual(snap_data["open_prs"], [])
+        wts = snap_data["worktrees"]
+        self.assertEqual(len(wts), 1)
+        self.assertEqual(wts[0]["slug"], "task-alpha")
+        self.assertTrue(wts[0]["is_dirty"])
+        self.assertGreaterEqual(wts[0]["dirty_count"], 1)
+
+    def test_govern_enforces_wip_cap_and_kill_switch(self):
+        repo, _ = self.make()
+        bin_dir = path_with_only(self.tmp, ("git",))
+        gh = write(
+            bin_dir / "gh",
+            "#!/bin/sh\nwhile IFS= read -r line; do printf '%s\\n' \"$line\"; done < \"$GH_JSON\"\n",
+        )
+        gh.chmod(0o755)
+
+        # 5 open PRs with max_open_prs: 5 -> blocked
+        five_prs = [
+            {"number": i, "headRefName": f"pr-{i}", "headRefOid": f"sha-{i}"}
+            for i in range(1, 6)
+        ]
+        json_path = self.tmp / "prs_gov.json"
+        json_path.write_text(json.dumps(five_prs) + "\n")
+        env = env_with_path(bin_dir, GH_JSON=str(json_path))
+
+        res_blocked = script(repo, "fleet.py", "govern", "--json", env=env)
+        self.assertEqual(res_blocked.returncode, 1)
+        data_blocked = json.loads(res_blocked.stdout)
+        self.assertFalse(data_blocked["dispatch"])
+        self.assertIn("5 >= 5", data_blocked["reason"])
+
+        # 4 open PRs (one merged) -> allowed
+        four_prs = five_prs[:4]
+        json_path.write_text(json.dumps(four_prs) + "\n")
+        res_allowed = script(repo, "fleet.py", "govern", "--json", env=env)
+        self.assertEqual(res_allowed.returncode, 0)
+        data_allowed = json.loads(res_allowed.stdout)
+        self.assertTrue(data_allowed["dispatch"])
+
+        # Kill switch present -> blocked even with 0 PRs
+        write(repo / ".autonomous" / "STOP", "halt\n")
+        res_kill = script(repo, "fleet.py", "govern", "--json", env=env)
+        self.assertEqual(res_kill.returncode, 1)
+        data_kill = json.loads(res_kill.stdout)
+        self.assertFalse(data_kill["dispatch"])
+        self.assertIn("kill switch", data_kill["reason"].lower())
+
+    def test_stats_computes_acceptance_rate(self):
+        repo, _ = self.make()
+        bin_dir = path_with_only(self.tmp, ("git",))
+        gh = write(
+            bin_dir / "gh",
+            "#!/bin/sh\nwhile IFS= read -r line; do printf '%s\\n' \"$line\"; done < \"$GH_JSON\"\n",
+        )
+        gh.chmod(0o755)
+
+        prs_stats = [
+            {
+                "number": 1,
+                "state": "MERGED",
+                "mergedAt": "2026-10-21T01:00:00Z",
+                "title": "Stream A: pr1",
+                "body": "Model: TestModel-A",
+            },
+            {
+                "number": 2,
+                "state": "MERGED",
+                "mergedAt": "2026-10-21T02:00:00Z",
+                "title": "Stream A: pr2",
+                "body": "Model: TestModel-A",
+            },
+            {
+                "number": 3,
+                "state": "MERGED",
+                "mergedAt": "2026-10-21T03:00:00Z",
+                "title": "Stream B: pr3",
+                "body": "Model: TestModel-B",
+            },
+            {
+                "number": 4,
+                "state": "MERGED",
+                "mergedAt": "2026-10-21T04:00:00Z",
+                "title": "Stream B: pr4",
+                "body": "Model: TestModel-B",
+            },
+            {
+                "number": 5,
+                "state": "CLOSED",
+                "mergedAt": None,
+                "closedAt": "2026-10-21T05:00:00Z",
+                "title": "Stream A: pr5",
+                "body": "Model: TestModel-A",
+            },
+        ]
+        json_path = self.tmp / "prs_stats.json"
+        json_path.write_text(json.dumps(prs_stats) + "\n")
+        env = env_with_path(bin_dir, GH_JSON=str(json_path))
+
+        res = script(repo, "fleet.py", "stats", "--days", "0", "--json", env=env)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        stats = json.loads(res.stdout)
+        self.assertEqual(stats["prs_opened"], 5)
+        self.assertEqual(stats["prs_merged"], 4)
+        self.assertEqual(stats["prs_closed_unmerged"], 1)
+        self.assertEqual(stats["acceptance_rate"], 0.8)
+        self.assertIn("A (Mutation)", stats["by_stream"])
+        self.assertIn("TestModel-A", stats["by_model"])
 
 
 class CandidateOrderingTests(unittest.TestCase):
@@ -1036,7 +1268,7 @@ class DocumentationInvariantTests(unittest.TestCase):
             self.assertNotIn("fvm", text.lower(), str(path))
 
     def test_no_duplicate_top_level_scripts(self):
-        for name in ("ledger.py", "mutation_engine.py", "orchestrator.py"):
+        for name in ("fleet.py", "ledger.py", "mutation_engine.py", "orchestrator.py"):
             self.assertFalse((SKILL_ROOT / "scripts" / name).exists(), name)
 
     def test_referenced_files_exist(self):
@@ -1051,11 +1283,15 @@ class DocumentationInvariantTests(unittest.TestCase):
             "references/stack-adapters.md",
             "references/examples.md",
             "assets/watchdog.sh",
+            "assets/snapshot.sh",
             "assets/orchestrator-watchdog.service",
             "assets/orchestrator-watchdog.timer",
+            "assets/orchestrator-snapshot.service",
+            "assets/orchestrator-snapshot.timer",
             "assets/install-watchdog.sh",
             "assets/gitattributes.fragment.txt",
             "assets/gitignore.fragment.txt",
+            "scripts/autonomous/fleet.py",
         ):
             self.assertTrue((SKILL_ROOT / relative).exists(), relative)
 

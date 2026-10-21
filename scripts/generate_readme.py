@@ -108,7 +108,7 @@ def render_layout() -> str:
         for sub in subdirs:
             count = sum(
                 1 for p in sub.rglob("*") if p.is_file() and not any(
-                    part.startswith(".") for part in p.relative_to(sub).parts
+                    part.startswith(".") or part == "__pycache__" for part in p.relative_to(sub).parts
                 )
             )
             noun = "file" if count == 1 else "files"

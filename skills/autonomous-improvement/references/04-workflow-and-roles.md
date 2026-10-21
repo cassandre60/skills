@@ -85,6 +85,12 @@ The Orchestrator:
   else: find the state dir, learn and write its own session id, arm the wake
   grid, start or install the watchdog (or degrade to beats-only), read the
   journal tail — only then decide anything about the queue;
+- **governs the dispatch rate (step 0 of every wake)**: runs
+  `python3 scripts/autonomous/fleet.py govern --json`. If a kill-switch file is
+  present, or open fleet PRs have reached `fleet.max_open_prs` (default 5), or the
+  14-day acceptance rate is below floor, **do not dispatch new workers** — spend
+  the wake tending existing PRs (fixes or owner asks in the `tend` queue).
+  Tending the queue is work; generating into a full queue is the new parking;
 - derives the queue from `ledger.py next` plus the open-PR list, and
   re-checks both immediately before each dispatch (main moves; see `07`);
 - dispatches at most 3 worker subagents at a time (tune to capacity), each
@@ -150,7 +156,8 @@ sit red and the fleet looks busy while nothing converges.
 5. **Per-PR state line**, kept in the journal or state dir:
    `PR# | head sha | checks | owner-ask pending? | iterations`. A frozen or
    restarted session reads this list instead of guessing, and a PR whose line
-   says `owner-ask pending` is re-asked, not forgotten.
+   says `owner-ask pending` is re-asked, not forgotten. Emitted deterministically
+   by `python3 scripts/autonomous/fleet.py pr-state --json` (0 model tokens).
 6. **Nothing red goes quiet.** If a PR has been red for two wakes without an
    owner answer, say so in the owner report — in plain terms, with what the
    red check is and what the owner is being asked to accept.
