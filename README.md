@@ -60,7 +60,7 @@ skills/
     LICENSE
     README.md
     assets/     # 12 files
-    evals/      # 32 files
+    evals/      # 36 files
     examples/   # 2 files
     references/ # 10 files
     scripts/    # 15 files
