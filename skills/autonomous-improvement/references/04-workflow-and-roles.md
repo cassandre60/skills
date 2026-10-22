@@ -165,6 +165,18 @@ sit red and the fleet looks busy while nothing converges.
 6. **Nothing red goes quiet.** If a PR has been red for two wakes without an
    owner answer, say so in the owner report — in plain terms, with what the
    red check is and what the owner is being asked to accept.
+9. **An instrument that reports false negatives must be fixed before its
+   output is trusted.** Two failures in one day had the same shape: the
+   *measurement* was wrong, not the code. A metrics query silently fell back
+   to a field set without `mergedAt` and reported "200 PRs opened, 0 merged,
+   0% acceptance" for a fleet that had merged twenty; and the shared test
+   scope measured every string about twice as wide as the app draws it, so
+   22 of 24 reported layout overflows were artefacts. Before you act on an
+   instrument's output, ask what it would report if the instrument were
+   wrong — and when it *is* wrong, fix it before drawing conclusions from
+   it. A green run of a broken instrument is worse than a red one, because
+   it is trusted.
+
 8. **Batched ledger rows conflict with each other.** Every ledger row is
    inserted at the top of the same table, so two ledger branches collide on
    the same lines. When the orchestrator's ledger branch merges a base that
