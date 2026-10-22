@@ -53,6 +53,19 @@ DEFAULT_CONFIG = {
         "kill_switch_file": ".autonomous/STOP",
         "merge_policy": "never",
         "ledger_mode": "batched",
+        "doctor": {
+            "enforce": False,
+            "require_branch_protection": True,
+            "require_timer": False,
+            "forbidden_token_scopes": [
+                "admin:org",
+                "delete_repo",
+                "admin:public_key",
+                "admin:repo_hook",
+            ],
+            "min_free_gb": 5,
+            "max_clock_skew_seconds": 300,
+        },
     },
 }
 

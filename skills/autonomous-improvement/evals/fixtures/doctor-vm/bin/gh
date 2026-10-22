@@ -1,0 +1,31 @@
+#!/bin/bash
+# Stub `gh` for the fleet doctor eval fixture (issue #19).
+# Scenarios are staged from the fixture README; scopes come from the file
+# named by $DOCTOR_STUB_SCOPES so one stub covers good/bad.
+if [ -n "${DOCTOR_STUB_SCOPES_FILE:-}" ] && [ -f "$DOCTOR_STUB_SCOPES_FILE" ]; then
+  SCOPES="$(cat "$DOCTOR_STUB_SCOPES_FILE")"
+else
+  SCOPES="'repo'"
+fi
+
+case "$1 $2" in
+  "auth status")
+    echo "github.com"
+    echo "  ✓ Logged in to github.com account cassandre60 (keyring)"
+    echo "  - Active account: true"
+    echo "  - Token scopes: ${SCOPES}"
+    exit 0
+    ;;
+  "api "*)
+    # Branch protection lookup: the good fixture has protection with a
+    # required approving review count, so the agent cannot merge.
+    if [ "${DOCTOR_STUB_PROTECTION:-present}" = "present" ]; then
+      echo '{"required_pull_request_reviews": {"required_approving_review_count": 1}}'
+      exit 0
+    fi
+    echo '{"message": "Branch not protected"}' >&2
+    exit 404
+    ;;
+esac
+echo "stub gh: unhandled: $*" >&2
+exit 1

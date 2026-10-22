@@ -48,8 +48,8 @@ A dead pool never parks a task: the task is re-dispatched on a live model —
 the session's own, dispatched unpinned, first — and when the tracked targets
 run out, the next candidates are the files with no ledger row yet.
 
-Tending the queue is work; generating into a full queue is the new parking:
-`scripts/autonomous/fleet.py govern` checks open-PR caps and kill-switches.
+Tending the queue is work; generating into a full queue is the new parking.
+`fleet.py govern` checks caps/kill-switches; `fleet.py doctor` preflights scopes/protection/linger (report, don't dispatch).
 
 ## The five laws
 

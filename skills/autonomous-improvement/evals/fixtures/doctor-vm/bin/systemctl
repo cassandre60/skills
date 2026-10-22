@@ -1,0 +1,8 @@
+#!/bin/bash
+# Stub `systemctl` for the fleet doctor eval fixture (issue #19).
+if [ "${DOCTOR_STUB_TIMER:-active}" = "active" ]; then
+  echo "active"
+  exit 0
+fi
+echo "inactive"
+exit 0

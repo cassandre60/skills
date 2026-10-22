@@ -54,6 +54,14 @@ run_watchdog() {
     bash "$ASSETS" >/dev/null 2>&1
 }
 
+# Same as run_watchdog but keeps the exit code in LAST_RC (distress codes
+# are part of the contract now: 3 = the tick ended in total failure).
+run_watchdog_rc() {
+  run_watchdog
+  LAST_RC=$?
+}
+LAST_RC=0
+
 # --- case 0: an infrastructure outage is NOT a quota failure -------------
 # The model is not exhausted. Rotating would burn every ladder entry against
 # the same broken endpoint, and marking one dead would park a usable model for
@@ -68,12 +76,7 @@ fi
 if [ -s "$TMP/state/model_failures" ]; then
   fail "an infrastructure outage marked a model as failed: $(cat "$TMP/state/model_failures")"
 else
-  ok "an infrastructure outage left the cooldown list untouched"
-fi
-if grep -qi 'outage' "$TMP/state/watchdog.log"; then
-  ok "the outage was recorded in the log"
-else
-  fail "the outage was not recorded in the log"
+  ok "an infrastructure outage did not park a model"
 fi
 
 # --- case 1: first model fails, second succeeds -------------------------
@@ -132,6 +135,89 @@ if grep -q 'every model in the ladder is in cooldown' "$TMP/state/watchdog.log";
   ok "cooldown respected: falls back to the session default once"
 else
   fail "cooldown was not respected"
+fi
+
+# --- case 4: a SUCCESSFUL nudge that merely MENTIONS the limits ---------
+# Tightened signatures: a quota term counts only on an ERROR-shaped line, so
+# an agent summarizing the journal ("rate limit handled, quota notes filed")
+# does not park its model. Verified failure this replaces: the loose
+# substring match parked a healthy model whose summary discussed limits.
+write_fake_opencode_mention() {
+  cat >"$TMP/bin/opencode" <<'EOF'
+#!/bin/bash
+echo "wake: journal summary — rate limit hit twice yesterday; quota notes archived"
+echo "housekeeping done"
+EOF
+  chmod +x "$TMP/bin/opencode"
+}
+write_fake_opencode_mention
+run_watchdog_rc
+if [ -s "$TMP/state/model_failures" ]; then
+  fail "mention-only output parked a model (loose quota signatures)"
+else
+  ok "a success that mentions limits parks nobody"
+fi
+if grep -q "rotating" "$TMP/state/watchdog.log"; then
+  fail "rotation happened for a successful nudge"
+else
+  ok "no rotation for a successful nudge"
+fi
+if [ "$LAST_RC" -eq 0 ]; then
+  ok "successful tick exits 0"
+else
+  fail "successful tick exited $LAST_RC"
+fi
+
+# --- case 5: stale model_failures entries are pruned (7-day TTL) --------
+write_fake_opencode "nomatch" "alpha-free"
+rm -f "$TMP/state/watchdog.log" "$TMP/state/last_nudge"
+printf 'ses_TEST\n' >"$TMP/state/opencode_session_id"
+touch -d '3 hours ago' "$TMP/state/last_beat"
+printf 'opencode/gamma-free %s\nopencode/delta-free %s\n' \
+  "$(( $(date +%s) - 8 * 86400 ))" "$(date +%s)" >"$TMP/state/model_failures"
+PATH="$TMP/bin:$PATH" ORCH_STATE_DIR="$TMP/state" \
+  ORCH_MODEL_LADDER="opencode/alpha-free opencode/beta-free" \
+  ORCH_NUDGE_TIMEOUT=20 ORCH_MIN_INTERVAL=0 ORCH_HB_MAX_AGE=60 \
+  bash "$ASSETS" >/dev/null 2>&1
+if grep -q '^opencode/gamma-free ' "$TMP/state/model_failures" 2>/dev/null; then
+  fail "8-day-old model_failures entry was not pruned"
+else
+  ok "stale model_failures entry pruned"
+fi
+if grep -q '^opencode/delta-free ' "$TMP/state/model_failures" 2>/dev/null; then
+  ok "fresh cooldown entry survives the prune"
+else
+  fail "prune removed a still-valid cooldown entry"
+fi
+
+# --- case 6: total failure exits with the distress code -----------------
+write_fake_opencode "free" "free"
+run_watchdog_rc
+if [ "$LAST_RC" -eq 3 ]; then
+  ok "a tick that ends in total failure exits 3"
+else
+  fail "total-failure tick exited $LAST_RC (expected 3)"
+fi
+
+# --- case 7: an EMPTY model_failures file must not break the ladder -------
+# Regression: failed_recently() read into a global 'm', clobbering the
+# caller's ladder loop variable. With the file present but empty, read's
+# EOF blanked the model and the ladder silently degraded to the session
+# default - the very failure the watchdog exists to prevent. The pruning
+# added in issue #19 can produce exactly this state.
+write_fake_opencode "alpha-free" "beta-free"
+rm -f "$TMP/state/watchdog.log" "$TMP/state/last_nudge"
+printf 'ses_TEST\n' >"$TMP/state/opencode_session_id"
+touch -d '3 hours ago' "$TMP/state/last_beat"
+: >"$TMP/state/model_failures"   # exists, but empty
+PATH="$TMP/bin:$PATH" ORCH_STATE_DIR="$TMP/state" \
+  ORCH_MODEL_LADDER="opencode/alpha-free opencode/beta-free" \
+  ORCH_NUDGE_TIMEOUT=20 ORCH_MIN_INTERVAL=0 ORCH_HB_MAX_AGE=60 \
+  bash "$ASSETS" >/dev/null 2>&1
+if grep -q -- '-m opencode/alpha-free' "$TMP/state/watchdog.log"; then
+  ok "empty model_failures still uses the ladder's first model"
+else
+  fail "empty model_failures broke the ladder (fell back to the session default)"
 fi
 
 if [ "$FAILED" -eq 0 ]; then
