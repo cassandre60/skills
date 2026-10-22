@@ -30,6 +30,19 @@ before anything else. First turn, in order:
 5. **Read the journal tail** (and the snapshots log after any gap):
    ledger status, open PRs, in-flight tabs supersede session memory —
    right after a restart this file is the fastest reliable read.
+5b. **Check that the tooling is configured**, before deriving the queue from
+   it. `ledger.py next` exits non-zero when the candidate list is empty and
+   names the key to set, but a fleet that never ran it would read "no eligible
+   targets" as an exhausted queue. One call settles it:
+
+   ```sh
+   python3 scripts/autonomous/ledger.py next --stream A --limit 3
+   ```
+
+   A candidate with a **mapped test that does not exist** means the mapping
+   rule is wrong for this repo — the same failure as an empty candidate list,
+   one step later, and equally silent. Fix the rule before dispatching: a
+   fleet whose queue is a guess is a fleet that parks itself.
 
 Only then derive the queue (`ledger.py next` + open PRs) and dispatch.
 
@@ -129,7 +142,45 @@ opencode run --auto -s "$1" ${3:+-m "$3"} "$2"
 permission prompt. For another harness, read its docs for the headless
 resume-session flags and set `ORCH_RESUME_CMD`; do not copy opencode flags.
 
-### Model ladder
+### The dispatch prompt: short, and carrying its pre-checks
+
+Two lessons from one live session, both about the prompt itself.
+
+**Keep it short.** Three workers died with *no output at all* — no worktree,
+no PR, no branch — and every one of them had been dispatched with a brief of
+150+ lines of context-dense instructions. Every worker that survived had a
+shorter one, and the pool was healthy throughout. A brief that restates the
+reference text is a brief that can exhaust a context window before the work
+starts. The brief states **the task, the evidence contract, the machine
+budget, and the traps that apply to that task** — and points at the
+references for everything else.
+
+**Put the pre-checks in the brief, not in the orchestrator's memory.** Three
+workers corrected a premise the brief asserted, and each correction saved a
+round:
+
+- a worker was dispatched to audit a file that the **ledger pre-check** found
+  already audited at the same blob. It ran a second round instead (measuring
+  the suite's real kill rate rather than inferring it);
+- a worker was dispatched to audit "the UCI protocol parser" and found the
+  file is the **move-path encoding**, the parser being a different,
+  already-audited file. It said so, ran the round that was actually worth
+  running, and pointed the follow-up at the right file;
+- a worker found a file with **no test file at all**, invisible to the queue
+  because the mapping resolved it to a path that does not exist.
+
+So every dispatch brief carries:
+
+```sh
+python3 scripts/autonomous/ledger.py check --target <target>   # already audited?
+```
+
+and a line that says what to do when it says yes (run a **second** round:
+measure the existing suite's real kill rate, then close the families the
+engine cannot reach) — and says that **correcting the brief's premise is the
+expected outcome** when the premise is wrong.
+
+## Model ladder
 
 `ORCH_MODEL_LADDER` is a space-separated list of model ids, most-preferred
 first. The watchdog walks it **within one tick**: a nudge whose output carries
@@ -257,7 +308,10 @@ Put this in every dispatch prompt:
 
 1. **Checkpoint with local commits.** After each unit (one mutation shard, one
    batch of conversion sites, one audit row), stage by name and commit locally.
-   A cancelled tab leaves a resumable base.
+   A cancelled tab leaves a resumable base. **Stage new files by name too** —
+   a new test file that was never `git add`ed is in no commit, so the
+   checkpoint does not cover it, and an untracked new file is exactly what a
+   killed tab leaves behind.
 2. **Scope ceiling.** Give each tab an explicit cap ("first ~15 of ~30 sites,
    then stop and report").
 3. **PARTIAL beats death.** After 2–3 consecutive quota failures, finish the
@@ -266,6 +320,21 @@ Put this in every dispatch prompt:
 4. **Report quota episodes** so the orchestrator can rotate models.
 
 ## Model rotation
+
+**Three failure classes, three different responses.** Confusing them is how a
+fleet parks a healthy model or burns a ladder against a broken endpoint.
+
+| Class | Examples | Response |
+|---|---|---|
+| **Quota** | `rate limit`, `429`, `insufficient balance`, `balance is at $0` | **Rotate** the model; record the pool as failed (cooldown). |
+| **Outage** | `Endpoint is unavailable`, `upstream request failed`, `503`, `connection reset`, `overloaded` | **Do not rotate, do not park a pool.** The model is not exhausted: every ladder entry would hit the same broken endpoint, and marking one dead parks a usable model for an hour. Log it and let the next tick retry. |
+| **Task failure** | the worker died with its work intact | Forensics, then re-dispatch (see *Failure anatomy*). |
+
+The watchdog's two signature lists keep the classes apart: `QUOTA_RE` marks a
+model failed, `OUTAGE_RE` ends the tick with the cooldown list untouched.
+"overloaded" belongs to the **outage** list — a gateway saying "overloaded" is
+usually sick, not out of quota. (Verified 2026-10-22: a fleet lost two tabs in
+one tick to `Endpoint is unavailable` while the pool was healthy.)
 
 A quota error is a routing decision, not a retry decision. The orchestrator
 rotates the **model**, it never re-dispatches the one that just failed.
@@ -403,6 +472,12 @@ When a fleet is cancelled (rate limits, harness restart):
      instruction (kill its processes, restore the worktree, do not push) —
    and verify the result yourself.
 
+0c. **Preserve a dead tab's work before touching its worktree.** When a tab is
+    confirmed dead, copy its **dirty and untracked** files to the state dir
+    (and a second copy elsewhere) *before* restoring the tree, removing the
+    worktree, or re-dispatching into it. A dead tab's untracked new test file
+    is in no commit and no patch, and it is the work most likely to be lost:
+    a live session left 46 KB of new tests that way.
 1. Inventory what survived: worktrees, journal, open PRs/issues, ledger rows.
 2. Never rerun codegen in an existing worktree. Check `git status`/branch first.
 3. Re-arm the wake grid in the first half of the relaunch turn, **then** dispatch.

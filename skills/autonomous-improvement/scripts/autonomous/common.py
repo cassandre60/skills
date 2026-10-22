@@ -16,6 +16,14 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+# Ledger status vocabulary. An audit says "this is done"; a disposition says
+# "stop asking". The parser accepts ONLY these bare tokens: any extra text in
+# the Status cell makes the row invisible, which is why the sets live here and
+# are asserted by the validator.
+AUDITED_STATUSES = {"COMPLETED", "SOUND"}
+DISPOSITION_STATUSES = {"REJECTED", "WONTFIX", "SUPERSEDED"}
+STATUSES = ("COMPLETED", "SOUND", "REJECTED", "WONTFIX", "SUPERSEDED")
+
 EXIT_OK = 0
 EXIT_NEGATIVE = 1
 EXIT_USAGE = 2
@@ -360,11 +368,24 @@ def _sorted_by_priority(paths: Iterable[str], priorities: Iterable[str]) -> List
 
 
 def candidate_paths(root: Path, cfg: Dict[str, Any], stream: str) -> List[str]:
+    """The candidate source files for a stream.
+
+    An empty ``include`` list means the fleet is **not configured**, not that
+    there is no work. Returning an empty list here would make ``next`` answer
+    "no eligible targets remain" - a confident, wrong, green answer that looks
+    exactly like an exhausted queue. So it is a configuration error, named.
+    """
     section = cfg.get("candidates", {}).get(stream, {})
     include = section.get("include") or []
     exclude = section.get("exclude") or []
     if not include:
-        return []
+        path = config_path(root, None)
+        where = f" (no config file at {path})" if not path.exists() else ""
+        raise UsageError(
+            f"no candidates configured for stream {stream}: set "
+            f"candidates.{stream}.include in {path}{where}. "
+            "An empty list means 'not configured', not 'nothing to do'."
+        )
     paths = [p for p in ls_files(root) if match_any(p, include) and not match_any(p, exclude)]
     return _sorted_by_priority(paths, section.get("priority_paths") or [])
 
