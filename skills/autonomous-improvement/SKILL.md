@@ -6,14 +6,19 @@ description: Run falsifiable, high-signal improvement cycles on a codebase inste
 # Autonomous Improvement
 
 Spend tokens on work that can be **mechanically falsified**, not on renames,
-prose, or checkbox tests. Two streams are active:
+prose, or checkbox tests. Ten streams are active:
 
-- **A — mutation testing:** find behavior the suite does not protect.
-- **B — adversarial test audit:** find tests that cannot fail, assert mocks,
-  sleep instead of synchronizing, or measure in a harness unlike production.
+- **A — mutation testing:** behavior the suite does not protect.
+- **B — adversarial test audit:** tests that cannot fail, assert mocks, or sleep instead of syncing.
+- **C — property / fuzz:** recorded seeds, shrunk counterexamples retained (`fuzz_shrink.py`).
+- **E — defect repair:** issue intake, a repro that must be red on main (`repair.py`).
+- **F — flake & determinism:** CI-history finder plus an N-run oracle.
+- **G — performance:** bench delta **and** output equivalence, both mandatory (`perf_gate.py`).
+- **H+K — security & dependency:** stub-advisory audits, redacting secret scan, oracle-first bumps (`advisory.py`).
+- **I — docs & spec truth:** runnable examples, symbol/spec drift (`docs_truth.py`).
+- **L — meta (gated):** own kill switch, replay-gated claims, L4 issue-only (`meta.py`).
 
-Each round produces at most one small, evidence-backed PR. If there is no
-falsifiable gap, stop; that is a valid result.
+Each round produces at most one small, evidence-backed PR; no gap is a valid result.
 
 ## Who runs the round
 
@@ -142,18 +147,16 @@ The ledger is a git-tracked markdown table:
   appends merge without conflicts, and the Status cell must be the bare token.
 - The hash is the blob at HEAD; `record` warns if the target is dirty.
 
-## Beyond testing (planned streams C–L)
+## Beyond testing (planned streams D, J)
 
-Testing is the bootstrap, not the ceiling: streams C–L generalize the same
-five laws to fuzzing, defect repair, flakiness, performance, security, docs
-truthfulness, simplification, dependency evolution, and — capped and
-eval-gated — the fleet improving itself. Each must pass the stream contract
-in `references/08-recursive-self-improvement.md` (deterministic finder,
-mechanical oracle, content-addressed memory, bounded blast radius, referee
-isolation) before its letter unlocks; `ledger.py` rejects unshipped streams
-until then (A, B, and F are live; C, D, E, G–L stay locked).
-Do not start work under a locked letter or promise it in a PR; offer
-an unlocked stream (A/B/F), or file the finding as an evidence-backed issue.
+Testing is the bootstrap, not the ceiling. The remaining streams generalize
+the same five laws to migration safety and simplification. Each must pass
+the stream contract in `references/08-recursive-self-improvement.md`
+(deterministic finder, mechanical oracle, content-addressed memory, bounded
+blast radius, referee isolation) before its letter unlocks; `ledger.py`
+rejects them until then. Do not start work under a locked letter or promise
+it in a PR; offer an unlocked stream, or file the finding as an
+evidence-backed issue.
 
 ## Unattended operation (advanced)
 
@@ -176,7 +179,7 @@ carry quota independent of the others — and must actually be free.
 | `references/03-streams-and-triage.md` | Deeper Stream A/B checklists and planned streams |
 | `references/04-workflow-and-roles.md` | The one canonical per-task protocol and evidence contract |
 | `references/05-unattended-operation.md` | Heartbeats, watchdog, quotas, fleet coordination (advanced) |
-| `references/06-moving-main.md` | Working on a repo that keeps merging; stale-base traps |
+| `references/07-moving-main.md` | Working on a repo that keeps merging; stale-base traps |
 | `references/gates-and-vocabulary.md` | Gate ids, optional vocabulary, and the "no gates yet" fallback |
 | `references/stack-adapters.md` | Concrete commands per stack |
 | `references/examples.md` | One end-to-end Stream A example and a good/bad Stream B finding |

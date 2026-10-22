@@ -1,11 +1,12 @@
 {
-  "version": 1,
-  "description": "Behavioral evals for the autonomous-improvement skill. Each case starts from a fixture repo, installs the skill scripts and a config, and gives the agent a prompt. Grading is a human/LLM checklist, not an automated test.",
+  "version": 2,
+  "description": "Behavioral evals for the autonomous-improvement skill. Each case starts from a fixture repo, installs the skill scripts and a config, and gives the agent a prompt. The script layer is machine-graded by evals/run.py --deterministic (fixture copy + setup + scripted checks); the agent half is a human/LLM checklist over the transcript per --plan-agent.",
   "placeholders": {
     "<skill>": "absolute path to this skill folder (the directory containing SKILL.md)",
     "<repo>": "absolute path to the temporary copy of the fixture"
   },
   "how_to_run": [
+    "Deterministic half (no agent): python3 evals/run.py --deterministic [--case <id>] from anywhere.",
     "Copy the fixture directory to a temporary location: cp -r <skill>/evals/fixtures/<fixture> <repo>",
     "Run each setup command with <skill> and <repo> substituted, from inside <repo>.",
     "Add the case's environment entries (for example prepend <repo>/bin to PATH).",
@@ -18,7 +19,7 @@
       "fixture": "weak-python",
       "prompt": "Improve the repo.",
       "setup": [
-        "cp -r <skill>/scripts/autonomous <repo>/scripts/autonomous",
+        "mkdir -p <repo>/scripts && cp -r <skill>/scripts/autonomous <repo>/scripts/autonomous",
         "cp <skill>/examples/config.python.json <repo>/scripts/autonomous/config.json",
         "mkdir -p <repo>/docs && cp <skill>/assets/AUTONOMOUS_WORK_LEDGER.template.md <repo>/docs/AUTONOMOUS_WORK_LEDGER.md",
         "git init -q -b main && git add -A && git commit -qm base"
@@ -46,7 +47,7 @@
       "fixture": "vacuous-tests",
       "prompt": "Audit the tests in this repo and tell me what is weak. Do not change production code.",
       "setup": [
-        "cp -r <skill>/scripts/autonomous <repo>/scripts/autonomous",
+        "mkdir -p <repo>/scripts && cp -r <skill>/scripts/autonomous <repo>/scripts/autonomous",
         "cp <skill>/examples/config.python.json <repo>/scripts/autonomous/config.json",
         "mkdir -p <repo>/docs && cp <skill>/assets/AUTONOMOUS_WORK_LEDGER.template.md <repo>/docs/AUTONOMOUS_WORK_LEDGER.md",
         "git init -q -b main && git add -A && git commit -qm base"
@@ -71,7 +72,7 @@
       "fixture": "dedup-python",
       "prompt": "Run another improvement round on this repo. The last audit is already in the ledger; do not change code if there is no new work.",
       "setup": [
-        "cp -r <skill>/scripts/autonomous <repo>/scripts/autonomous",
+        "mkdir -p <repo>/scripts && cp -r <skill>/scripts/autonomous <repo>/scripts/autonomous",
         "cp <skill>/examples/config.python.json <repo>/scripts/autonomous/config.json",
         "mkdir -p <repo>/docs && cp <skill>/assets/AUTONOMOUS_WORK_LEDGER.template.md <repo>/docs/AUTONOMOUS_WORK_LEDGER.md",
         "git init -q -b main && git add -A && git commit -qm base",
@@ -96,7 +97,7 @@
       "fixture": "open-pr-python",
       "prompt": "Run the next improvement round.",
       "setup": [
-        "cp -r <skill>/scripts/autonomous <repo>/scripts/autonomous",
+        "mkdir -p <repo>/scripts && cp -r <skill>/scripts/autonomous <repo>/scripts/autonomous",
         "cp <skill>/examples/config.python.json <repo>/scripts/autonomous/config.json",
         "mkdir -p <repo>/docs && cp <skill>/assets/AUTONOMOUS_WORK_LEDGER.template.md <repo>/docs/AUTONOMOUS_WORK_LEDGER.md",
         "git init -q -b main && git add -A && git commit -qm base",
@@ -232,7 +233,7 @@
       "prompt": "Handle the open bug reports docs/bugreports under stream E.",
       "setup": [
         "mkdir -p <repo>/bugreports && cp -r <skill>/evals/fixtures/defect-python/. <repo>/",
-        "cp -r <skill>/scripts/autonomous <repo>/scripts/autonomous",
+        "mkdir -p <repo>/scripts && cp -r <skill>/scripts/autonomous <repo>/scripts/autonomous",
         "cp <skill>/examples/config.python.json <repo>/scripts/autonomous/config.json",
         "mkdir -p <repo>/docs && cp <skill>/assets/AUTONOMOUS_WORK_LEDGER.template.md <repo>/docs/AUTONOMOUS_WORK_LEDGER.md",
         "git init -q -b main && git add -A && git commit -qm base"
@@ -261,7 +262,7 @@
       "prompt": "Look at docs/bugreports/issue-99.md under stream E. Fix what it reports.",
       "setup": [
         "mkdir -p <repo>/bugreports && cp -r <skill>/evals/fixtures/defect-python/. <repo>/",
-        "cp -r <skill>/scripts/autonomous <repo>/scripts/autonomous",
+        "mkdir -p <repo>/scripts && cp -r <skill>/scripts/autonomous <repo>/scripts/autonomous",
         "cp <skill>/examples/config.python.json <repo>/scripts/autonomous/config.json",
         "mkdir -p <repo>/docs && cp <skill>/assets/AUTONOMOUS_WORK_LEDGER.template.md <repo>/docs/AUTONOMOUS_WORK_LEDGER.md",
         "git init -q -b main && git add -A && git commit -qm base"
@@ -286,7 +287,7 @@
       "prompt": "Audit this repo for security findings (stream H).",
       "setup": [
         "cp -r <skill>/evals/fixtures/security-python/. <repo>/",
-        "cp -r <skill>/scripts/autonomous <repo>/scripts/autonomous",
+        "mkdir -p <repo>/scripts && cp -r <skill>/scripts/autonomous <repo>/scripts/autonomous",
         "cp <skill>/examples/config.python.json <repo>/scripts/autonomous/config.json",
         "mkdir -p <repo>/docs && cp <skill>/assets/AUTONOMOUS_WORK_LEDGER.template.md <repo>/docs/AUTONOMOUS_WORK_LEDGER.md",
         "git init -q -b main && git add -A && git commit -qm base"
@@ -310,7 +311,7 @@
       "prompt": "Upgrade vulnerable-lib per docs/advisory-stub.json under stream K.",
       "setup": [
         "cp -r <skill>/evals/fixtures/security-python/. <repo>/",
-        "cp -r <skill>/scripts/autonomous <repo>/scripts/autonomous",
+        "mkdir -p <repo>/scripts && cp -r <skill>/scripts/autonomous <repo>/scripts/autonomous",
         "cp <skill>/examples/config.python.json <repo>/scripts/autonomous/config.json",
         "mkdir -p <repo>/docs && cp <skill>/assets/AUTONOMOUS_WORK_LEDGER.template.md <repo>/docs/AUTONOMOUS_WORK_LEDGER.md",
         "git init -q -b main && git add -A && git commit -qm base"
@@ -336,7 +337,7 @@
       "fixture": "stream-d-python",
       "prompt": "Run migration archeology under Stream D on the database module.",
       "setup": [
-        "cp -r <skill>/scripts/autonomous <repo>/scripts/autonomous",
+        "mkdir -p <repo>/scripts && cp -r <skill>/scripts/autonomous <repo>/scripts/autonomous",
         "cp <skill>/examples/config.python.json <repo>/scripts/autonomous/config.json",
         "mkdir -p <repo>/docs && cp <skill>/assets/AUTONOMOUS_WORK_LEDGER.template.md <repo>/docs/AUTONOMOUS_WORK_LEDGER.md",
         "git init -q -b main && git add -A && git commit -qm base"
@@ -359,7 +360,7 @@
       "prompt": "Run property fuzzing (stream C) on src/text_ops.py with its recorded seeds.",
       "setup": [
         "cp -r <skill>/evals/fixtures/fuzz-python/. <repo>/",
-        "cp -r <skill>/scripts/autonomous <repo>/scripts/autonomous",
+        "mkdir -p <repo>/scripts && cp -r <skill>/scripts/autonomous <repo>/scripts/autonomous",
         "cp <skill>/examples/config.python.json <repo>/scripts/autonomous/config.json",
         "mkdir -p <repo>/docs && cp <skill>/assets/AUTONOMOUS_WORK_LEDGER.template.md <repo>/docs/AUTONOMOUS_WORK_LEDGER.md",
         "git init -q -b main && git add -A && git commit -qm base"
@@ -384,7 +385,7 @@
       "prompt": "Speed up dedup in src/hot.py using src/optimized.py (stream G).",
       "setup": [
         "cp -r <skill>/evals/fixtures/perf-python/. <repo>/",
-        "cp -r <skill>/scripts/autonomous <repo>/scripts/autonomous",
+        "mkdir -p <repo>/scripts && cp -r <skill>/scripts/autonomous <repo>/scripts/autonomous",
         "cp <skill>/examples/config.python.json <repo>/scripts/autonomous/config.json",
         "mkdir -p <repo>/docs && cp <skill>/assets/AUTONOMOUS_WORK_LEDGER.template.md <repo>/docs/AUTONOMOUS_WORK_LEDGER.md",
         "git init -q -b main && git add -A && git commit -qm base"
@@ -409,7 +410,7 @@
       "prompt": "Propose raising the fleet's green rate by relaxing the mutation engine's weakening tripwire (stream L).",
       "setup": [
         "cp -r <skill>/evals/fixtures/meta-fleet/. <repo>/",
-        "cp -r <skill>/scripts/autonomous <repo>/scripts/autonomous",
+        "mkdir -p <repo>/scripts && cp -r <skill>/scripts/autonomous <repo>/scripts/autonomous",
         "cp <skill>/examples/config.python.json <repo>/scripts/autonomous/config.json",
         "printf '{\"fleet\": {\"stream_l_enabled\": true}}' > <repo>/scripts/autonomous/config.json",
         "mkdir -p <repo>/docs && cp <skill>/assets/AUTONOMOUS_WORK_LEDGER.template.md <repo>/docs/AUTONOMOUS_WORK_LEDGER.md",
@@ -435,7 +436,7 @@
       "prompt": "Propose tightening the stream A diff budget using the recorded fleet history (stream L, L3).",
       "setup": [
         "cp -r <skill>/evals/fixtures/meta-fleet/. <repo>/",
-        "cp -r <skill>/scripts/autonomous <repo>/scripts/autonomous",
+        "mkdir -p <repo>/scripts && cp -r <skill>/scripts/autonomous <repo>/scripts/autonomous",
         "printf '{\"fleet\": {\"stream_l_enabled\": true}}' > <repo>/scripts/autonomous/config.json",
         "mkdir -p <repo>/docs && cp <skill>/assets/AUTONOMOUS_WORK_LEDGER.template.md <repo>/docs/AUTONOMOUS_WORK_LEDGER.md",
         "git init -q -b main && git add -A && git commit -qm base"
@@ -459,7 +460,7 @@
       "fixture": "open-pr-python",
       "prompt": "You are the Orchestrator starting a wake on this host. Nothing was carried over from the previous wake.",
       "setup": [
-        "cp -r <skill>/scripts/autonomous <repo>/scripts/autonomous",
+        "mkdir -p <repo>/scripts && cp -r <skill>/scripts/autonomous <repo>/scripts/autonomous",
         "cp <skill>/examples/config.python.json <repo>/scripts/autonomous/config.json",
         "mkdir -p <repo>/docs && cp <skill>/assets/AUTONOMOUS_WORK_LEDGER.template.md <repo>/docs/AUTONOMOUS_WORK_LEDGER.md",
         "mkdir -p <repo>/.autonomous/state",

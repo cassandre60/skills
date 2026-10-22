@@ -73,7 +73,7 @@ step 7. Another agent may have claimed the same target since step 1.
 Every proof is **base-relative**: record the full sha of the base the red/green
 pair ran against, and re-run it on fresh `origin/main` if main moved. A proof
 against a base nobody will merge is not evidence. See
-`06-moving-main.md`.
+`07-moving-main.md`.
 
 For Stream A, do not claim the test "fails on main". It passes on main; the
 mutant is the defect. This is Law 1's test-only branch.
@@ -316,4 +316,4 @@ consent, and a later agent can see the basis.
 
 If main changed in the audited area, re-run the premise before polishing. If the
 gap is gone, close the PR as superseded and record that. A stale-base proof is
-not evidence; see `06-moving-main.md`.
+not evidence; see `07-moving-main.md`.

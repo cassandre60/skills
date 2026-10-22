@@ -597,7 +597,7 @@ acceptance rates and renders the weekly owner digest.
 ## Sentinel review checklist (per worker PR)
 
 0. Fresh fetch + premise recheck on current `origin/main` (see
-   `06-moving-main.md`). A dead premise means close/supersede, not polish.
+   `07-moving-main.md`). A dead premise means close/supersede, not polish.
 1. Checks are green **on the current head sha** — compare the sha the run
    reported with `gh pr view <n> --json headRefOid`. A green run for an older
    sha, or a head sha that never received a run, is not a verdict. A red check

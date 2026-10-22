@@ -39,7 +39,16 @@ at T2, and at T1 for anything referee-adjacent.
 
 ## The catalog
 
-Available now: **A** mutation, **B** adversarial test audit (`03`), and
+Available now: **A** mutation, **B** adversarial test audit (`03`),
+**C** property/fuzz (`fuzz_shrink.py`), **E** defect repair (`repair.py`),
+**G** performance (`perf_gate.py`: pinned bench delta AND differential
+equivalence — both halves mandatory), **H+K** security & dependency
+(`advisory.py`: stub-advisory pin audits, a secret scan that redacts by
+construction, oracle-first bumps), **I** docs & spec truth
+(`docs_truth.py`), and **L** meta — gated behind its own kill switch
+(`meta.py`: claims replayed from recorded fleet history, L4 surfaces
+issue-only, lessons expire). **D** (migration safety) and **J**
+(simplification) remain planned; J ships inside PR #28.
 **F** flake & determinism (`flakes.py`: finder + N-run oracle), the first
 expansion stream. The oracle demands ZERO failing runs after a fix —
 "passed twice in a row" is not evidence — and names a cause class

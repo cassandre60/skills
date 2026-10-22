@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib
 import json
 import os
@@ -191,7 +192,8 @@ class LedgerTests(RepoTestCase):
         stream_a = script(repo, "ledger.py", "next", "--stream", "A", "--json")
         alias = script(repo, "ledger.py", "next", "--stream", "1", "--json")
         self.assertEqual(json.loads(stream_a.stdout)["candidates"], json.loads(alias.stdout)["candidates"])
-        planned = script(repo, "ledger.py", "next", "--stream", "C")
+        # C is available since issue #25; D is still a planned letter.
+        planned = script(repo, "ledger.py", "next", "--stream", "D")
         self.assertEqual(planned.returncode, 2)
         self.assertIn("planned, not implemented", planned.stderr)
 
@@ -1267,7 +1269,9 @@ class StreamRegistryTests(unittest.TestCase):
         # non-available letter must refuse with its full name, so a session
         # cannot drift into un-tooled work under a planned letter.
         for stream, info in common_module.STREAMS.items():
-            if info["status"] == "available":
+            # Gated letters (L) pass normalize on purpose: their caller-side
+            # kill switch owns the refusal.
+            if info["status"] != "planned":
                 continue
             with self.assertRaises(common_module.UsageError) as ctx:
                 common_module.normalize_stream(stream)
@@ -1596,6 +1600,16 @@ class DocumentationInvariantTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+def _flat(text: str) -> str:
+    """Collapse whitespace so an assertion survives a re-wrap."""
+    return " ".join(text.split())
+
+
+def _flat_lifecycle(text: str) -> str:
+    """Collapse whitespace so an assertion survives a re-wrap."""
+    return " ".join(text.split())
+
+
 class WorkerLifecycleContractTests(unittest.TestCase):
     def setUp(self) -> None:
         self.unattended = _flat(
@@ -1756,6 +1770,12 @@ class ValidateTests(RepoTestCase):
         self.assertEqual(report["invisible"], [])
 
 
+@unittest.skipUnless(
+    all(shutil.which(tool) for tool in ("bash", "flock", "timeout", "stat", "date")),
+    "watchdog shell dependencies are not installed",
+)
+
+
 class ConfigGuardTests(RepoTestCase):
     def make(self, with_origin: bool = False):
         repo, origin = python_repo(self.tmp, with_origin=with_origin)
@@ -1806,6 +1826,18 @@ class ConfigGuardTests(RepoTestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("test/view/x_test.dart", proc.stdout)
         self.assertNotIn("No candidate path matched", proc.stdout)
+
+
+@unittest.skipUnless(
+    all(shutil.which(tool) for tool in ("bash", "flock", "timeout", "stat", "date")),
+    "watchdog shell dependencies are not installed",
+)
+
+
+@unittest.skipUnless(
+    all(shutil.which(tool) for tool in ("bash", "flock", "timeout", "stat", "date")),
+    "watchdog shell dependencies are not installed",
+)
 
 
 class StreamBChecklistTests(unittest.TestCase):
@@ -1937,6 +1969,30 @@ class OwnerAskContractTests(unittest.TestCase):
         self.assertIn("always pass", self.unattended.lower())
         self.assertIn("-r <owner>/<repo>", self.unattended.lower())
         self.assertIn("parent", self.unattended.lower())
+
+
+@unittest.skipUnless(
+    all(shutil.which(tool) for tool in ("bash", "flock", "timeout", "stat", "date")),
+    "watchdog shell dependencies are not installed",
+)
+
+
+@unittest.skipUnless(
+    all(shutil.which(tool) for tool in ("bash", "flock", "timeout", "stat", "date")),
+    "watchdog shell dependencies are not installed",
+)
+
+
+@unittest.skipUnless(
+    all(shutil.which(tool) for tool in ("bash", "flock", "timeout", "stat", "date")),
+    "watchdog shell dependencies are not installed",
+)
+
+
+@unittest.skipUnless(
+    all(shutil.which(tool) for tool in ("bash", "flock", "timeout", "stat", "date")),
+    "watchdog shell dependencies are not installed",
+)
 
 
 class MutationMeasurementContractTests(unittest.TestCase):
@@ -2156,6 +2212,10 @@ class VerdictReliabilityTests(RepoTestCase):
         self.assertIn("invalid choice: 'stryker'", unknown.stderr)
 
 
+@unittest.skipUnless(
+    all(shutil.which(tool) for tool in ("bash", "flock", "timeout", "stat", "date")),
+    "watchdog shell dependencies are not installed",
+)
 class EvalHarnessTests(unittest.TestCase):
     """evals/run.py: deterministic halves plus the red-proof they can fail.
 
@@ -2512,6 +2572,10 @@ class DocsTruthStreamTests(unittest.TestCase):
         self.assertEqual(json.loads(res.stdout)["candidates"], [])
 
 
+@unittest.skipUnless(
+    all(shutil.which(tool) for tool in ("bash", "flock", "timeout", "stat", "date")),
+    "watchdog shell dependencies are not installed",
+)
 class RepairStreamTests(RepoTestCase):
     """Stream E (issue #22): defect-repair intake + red/green oracle.
 
@@ -2674,6 +2738,7 @@ class RepairStreamTests(RepoTestCase):
         git(repo, "config", "user.email", "test@example.com")
         git(repo, "config", "user.name", "Test User")
         install_scripts(repo)
+        write_config(repo, {"candidates": {"E": {"include": ["src/**/*.py"]}}})
         res = script(repo, "ledger.py", "next", "--stream", "E", "--json")
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertEqual(common_module.STREAMS["E"]["status"], "available")
@@ -2809,11 +2874,16 @@ class SecurityStreamTests(RepoTestCase):
         self.assertEqual(common_module.STREAMS["H"]["status"], "available")
         self.assertEqual(common_module.STREAMS["K"]["status"], "available")
         install_scripts(repo)
+        write_config(repo, {"candidates": {"H": {"include": ["src/**/*.py"]}, "K": {"include": ["src/**/*.py"]}}})
         for stream in ("H", "K"):
             res = script(repo, "ledger.py", "next", "--stream", stream, "--json")
             self.assertEqual(res.returncode, 0, res.stderr)
 
 
+@unittest.skipUnless(
+    all(shutil.which(tool) for tool in ("bash", "flock", "timeout", "stat", "date")),
+    "watchdog shell dependencies are not installed",
+)
 class FuzzSeedTests(RepoTestCase):
     """Stream C (issue #25): recorded-seed fuzz + deterministic shrink.
 
@@ -2944,11 +3014,16 @@ class PerfGateTests(RepoTestCase):
         git(repo, "config", "user.email", "test@example.com")
         git(repo, "config", "user.name", "Test User")
         install_scripts(repo)
+        write_config(repo, {"candidates": {"C": {"include": ["src/**/*.py"]}, "G": {"include": ["src/**/*.py"]}}})
         for stream in ("C", "G"):
             res = script(repo, "ledger.py", "next", "--stream", stream, "--json")
             self.assertEqual(res.returncode, 0, res.stderr)
 
 
+@unittest.skipUnless(
+    all(shutil.which(tool) for tool in ("bash", "flock", "timeout", "stat", "date")),
+    "watchdog shell dependencies are not installed",
+)
 class StreamLTests(RepoTestCase):
     """Stream L (issue #26): meta self-improvement, capped and kill-switched.
 
