@@ -1596,3 +1596,57 @@ class DocumentationInvariantTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+"""Git-reality contract tests.
+
+Red before this change: the skill told a reader to rebase a pushed branch in
+one reference and never to force-push in another, and said nothing about
+strict protection, branch inheritance, or batching the fleet's own PRs.
+"""
+
+def _flat_git(text: str) -> str:
+    """Collapse whitespace so an assertion survives a re-wrap."""
+    return " ".join(text.split())
+
+
+class GitRealityContractTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.moving = _flat_git(
+            (SKILL_ROOT / "references" / "07-moving-main.md").read_text(encoding="utf-8")
+        )
+        self.protocol = _flat_git(
+            (SKILL_ROOT / "references" / "04-workflow-and-roles.md").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.unattended = _flat_git(
+            (SKILL_ROOT / "references" / "05-unattended-operation.md").read_text(
+                encoding="utf-8"
+            )
+        )
+
+    def test_strict_protection_is_named(self) -> None:
+        self.assertIn("strict branch protection", self.moving.lower())
+        self.assertIn("--admin", self.moving)
+
+    def test_the_resync_is_a_merge_not_a_rebase(self) -> None:
+        self.assertIn("merge the base into the branch", self.moving.lower())
+        self.assertIn("git merge origin/main", self.moving)
+        self.assertIn("never by rebasing", self.protocol.lower())
+
+    def test_branch_inheritance_is_named(self) -> None:
+        self.assertIn("inherits that worktree's commits", self.protocol.lower())
+        self.assertIn("git diff origin/main...HEAD --stat", self.protocol)
+
+    def test_batched_deliveries_are_named(self) -> None:
+        self.assertIn("Batch the fleet's own deliveries", self.protocol)
+        self.assertIn("one commit per change", self.protocol)
+
+    def test_the_owners_checkout_is_checked_at_cold_start(self) -> None:
+        self.assertIn("orchestrator's own checkout", self.unattended.lower())
+        self.assertIn("rev-parse --abbrev-ref HEAD", self.unattended)
+
+
+if __name__ == "__main__":
+    unittest.main()
