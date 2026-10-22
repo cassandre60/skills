@@ -12,12 +12,31 @@ Eight columns, in this order:
 - **Content Hash** is `<source9>:<companion9>`, using git blob hashes truncated
   to 9 characters. For Stream A the source is the target and the companion is
   its mapped test. For Stream B the target is the test file and the companion is
-  always `-`. No test exists → `<source9>:-`.
+  always `-`. No test exists → `<source9>:-`. **One hash per row** — a cell with
+  several hashes is not a composite, it is unparsable.
+
+  **The hash is the blob as it lands in `main`, not the blob that was
+  audited.** A round whose PR changes the source records the *post-change*
+  blob; a round that only adds tests records the unchanged blob, because the
+  source did not change. Same for the companion half: a PR that edits the
+  mapped test records the test's post-change blob. A pre-change hash is not
+  "more conservative" — it is *wrong*: the dedup law compares the recorded
+  hash against the file at HEAD, finds a difference, and re-audits a file that
+  was just audited and fixed.
 - **Status** is an audit (`COMPLETED` — gaps fixed or documented; `SOUND` — no
   gaps) or a negative disposition (`REJECTED` — owner closed the PR unmerged;
   `WONTFIX` — deliberately out of scope; `SUPERSEDED` — replaced by the PR named
   in the PR column). `EXAMPLE` is ignored by the parser.
-- **Target** is repo-root-relative and stored in backticks.
+
+  **The cell must hold the bare token and nothing else.** The parser compares
+  the whole cell against the vocabulary above, so `COMPLETED (second round: 98
+  candidates)` is not a `COMPLETED` row — it is **skipped, silently**. Put the
+  detail in the Summary cell. A ledger whose rows are invisible still *looks*
+  like a full registry, and the dedup law will re-audit every file in it.
+- **Target** is repo-root-relative and stored in backticks. **One target per
+  row**: the target cell is the lookup key, so a cell naming two paths
+  (`lib/a.dart`, `test/a_test.dart`) protects neither — the row exists and can
+  never match. Two files means two rows.
 
 Legacy rows with a single hash (no `:`) are still accepted. They match on the
 source half only and are flagged `legacy` in `--json` output; re-audit them when
@@ -30,6 +49,12 @@ each target, the authoritative row is the greatest `(Date, -position)`:
 the newest date wins; on a tie the topmost row wins. Rows appended by hand at
 the bottom with a newer date also win. Only `COMPLETED` and `SOUND` count as
 audited; dispositions are tracked in their own map under the same rule.
+
+**Insertion order is load-bearing.** Because a date tie is broken by position,
+a batch of rows for the same target must be inserted **newest first**: a later
+PR's row above an earlier PR's row. Inserted the other way round, the earlier
+row becomes authoritative — and if it records a pre-change blob, the law
+re-opens a file that was just fixed.
 
 This fixes the V1 bug where the parser kept the oldest row and re-proposed every
 re-audited file forever.
@@ -133,6 +158,8 @@ python3 scripts/autonomous/ledger.py record --stream A \
   --summary 'owner closed: out of scope'
 python3 scripts/autonomous/ledger.py sync-rejections --dry-run
 python3 scripts/autonomous/ledger.py check --target src/app.py
+python3 scripts/autonomous/ledger.py validate            # rows the parser cannot see
+python3 scripts/autonomous/ledger.py validate --json
 ```
 
 - Stream ids are `A`/`B`; `1`/`2` are aliases. `C`/`D` exit 2 with
@@ -150,6 +177,11 @@ python3 scripts/autonomous/ledger.py check --target src/app.py
 - `check` exits 0 when the current composite hash is audited, 1 otherwise. When a
   disposition matches the current hash it says so on the next line, so a "no" is
   never mistaken for "never looked at".
+- `validate` reports what the parser **cannot see** — rows whose Status cell is
+  not a bare token, rows naming several targets or several hashes — and, per
+  target, whether the authoritative row's composite hash still matches HEAD.
+  It exits 1 when it finds any of those, and prints the visible-row count next
+  to the row count so the two can never be confused. It changes nothing.
 
 ## Open-PR collision check
 

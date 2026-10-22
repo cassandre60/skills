@@ -16,6 +16,14 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+# Ledger status vocabulary. An audit says "this is done"; a disposition says
+# "stop asking". The parser accepts ONLY these bare tokens: any extra text in
+# the Status cell makes the row invisible, which is why the sets live here and
+# are asserted by the validator.
+AUDITED_STATUSES = {"COMPLETED", "SOUND"}
+DISPOSITION_STATUSES = {"REJECTED", "WONTFIX", "SUPERSEDED"}
+STATUSES = ("COMPLETED", "SOUND", "REJECTED", "WONTFIX", "SUPERSEDED")
+
 EXIT_OK = 0
 EXIT_NEGATIVE = 1
 EXIT_USAGE = 2

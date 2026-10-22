@@ -34,6 +34,15 @@ EOF
   chmod +x "$TMP/bin/opencode"
 }
 
+write_fake_outage() { # every model answers with an infrastructure outage
+  cat >"$TMP/bin/opencode" <<EOF
+#!/bin/bash
+echo "ARGS: \$*"
+echo "Error: 503 Service Unavailable - the model server is overloaded"
+EOF
+  chmod +x "$TMP/bin/opencode"
+}
+
 run_watchdog() {
   rm -f "$TMP/state/watchdog.log" "$TMP/state/model_failures" "$TMP/state/last_nudge"
   printf 'ses_TEST\n' >"$TMP/state/opencode_session_id"
@@ -44,6 +53,28 @@ run_watchdog() {
     ORCH_NUDGE_TIMEOUT=20 ORCH_MIN_INTERVAL=0 ORCH_HB_MAX_AGE=60 \
     bash "$ASSETS" >/dev/null 2>&1
 }
+
+# --- case 0: an infrastructure outage is NOT a quota failure -------------
+# The model is not exhausted. Rotating would burn every ladder entry against
+# the same broken endpoint, and marking one dead would park a usable model for
+# an hour. So: no rotation, no cooldown entry, and the tick ends.
+write_fake_outage
+run_watchdog
+if grep -q -- '-m opencode/beta-free' "$TMP/state/watchdog.log"; then
+  fail "rotated to the next model after an infrastructure outage"
+else
+  ok "no rotation after an infrastructure outage"
+fi
+if [ -s "$TMP/state/model_failures" ]; then
+  fail "an infrastructure outage marked a model as failed: $(cat "$TMP/state/model_failures")"
+else
+  ok "an infrastructure outage left the cooldown list untouched"
+fi
+if grep -qi 'outage' "$TMP/state/watchdog.log"; then
+  ok "the outage was recorded in the log"
+else
+  fail "the outage was not recorded in the log"
+fi
 
 # --- case 1: first model fails, second succeeds -------------------------
 write_fake_opencode "alpha-free" "beta-free"
