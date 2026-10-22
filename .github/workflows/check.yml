@@ -34,3 +34,5 @@ jobs:
           python3 evals/run.py --negative-control --case E7-8-protected-row
       - name: Run the watchdog model-rotation test
         run: bash skills/autonomous-improvement/tests/watchdog_rotation_test.sh
+      - name: Run the stateless-wake launcher test
+        run: bash skills/autonomous-improvement/tests/stateless_wake_test.sh

@@ -3184,3 +3184,96 @@ class DoctorTests(RepoTestCase):
         self.assertIn("doctor", payload["reason"].lower())
 
 
+class StatelessWakeTests(RepoTestCase):
+    """Issue #18 (state half): a fresh wake reads only files and leaves
+    state a SECOND fresh wake can continue from — no session id involved.
+
+    `fleet.py needs-brain` is the 0-token quiet-hours predicate: it
+    derives reasons from the snapshot + stub-gh PR state, records the
+    decision digest in state/wake.json, and reports "quiet" when nothing
+    changed since the last wake.
+    """
+
+    def stage(self, prs):
+        repo, origin = init_repo(self.tmp, name="wake-repo", with_origin=True)
+        install_scripts(repo)
+        write_config(repo)
+        json_path = self.tmp / "wake-prs.json"
+        json_path.write_text(json.dumps(prs) + "\n")
+        bin_dir = path_with_only(self.tmp, ("git",))
+        gh = write(
+            bin_dir / "gh",
+            "#!/bin/sh\nwhile IFS= read -r line; do printf '%s\\n' \"$line\"; done < \"$GH_JSON\"\n",
+        )
+        gh.chmod(0o755)
+        env = env_with_path(bin_dir, GH_JSON=str(json_path), ORCH_STATE_DIR=str(repo / ".autonomous" / "state"))
+        return repo, env, json_path
+
+    def red_pr(self, number=7):
+        return {
+            "number": number,
+            "title": f"Stream A: PR {number}",
+            "headRefName": f"task/pr-{number}",
+            "headRefOid": f"sha-{number}",
+            "statusCheckRollup": [
+                {"name": "unit-tests", "status": "COMPLETED", "conclusion": "FAILURE"}
+            ],
+        }
+
+    def test_first_wake_needs_brain_and_records_state(self):
+        repo, env, _ = self.stage([self.red_pr()])
+        res = script(repo, "fleet.py", "needs-brain", "--json", env=env)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        payload = json.loads(res.stdout)
+        self.assertTrue(payload["needs_brain"])
+        self.assertIn("red-pr #7", payload["reasons"][0])
+        wake = repo / ".autonomous" / "state" / "wake.json"
+        self.assertTrue(wake.is_file(), "the wake decision must be recorded")
+        self.assertEqual(json.loads(wake.read_text())["digest"], payload["digest"])
+        # stateless by construction: no session id is read or written
+        self.assertFalse((repo / ".autonomous" / "state" / "opencode_session_id").exists())
+
+    def test_second_wake_on_unchanged_snapshot_is_quiet(self):
+        repo, env, _ = self.stage([self.red_pr()])
+        first = script(repo, "fleet.py", "needs-brain", "--json", env=env)
+        self.assertTrue(json.loads(first.stdout)["needs_brain"])
+        second = script(repo, "fleet.py", "needs-brain", "--json", env=env)
+        self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
+        payload = json.loads(second.stdout)
+        self.assertFalse(payload["needs_brain"])
+        self.assertIn("unchanged", payload["reason"])
+
+    def test_changed_snapshot_reopens_the_wake(self):
+        repo, env, json_path = self.stage([self.red_pr()])
+        script(repo, "fleet.py", "needs-brain", "--json", env=env)
+        # The PR went green and unmerged: a fresh wake must pick it up.
+        green = self.red_pr()
+        green["statusCheckRollup"] = [
+            {"name": "unit-tests", "status": "COMPLETED", "conclusion": "SUCCESS"}
+        ]
+        json_path.write_text(json.dumps([green]) + "\n")
+        res = script(repo, "fleet.py", "needs-brain", "--json", env=env)
+        payload = json.loads(res.stdout)
+        self.assertTrue(payload["needs_brain"])
+        self.assertIn("green-unmerged-pr #7", payload["reasons"][0])
+
+    def test_kill_switch_is_a_tend_only_reason(self):
+        repo, env, _ = self.stage([self.red_pr()])
+        (repo / ".autonomous").mkdir(exist_ok=True)
+        (repo / ".autonomous" / "STOP").write_text("")
+        res = script(repo, "fleet.py", "needs-brain", "--json", env=env)
+        payload = json.loads(res.stdout)
+        self.assertTrue(payload["needs_brain"])
+        self.assertTrue(
+            any("kill-switch-present" in reason for reason in payload["reasons"]),
+            payload["reasons"],
+        )
+
+    def test_idle_queue_is_a_reason_to_generate(self):
+        repo, env, _ = self.stage([])
+        res = script(repo, "fleet.py", "needs-brain", "--json", env=env)
+        payload = json.loads(res.stdout)
+        self.assertTrue(payload["needs_brain"])
+        self.assertIn("queue-idle", payload["reasons"][0])
+
+
