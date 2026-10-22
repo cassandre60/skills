@@ -474,6 +474,25 @@ Per-wake duty, on top of the checklist: every open PR carries a state line
 either being fixed, or it is an owner ask — and an owner ask is re-asked every
 wake until it is answered.
 
+## The suite must give the same result everywhere
+
+The fleet's own tests run on whatever host the fleet runs on — a laptop, a
+CI runner, a headless VM that exports the fleet's configuration into the
+environment. A test that inherits an ambient variable is therefore **red on
+some hosts and green on others**, and it is a flake with a long fuse: it
+fails on the machines the fleet happens to use, and it buries real failures
+behind a familiar one.
+
+So: **a test that runs a tool gives that tool a controlled environment** — the
+variables it depends on set explicitly, the ones it must not inherit cleared
+explicitly, and its home pointed at its own temporary tree. Then it cannot
+touch anything outside its sandbox, whatever host it runs on.
+
+(Verified 2026-10-22: the installer test inherited `ORCH_STATE_DIR` from the
+host, wrote its configuration file into the **real** state directory, and
+failed there while passing in CI. The fix is one line — clear the variable
+before running the installer — and the general rule is the paragraph above.)
+
 ## Failure anatomy and relaunch
 
 When a fleet is cancelled (rate limits, harness restart):

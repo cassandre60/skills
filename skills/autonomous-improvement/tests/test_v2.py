@@ -13457,8 +13457,9 @@ if __name__ == "__main__":
     unittest.main()
 
 def _flat_landing(text: str) -> str:
-    """Collapse whitespace so an assertion survives a re-wrap."""
-    return " ".join(text.split())
+    """Collapse whitespace and drop markdown emphasis, so an assertion
+    survives a re-wrap or a `**bold**` that moved."""
+    return " ".join(text.replace("*", "").replace("`", "").split())
 
 
 class LandingSeveralOwnPRsTests(unittest.TestCase):
@@ -13496,4 +13497,38 @@ class LandingSeveralOwnPRsTests(unittest.TestCase):
     def test_the_conflict_marker_check_is_stated(self) -> None:
         self.assertIn("git grep", self.protocol)
         self.assertIn("conflict markers", self.protocol.lower())
+
+class EnvironmentIndependenceTests(unittest.TestCase):
+    """The suite must give the same result on every host.
+
+    Red before this change: the installer test inherited ORCH_STATE_DIR from
+    the runner's environment, wrote into the real state directory on a fleet
+    host, and failed there while passing in CI.
+    """
+
+    def setUp(self) -> None:
+        self.streams = _flat_landing(
+            (SKILL_ROOT / "references" / "03-streams-and-triage.md").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.unattended = _flat_landing(
+            (SKILL_ROOT / "references" / "05-unattended-operation.md").read_text(
+                encoding="utf-8"
+            )
+        )
+
+    def test_the_stream_b_question_exists(self) -> None:
+        self.assertIn("depend on the machine's environment", self.streams.lower())
+
+    def test_the_controlled_environment_rule_is_stated(self) -> None:
+        self.assertIn("controlled environment", self.streams.lower())
+        self.assertIn("cleared explicitly", self.streams.lower())
+
+    def test_the_host_evidence_rule_is_stated(self) -> None:
+        self.assertIn("evidence about the host", self.streams.lower())
+
+    def test_the_fleet_suite_rule_is_stated(self) -> None:
+        self.assertIn("same result everywhere", self.unattended.lower())
+        self.assertIn("temporary tree", self.unattended.lower())
 
