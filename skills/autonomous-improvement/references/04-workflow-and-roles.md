@@ -199,6 +199,14 @@ sit red and the fleet looks busy while nothing converges.
    markers, and verify the pushed file contains none before moving on. A
    conflicted ledger pushed to a PR is worse than a missing row.
 
+7b. **Batch the fleet's own deliveries when another agent is merging too.**
+   Under strict protection every merge by anyone invalidates the other side's
+   green PR, and each invalidation costs a full CI cycle. When more than one
+   of the orchestrator's own PRs is ready, land them as **one** PR with one
+   commit per change: one CI cycle instead of N, and one protected-path
+   decision instead of N. (Verified 2026-10-22: three green PRs — two audit
+   rounds and a bugfix — landed as one, and the pattern held three times.)
+
 7. **Protected-file bookkeeping is batched, not bundled.** When a repo treats
    an audit ledger as a protected path, a worker's row for it blocks the PR on
    a gate label — and the gate's own message says such an edit "must be a
@@ -208,6 +216,42 @@ sit red and the fleet looks busy while nothing converges.
    instead of one per PR, and the product PRs ship green. (Verified
    2026-10-20: five audit PRs were each blocked on the same kind of one-line
    append; batching them turned five owner decisions into one.)
+
+## The owner ask: plain terms, and a record
+
+A gate that needs a human is not a technical question, and an ask written in
+gate jargon does not get answered. When the orchestrator needs a label, a
+decision, or a change of policy, the ask states **three things in plain
+language**, with no gate vocabulary in them:
+
+1. **What changes** — what the owner will have, in terms of the product or the
+   repo, not in terms of a protected path.
+2. **What it costs** — the time, the risk, the review burden, whatever is
+   really being asked for.
+3. **What happens if the owner declines** — the default that applies instead,
+   so the answer can be "no" without leaving a hole.
+
+### Consent is per item, and it is recorded
+
+An owner may give a **standing consent for a class of edit** — "apply the label
+to protected-path PRs of this kind, and do the merges". That consent does not
+travel to the next PR: it covers the class it was given for, and every item
+still gets its own record.
+
+**The record goes on the PR**, in plain language, and carries four things:
+
+| Field | What it says |
+|---|---|
+| the **class** | what kind of edit is being authorised (for example: a bookkeeping row in the fleet's own audit registry) |
+| the **authority** | on whose instruction the label was applied, quoted or summarised |
+| the **date** | when |
+| the **withdrawal path** | how the owner revokes it — delete the label, close the PR |
+
+Without that record a label on a PR is indistinguishable from a label applied
+without asking, and a later reader cannot tell consent from assumption. With
+it, the owner can withdraw any single item without undoing the standing
+consent, and a later agent can see the basis.
+
 
    **A batch has an order and a shape, and both are load-bearing.** Insert the
    rows **newest first** (a later PR's row above an earlier PR's row for the
@@ -232,6 +276,17 @@ sit red and the fleet looks busy while nothing converges.
 
 - Stage by name, never `git add -A`.
 - Never `push --force` or `reset --hard` outside your own worktree.
+- **Re-sync a pushed branch by merging the base into it**, never by rebasing:
+  a rebase of a published branch needs a force-push, which the rule above
+  forbids. `git merge origin/main --no-edit`, push, wait for a fresh green on
+  the new head. (Under strict protection a green PR that does not contain the
+  base's tip cannot merge at all, and `--admin` does not bypass it — see
+  `07-moving-main.md`.)
+- **A branch created inside an existing worktree inherits that worktree's
+  commits.** Before opening a PR, `git diff origin/main...HEAD --stat` must
+  list only the files the task touched; if it lists a file the task never
+  touched, the branch carries someone else's commit — create it in a fresh
+  worktree instead.
 - Never delete a worktree you did not create. `orchestrator.py
   cleanup-worktree` only removes paths in its registry and refuses dirty or
   unpushed work without `--force`.

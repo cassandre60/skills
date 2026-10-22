@@ -27,6 +27,20 @@ before anything else. First turn, in order:
    `assets/install-watchdog.sh`. If neither works, degrade to
    beats-only and record that in the journal: beats alone keep the loop
    alive; the watchdog is armor, not a requirement.
+4b. **Check the orchestrator's own checkout.** The owner's acceptance runs
+   against a checkout, and a checkout parked on a side branch makes that
+   acceptance run against a stale tree — invisibly, because `git status` is
+   clean. The branch and the distance from the base are one command:
+
+   ```sh
+   git -C <checkout> rev-parse --abbrev-ref HEAD
+   git -C <checkout> log --oneline HEAD..origin/main | wc -l
+   ```
+
+   The checkout the owner will run should be on the base branch and current.
+   (Verified 2026-10-22: a checkout sat on a branch whose content had been
+   squash-merged — so it was not an ancestor of `main` — and was 43 files
+   behind.)
 5. **Read the journal tail** (and the snapshots log after any gap):
    ledger status, open PRs, in-flight tabs supersede session memory —
    right after a restart this file is the fastest reliable read.
@@ -230,6 +244,32 @@ state directory alone.
 The unit sets `TimeoutStartSec=2h` and `KillMode=process` as backstops. The
 script's own `timeout` is the primary bound; a hung nudge cannot block every
 future timer run.
+
+### The `gh` fallbacks
+
+`gh`'s GraphQL conveniences are the fragile surface; the REST API is the
+stable one. Two commands in particular fail for reasons that have nothing to
+do with the request:
+
+```sh
+# a label, when `gh pr edit` dies on a deprecated GraphQL field
+gh api --method POST repos/<owner>/<repo>/issues/<n>/labels -f 'labels[]=<label>'
+
+# an issue, when `gh issue view` dies the same way
+gh api repos/<owner>/<repo>/issues/<n> --jq '.title, .body'
+```
+
+The failure looks like this, and it is easy to mistake for a repo problem:
+
+```
+GraphQL: Projects (classic) is being deprecated in favor of the new Projects
+experience, see: <changelog>
+```
+
+**Always pass `-R <owner>/<repo>`.** Without it, `gh` resolves the repository
+from the checkout's remotes — and in a fork that default can land on the
+**parent** repository. The symptom is a 404 for a run that is live on the
+fork, or a PR that appears to have no checks.
 
 ### Assumption
 
