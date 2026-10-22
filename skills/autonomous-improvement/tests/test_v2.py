@@ -1713,3 +1713,65 @@ class ValidateTests(RepoTestCase):
         self.assertEqual(report["rows_total"], 1)
         self.assertEqual(report["rows_visible"], 1)
         self.assertEqual(report["invisible"], [])
+
+
+"""Configuration tests: the tooling must never report an empty queue because
+it is unconfigured.
+
+Red before this change: `ledger.py next` answered "no eligible targets
+remain" for a fleet with no config and 79 real targets.
+"""
+
+import json
+
+
+class ConfigGuardTests(RepoTestCase):
+    def make(self, with_origin: bool = False):
+        repo, origin = python_repo(self.tmp, with_origin=with_origin)
+        commit(repo)
+        return repo, origin
+
+    def test_empty_include_is_a_named_configuration_error(self) -> None:
+        """An empty candidate list is 'not configured', not 'nothing to do'."""
+        repo, _ = self.make()
+        path = repo / "scripts" / "autonomous" / "config.json"
+        cfg = json.loads(path.read_text(encoding="utf-8"))
+        cfg["candidates"]["A"]["include"] = []
+        path.write_text(json.dumps(cfg), encoding="utf-8")
+        proc = script(repo, "ledger.py", "next", "--stream", "A")
+        self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("not configured", proc.stderr)
+        self.assertNotIn("No eligible targets remain", proc.stdout)
+
+    def test_missing_config_is_named_too(self) -> None:
+        """No config file at all: the message says which file to create."""
+        repo, _ = self.make()
+        (repo / "scripts" / "autonomous" / "config.json").unlink()
+        proc = script(repo, "ledger.py", "next", "--stream", "A")
+        self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("no config file at", proc.stderr)
+
+    def test_globs_that_match_nothing_are_reported_as_a_configuration_problem(self) -> None:
+        """0 candidates matched != 0 eligible targets."""
+        repo, _ = self.make()
+        path = repo / "scripts" / "autonomous" / "config.json"
+        cfg = json.loads(path.read_text(encoding="utf-8"))
+        cfg["candidates"]["A"]["include"] = ["nowhere/**/*.py"]
+        path.write_text(json.dumps(cfg), encoding="utf-8")
+        proc = script(repo, "ledger.py", "next", "--stream", "A")
+        self.assertIn("No candidate path matched", proc.stdout)
+        self.assertNotIn("No eligible targets remain", proc.stdout)
+
+    def test_the_dart_example_config_resolves_the_companion(self) -> None:
+        """The shipped example must map a source file to a test that exists."""
+        repo, _ = self.make()
+        # a repo laid out the way the Dart example describes
+        write(repo / "lib" / "src" / "view" / "x.dart", "def f():\n    return 1\n")
+        write(repo / "test" / "view" / "x_test.dart", "def test_x():\n    assert True\n")
+        commit(repo)
+        example = load_example("config.dart.json")
+        write_config(repo, example)
+        proc = script(repo, "ledger.py", "next", "--stream", "A", "--limit", "1")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("test/view/x_test.dart", proc.stdout)
+        self.assertNotIn("No candidate path matched", proc.stdout)
