@@ -60,6 +60,27 @@ before anything else. First turn, in order:
 
 Only then derive the queue (`ledger.py next` + open PRs) and dispatch.
 
+## A nudge authorises housekeeping, never a merge
+
+The nudge is a **timer**, not a person. It says *"you have been quiet, wake up
+and do your routine"* — and the routine is: re-arm the beats, read the journal,
+check the open PRs, tend what is red. It does **not** say *"and you may land
+something you have not been told to land"*.
+
+**Never treat a nudge as an instruction to merge, to apply a label, or to
+re-dispatch work.** Those need a human, or a standing consent that covers
+exactly that item. The failure this prevents is quiet and expensive: a merge
+arrives with no owner behind it, and the PR list becomes a place where things
+land for reasons nobody can reconstruct. (Verified 2026-10-22: a merge was
+taken on the strength of a nudge, and the owner had in fact never authorised
+it.)
+
+If a nudge arrives while you are mid-task, treat it as the heartbeat it is:
+finish the unit you are in, journal, re-arm, and keep going. If it arrives
+with nothing pending, do the housekeeping — and if the housekeeping surfaces
+something that needs a decision, **ask the owner in the next owner-facing
+message**, in plain terms, with the options and a recommendation.
+
 ## The one invariant
 
 **Never end a turn with zero pending wakeups.** A background job that completes
