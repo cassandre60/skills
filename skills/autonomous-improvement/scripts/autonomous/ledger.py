@@ -454,7 +454,17 @@ def cmd_next(args: argparse.Namespace) -> int:
                     "  --output-issue docs/tasks/mutant_issue.md"
                 )
     if not selected:
-        print("[+] No eligible targets remain for this stream at their current hashes.")
+        if not records:
+            print(
+                "[!] No candidate path matched candidates."
+                f"{stream}.include - the globs are wrong or too narrow, "
+                "which is a configuration problem, not an exhausted queue."
+            )
+        else:
+            print(
+                "[+] No eligible targets remain for this stream at their current "
+                f"hashes ({len(records)} candidate(s) considered)."
+            )
     if args.verbose:
         for record in skipped:
             print(f"  [-] {record['target']}: {record.get('skip')}")

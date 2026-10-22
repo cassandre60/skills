@@ -30,6 +30,19 @@ before anything else. First turn, in order:
 5. **Read the journal tail** (and the snapshots log after any gap):
    ledger status, open PRs, in-flight tabs supersede session memory —
    right after a restart this file is the fastest reliable read.
+5b. **Check that the tooling is configured**, before deriving the queue from
+   it. `ledger.py next` exits non-zero when the candidate list is empty and
+   names the key to set, but a fleet that never ran it would read "no eligible
+   targets" as an exhausted queue. One call settles it:
+
+   ```sh
+   python3 scripts/autonomous/ledger.py next --stream A --limit 3
+   ```
+
+   A candidate with a **mapped test that does not exist** means the mapping
+   rule is wrong for this repo — the same failure as an empty candidate list,
+   one step later, and equally silent. Fix the rule before dispatching: a
+   fleet whose queue is a guess is a fleet that parks itself.
 
 Only then derive the queue (`ledger.py next` + open PRs) and dispatch.
 
