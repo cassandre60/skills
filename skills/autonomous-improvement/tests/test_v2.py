@@ -1227,6 +1227,11 @@ class WatchdogTests(RepoTestCase):
         env = dict(os.environ)
         env.update(HOME=str(home), PATH=f"{bin_dir}:{os.environ['PATH']}")
         env.pop("XDG_CONFIG_HOME", None)
+        # The installer reads ORCH_STATE_DIR from the environment. A machine
+        # that runs the watchdog (a fleet host) exports it, and the test then
+        # writes the env file into the REAL state dir instead of its temp
+        # home - a failure that depends on the machine, not on the code.
+        env.pop("ORCH_STATE_DIR", None)
         result = run([str(ASSETS / "install-watchdog.sh")], cwd=self.tmp, env=env)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         unit = home / ".config/systemd/user/orchestrator-watchdog.service"
@@ -1592,6 +1597,57 @@ class DocumentationInvariantTests(unittest.TestCase):
             "scripts/autonomous/fleet.py",
         ):
             self.assertTrue((SKILL_ROOT / relative).exists(), relative)
+
+
+
+def _flat(text: str) -> str:
+    """Collapse whitespace so an assertion survives a re-wrap."""
+    return " ".join(text.split())
+
+
+def _flat_lifecycle(text: str) -> str:
+    """Collapse whitespace so an assertion survives a re-wrap."""
+    return " ".join(text.split())
+
+
+class WorkerLifecycleContractTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.unattended = _flat_lifecycle(
+            (SKILL_ROOT / "references" / "05-unattended-operation.md").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.protocol = _flat_lifecycle(
+            (SKILL_ROOT / "references" / "04-workflow-and-roles.md").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.watchdog = (SKILL_ROOT / "assets" / "watchdog.sh").read_text(
+            encoding="utf-8"
+        )
+
+    def test_three_failure_classes_are_named(self) -> None:
+        self.assertIn("quota", self.unattended.lower())
+        self.assertIn("outage", self.unattended.lower())
+        self.assertIn("task failure", self.unattended.lower())
+
+    def test_an_outage_does_not_rotate_or_park_a_pool(self) -> None:
+        self.assertIn("do not rotate, do not park a pool", self.unattended.lower())
+        self.assertIn("OUTAGE_RE", self.watchdog)
+        # "overloaded" is an outage word, not a quota word
+        self.assertNotIn("overloaded", _flat_lifecycle(self.watchdog).split("QUOTA_RE=")[1].split("'")[0])
+
+    def test_the_checkpoint_covers_new_files(self) -> None:
+        self.assertIn("stage new files by name", self.unattended.lower())
+
+    def test_a_dead_tabs_untracked_work_is_preserved(self) -> None:
+        self.assertIn("dirty and untracked", self.unattended.lower())
+        self.assertIn("before touching its worktree", self.unattended.lower())
+
+    def test_the_dispatch_brief_carries_the_precheck(self) -> None:
+        self.assertIn("ledger.py check --target", self.unattended)
+        self.assertIn("correcting the brief's premise", self.unattended.lower())
+        self.assertIn("keeps the dispatch brief short", self.protocol.lower())
 
 
 if __name__ == "__main__":
