@@ -113,6 +113,14 @@ The Orchestrator:
 - **re-derives the queue from the codebase**: when the tracked targets are
   exhausted, the next candidates are the files with no ledger row yet. An
   exhausted list is a signal to look wider, not to idle;
+- **keeps the dispatch brief short and carries its pre-checks**: the brief
+  states the task, the evidence contract, the machine budget and that task's
+  traps, and it includes the ledger pre-check plus the instruction that
+  correcting a wrong premise is the expected outcome. A brief that restates
+  the reference text can exhaust a context window before the work starts
+  (verified 2026-10-22: three workers died with no output at all, every one
+  after a 150-line brief, while the pool was healthy and every short-brief
+  worker succeeded);
 - **owns every PR from creation to merge**: it reads that PR's checks on every
   wake, drives a red check that sits inside the diff back to green (re-dispatch
   the fix to the same worker session, or to a fresh worker on a live model),
@@ -202,6 +210,25 @@ sit red and the fleet looks busy while nothing converges.
    instead of one per PR, and the product PRs ship green. (Verified
    2026-10-20: five audit PRs were each blocked on the same kind of one-line
    append; batching them turned five owner decisions into one.)
+
+   **A batch has an order and a shape, and both are load-bearing.** Insert the
+   rows **newest first** (a later PR's row above an earlier PR's row for the
+   same target), keep the **Status cell to the bare token** (`COMPLETED`, not
+   `COMPLETED (second round: …)`) with the detail in the Summary cell, and
+   record the **blob as it lands in `main`** — for a round whose PR changed the
+   source, that is the post-change blob, not the one that was audited. Then run
+   the validator over the batched file before opening the PR:
+
+   ```sh
+   python3 scripts/autonomous/ledger.py validate
+   ```
+
+   It reports the rows the parser cannot see and the targets whose row no
+   longer matches HEAD, and exits non-zero when it finds any. A row the parser
+   skips is invisible to the dedup law, so the registry looks complete while
+   every file in it is re-audited. (Verified 2026-10-22 on a live fleet: 54 of
+   85 rows were invisible, and 34 of the 48 audited files would have been
+   re-audited. See `docs/autonomous-improvement-audit-2026-10-22.md`.)
 
 ## Git discipline
 
