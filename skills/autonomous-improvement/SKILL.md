@@ -9,8 +9,8 @@ Spend tokens on work that can be **mechanically falsified**, not on renames,
 prose, or checkbox tests. Two streams are active:
 
 - **A — mutation testing:** find behavior the suite does not protect.
-- **B — adversarial test audit:** find tests that cannot fail, assert mocks, or
-  sleep instead of synchronizing.
+- **B — adversarial test audit:** find tests that cannot fail, assert mocks,
+  sleep instead of synchronizing, or measure in a harness unlike production.
 
 Each round produces at most one small, evidence-backed PR. If there is no
 falsifiable gap, stop; that is a valid result.
@@ -118,7 +118,7 @@ recovers a stale backup after SIGKILL. Add these patterns to `.gitignore`; see
 
 ## Stream B — adversarial test audit
 
-Read a test file and ask:
+Read a test file and ask (harness questions: `references/03-streams-and-triage.md`):
 
 1. **Can it actually fail?** Does it assert real state, or only that a call did
    not throw? Would it pass if the implementation did the opposite?

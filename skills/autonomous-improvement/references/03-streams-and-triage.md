@@ -67,6 +67,43 @@ Pick a test file from `candidates.B`. Read it and ask:
 - A flaky test is not proven flaky by one red run. Re-run it in isolation;
   report the reproduction command.
 
+### Does the harness measure what production measures? (fidelity)
+
+A test suite can be green and its *measurements* wrong, and every conclusion
+drawn from them is wrong in the same direction. The harness — not the test —
+is usually the cause:
+
+- Does the test app carry the **production theme** (fonts, text styles,
+  density)? A widget test built on a bare `MaterialApp` measures text with the
+  default font, and a string can measure **twice as wide** as the app draws it.
+- Are the **production fonts loaded**? A headless test engine commonly
+  substitutes its own glyphs (square, 1-em) for the real font. Every width,
+  wrap point and overflow changes.
+- Is there a `Material`/`Scaffold` ancestor where production has one? A widget
+  measured without one inherits Material's 48 px monospace *error* style —
+  a style that exists to shout, not to render.
+- Is the **viewport and pixel ratio** the production one? A test that measures
+  at a different width measures a different layout.
+- Fix: make the harness faithful **first**, then re-measure everything it
+  reported. A finding under an unfaithful harness is not a finding until the
+  harness is right.
+- Evidence: the count before and after, and the **per-site** list — how many
+  of the reported sites are production code and how many are the harness's own
+  scaffold. "Most of them are noise" is not a measurement; "78 occurrences, 0
+  in production, 76 in the test's own fixture" is.
+
+### Which framework errors does the harness intercept? (swallowed exceptions)
+
+- A scope that catches framework errors (layout overflows, assertion failures,
+  exceptions during build) and **reports** them is good: the error is greppable
+  in CI. A scope that **swallows** them is a Stream B finding: every test that
+  would have caught that class of defect now passes.
+- Fix: report first, and turn the report into a failure only as a separate,
+  owner-facing decision — changing what "green" means for the whole suite is a
+  policy change, not a cleanup.
+- Evidence: name the error class the harness intercepts and the test that
+  would have failed without it.
+
 Every Stream B finding needs evidence: the line, why it cannot fail, and the
 proposed stronger assertion. "Rename this test" or "reformat this file" is not a
 finding.
