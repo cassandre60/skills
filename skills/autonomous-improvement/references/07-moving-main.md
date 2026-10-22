@@ -25,7 +25,11 @@ cannot merge**, because it does not contain the base branch's tip.
 ### Re-syncing a pushed branch: merge, never rebase
 
 A branch that is already pushed **cannot be rebased without a force-push**, and
+<<<<<<< HEAD
 `references/04-workflow-and-roles.md`'s git discipline forbids force-pushing. So the two references
+=======
+`references/04`'s git discipline forbids force-pushing. So the two references
+>>>>>>> origin/feat/git-reality
 must agree, and the answer is: **merge the base into the branch**.
 
 ```sh
