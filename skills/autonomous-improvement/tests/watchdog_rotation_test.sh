@@ -173,6 +173,27 @@ else
   fail "total-failure tick exited $LAST_RC (expected 3)"
 fi
 
+# --- case 7: an EMPTY model_failures file must not break the ladder -------
+# Regression: failed_recently() read into a global 'm', clobbering the
+# caller's ladder loop variable. With the file present but empty, read's
+# EOF blanked the model and the ladder silently degraded to the session
+# default - the very failure the watchdog exists to prevent. The pruning
+# added in issue #19 can produce exactly this state.
+write_fake_opencode "alpha-free" "beta-free"
+rm -f "$TMP/state/watchdog.log" "$TMP/state/last_nudge"
+printf 'ses_TEST\n' >"$TMP/state/opencode_session_id"
+touch -d '3 hours ago' "$TMP/state/last_beat"
+: >"$TMP/state/model_failures"   # exists, but empty
+PATH="$TMP/bin:$PATH" ORCH_STATE_DIR="$TMP/state" \
+  ORCH_MODEL_LADDER="opencode/alpha-free opencode/beta-free" \
+  ORCH_NUDGE_TIMEOUT=20 ORCH_MIN_INTERVAL=0 ORCH_HB_MAX_AGE=60 \
+  bash "$ASSETS" >/dev/null 2>&1
+if grep -q -- '-m opencode/alpha-free' "$TMP/state/watchdog.log"; then
+  ok "empty model_failures still uses the ladder's first model"
+else
+  fail "empty model_failures broke the ladder (fell back to the session default)"
+fi
+
 if [ "$FAILED" -eq 0 ]; then
   echo "PASS: watchdog model rotation"
   exit 0

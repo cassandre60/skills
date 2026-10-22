@@ -123,7 +123,11 @@ prune_failures() {
 prune_failures
 
 failed_recently() { # $1: model id -> 0 when the model is in cooldown
-  local model="$1" now ts
+  # `m` MUST be local: read into a global would clobber the caller's
+  # ladder loop variable, and an EMPTY failure file (which the TTL prune
+  # below can produce) blanks the model via read's EOF - the ladder would
+  # silently degrade to the session default.
+  local model="$1" now ts m
   now=$(date +%s)
   [ -f "$FAIL_FILE" ] || return 1
   while read -r m ts; do
@@ -143,9 +147,9 @@ mark_failed() { # $1: model id
 # ladder means "use the session default" (no rotation is possible then).
 candidates=()
 if [ -n "$LADDER" ]; then
-  for m in $LADDER; do
-    failed_recently "$m" && continue
-    candidates+=("$m")
+  for model_id in $LADDER; do
+    failed_recently "$model_id" && continue
+    candidates+=("$model_id")
     [ "${#candidates[@]}" -ge "$MAX_MODELS" ] && break
   done
   if [ "${#candidates[@]}" -eq 0 ]; then
