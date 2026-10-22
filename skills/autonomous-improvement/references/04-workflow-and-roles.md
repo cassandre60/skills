@@ -211,6 +211,42 @@ sit red and the fleet looks busy while nothing converges.
    2026-10-20: five audit PRs were each blocked on the same kind of one-line
    append; batching them turned five owner decisions into one.)
 
+## The owner ask: plain terms, and a record
+
+A gate that needs a human is not a technical question, and an ask written in
+gate jargon does not get answered. When the orchestrator needs a label, a
+decision, or a change of policy, the ask states **three things in plain
+language**, with no gate vocabulary in them:
+
+1. **What changes** — what the owner will have, in terms of the product or the
+   repo, not in terms of a protected path.
+2. **What it costs** — the time, the risk, the review burden, whatever is
+   really being asked for.
+3. **What happens if the owner declines** — the default that applies instead,
+   so the answer can be "no" without leaving a hole.
+
+### Consent is per item, and it is recorded
+
+An owner may give a **standing consent for a class of edit** — "apply the label
+to protected-path PRs of this kind, and do the merges". That consent does not
+travel to the next PR: it covers the class it was given for, and every item
+still gets its own record.
+
+**The record goes on the PR**, in plain language, and carries four things:
+
+| Field | What it says |
+|---|---|
+| the **class** | what kind of edit is being authorised (for example: a bookkeeping row in the fleet's own audit registry) |
+| the **authority** | on whose instruction the label was applied, quoted or summarised |
+| the **date** | when |
+| the **withdrawal path** | how the owner revokes it — delete the label, close the PR |
+
+Without that record a label on a PR is indistinguishable from a label applied
+without asking, and a later reader cannot tell consent from assumption. With
+it, the owner can withdraw any single item without undoing the standing
+consent, and a later agent can see the basis.
+
+
    **A batch has an order and a shape, and both are load-bearing.** Insert the
    rows **newest first** (a later PR's row above an earlier PR's row for the
    same target), keep the **Status cell to the bare token** (`COMPLETED`, not

@@ -6740,3 +6740,58 @@ class GitRealityContractTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+"""Owner-ask and gh-fallback contract tests.
+
+Red before this change: the skill said "re-ask the owner per item" without
+saying what an ask contains or where the consent is recorded, and the gh
+fallbacks were left for each agent to rediscover.
+"""
+
+def _flat_ask(text: str) -> str:
+    """Collapse whitespace so an assertion survives a re-wrap."""
+    return " ".join(text.split())
+
+
+class OwnerAskContractTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.protocol = _flat_ask(
+            (SKILL_ROOT / "references" / "04-workflow-and-roles.md").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.unattended = _flat_ask(
+            (SKILL_ROOT / "references" / "05-unattended-operation.md").read_text(
+                encoding="utf-8"
+            )
+        )
+
+    def test_the_ask_states_three_plain_things(self) -> None:
+        for phrase in (
+            "what changes",
+            "what it costs",
+            "what happens if the owner declines",
+        ):
+            self.assertIn(phrase, self.protocol.lower(), phrase)
+
+    def test_the_consent_record_has_its_four_fields(self) -> None:
+        for field in ("class", "authority", "date", "withdrawal path"):
+            self.assertIn(field, self.protocol.lower(), field)
+
+    def test_consent_is_per_item(self) -> None:
+        self.assertIn("consent is per item", self.protocol.lower())
+        self.assertIn("standing consent", self.protocol.lower())
+
+    def test_the_gh_fallbacks_are_documented(self) -> None:
+        self.assertIn("gh api --method POST", self.unattended)
+        self.assertIn("repos/<owner>/<repo>/issues/<n>/labels", self.unattended)
+
+    def test_the_repo_override_rule_is_stated(self) -> None:
+        self.assertIn("always pass", self.unattended.lower())
+        self.assertIn("-r <owner>/<repo>", self.unattended.lower())
+        self.assertIn("parent", self.unattended.lower())
+
+
+if __name__ == "__main__":
+    unittest.main()
