@@ -92,6 +92,27 @@ is usually the cause:
   scaffold. "Most of them are noise" is not a measurement; "78 occurrences, 0
   in production, 76 in the test's own fixture" is.
 
+### Does the test depend on the machine's environment? (environment dependence)
+
+- A test that reads an **ambient** variable, file or platform setting that it
+  does not set itself is red on some hosts and green on others, for a reason
+  that has nothing to do with the code under test. It is a flake with a long
+  fuse: it fails on the machines a fleet happens to run on, and it hides real
+  failures behind a familiar one.
+- What does it read that it does not set? A config path, a home directory, a
+  language version, a platform setting, a variable a service unit exports.
+- **A test that runs a tool must give that tool a controlled environment**:
+  the variables it depends on, set explicitly; the ones it must not inherit,
+  cleared explicitly. Then the test cannot touch anything outside its own
+  sandbox, whatever host it runs on.
+- When a test fails on one host and not another, that is evidence about the
+  **host**, not about the repository. Say so, and fix the test's environment
+  rather than the code — unless the repository's contract says the code must
+  tolerate the difference, which is a product decision and belongs in the spec.
+- Fix: point the environment at the test's own temporary tree. A test that
+  writes a file should be able to assert that the file appeared *there*, and
+  that nothing appeared anywhere else.
+
 ### Which framework errors does the harness intercept? (swallowed exceptions)
 
 - A scope that catches framework errors (layout overflows, assertion failures,
