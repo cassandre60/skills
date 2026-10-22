@@ -191,7 +191,9 @@ class LedgerTests(RepoTestCase):
         stream_a = script(repo, "ledger.py", "next", "--stream", "A", "--json")
         alias = script(repo, "ledger.py", "next", "--stream", "1", "--json")
         self.assertEqual(json.loads(stream_a.stdout)["candidates"], json.loads(alias.stdout)["candidates"])
-        planned = script(repo, "ledger.py", "next", "--stream", "C")
+        # Stream C is available since issue #25: use a still-locked letter
+        # (D) for the planned, not implemented assertion.
+        planned = script(repo, "ledger.py", "next", "--stream", "D")
         self.assertEqual(planned.returncode, 2)
         self.assertIn("planned, not implemented", planned.stderr)
 
@@ -2810,6 +2812,141 @@ class SecurityStreamTests(RepoTestCase):
         self.assertEqual(common_module.STREAMS["K"]["status"], "available")
         install_scripts(repo)
         for stream in ("H", "K"):
+            res = script(repo, "ledger.py", "next", "--stream", stream, "--json")
+            self.assertEqual(res.returncode, 0, res.stderr)
+
+
+class FuzzSeedTests(RepoTestCase):
+    """Stream C (issue #25): recorded-seed fuzz + deterministic shrink.
+
+    The harness (repo-supplied) checks a property; the tool runs it over
+    the recorded corpus seeds, shrinks a failing input deterministically,
+    and writes the counterexample to the retained corpus. Replay is the
+    red->green oracle: the shrunk counterexample must fail before the fix
+    and pass after.
+    """
+
+    FIXTURE = SKILL_ROOT / "evals" / "fixtures" / "fuzz-python"
+
+    def fuzz_run(self, repo: Path, *args: str) -> subprocess.CompletedProcess:
+        return run(
+            [PYTHON, str(SKILL_ROOT / "scripts" / "autonomous" / "fuzz_shrink.py"), *args],
+            cwd=repo,
+        )
+
+    def copy_fixture(self) -> Path:
+        repo = self.tmp / "repo"
+        shutil.copytree(self.FIXTURE, repo)
+        return repo
+
+    def test_run_finds_and_shrinks_to_same_counterexample(self):
+        repo = self.copy_fixture()
+        first = self.fuzz_run(
+            repo, "run", "--harness", "tests/property.py",
+            "--corpus", "corpus/seeds.txt", "--json",
+        )
+        self.assertEqual(first.returncode, 1, first.stdout + first.stderr)
+        payload = json.loads(first.stdout)
+        ce = payload["counterexample"]
+        # The retention name is content-addressed: CE-<sha8 of the input>.
+        sha8 = hashlib.sha256(ce["input"].encode()).hexdigest()[:8]
+        self.assertEqual(ce["file"], f"corpus/regressions/CE-{sha8}.txt")
+        self.assertLessEqual(len(ce["input"]), 12, ce)
+        regression = repo / ce["file"]
+        self.assertEqual(regression.read_text().strip(), ce["input"])
+        # determinism: same corpus, same harness, same seed record → the
+        # same shrunk counterexample, byte for byte.
+        second = self.fuzz_run(
+            repo, "run", "--harness", "tests/property.py",
+            "--corpus", "corpus/seeds.txt", "--json",
+        )
+        second_payload = json.loads(second.stdout)
+        self.assertEqual(second_payload["counterexample"]["input"], ce["input"])
+
+    def test_replay_is_red_before_fix_and_green_after(self):
+        repo = self.copy_fixture()
+        discovered = self.fuzz_run(
+            repo, "run", "--harness", "tests/property.py",
+            "--corpus", "corpus/seeds.txt", "--json",
+        )
+        ce_file = json.loads(discovered.stdout)["counterexample"]["file"]
+        red = self.fuzz_run(
+            repo, "replay", "--harness", "tests/property.py",
+            "--counterexample", ce_file, "--json",
+        )
+        self.assertEqual(red.returncode, 1, red.stdout + red.stderr)
+        self.assertEqual(json.loads(red.stdout)["status"], "red")
+        # The Builder fix: lowercase every character (plain str.lower()).
+        (repo / "src" / "text_ops.py").write_text(
+            "def normalize(text):\n"
+            "    return text.lower()\n"
+        )
+        green = self.fuzz_run(
+            repo, "replay", "--harness", "tests/property.py",
+            "--counterexample", ce_file, "--json",
+        )
+        self.assertEqual(green.returncode, 0, green.stdout + green.stderr)
+        self.assertEqual(json.loads(green.stdout)["status"], "green")
+
+
+class PerfGateTests(RepoTestCase):
+    """Stream G (issue #25): pinned-bench delta + differential equivalence.
+
+    Both halves are mandatory: a faster-implementation candidate only
+    becomes keepable when it is (a) beyond the configured speedup band on
+    the pinned bench and (b) output-equivalent on the generated inputs.
+    'Faster because it does less' is rejected by (b).
+    """
+
+    FIXTURE = SKILL_ROOT / "evals" / "fixtures" / "perf-python"
+
+    def gate(self, repo: Path, *args: str) -> subprocess.CompletedProcess:
+        return run(
+            [PYTHON, str(SKILL_ROOT / "scripts" / "autonomous" / "perf_gate.py"), *args],
+            cwd=repo,
+        )
+
+    def copy_fixture(self) -> Path:
+        repo = self.tmp / "repo"
+        shutil.copytree(self.FIXTURE, repo)
+        return repo
+
+    def test_real_optimization_passes_both_halves(self):
+        repo = self.copy_fixture()
+        res = self.gate(
+            repo, "gate",
+            "--old", "src/hot.py", "--new", "src/optimized.py",
+            "--fn-name", "dedup", "--min-speedup", "2.0",
+            "--samples", "3", "--differential-count", "40", "--json",
+        )
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        payload = json.loads(res.stdout)
+        self.assertEqual(payload["bench"]["verdict"], "beyond-band")
+        self.assertGreaterEqual(payload["bench"]["speedup"], 2.0)
+        self.assertEqual(payload["differential"]["verdict"], "equivalent")
+
+    def test_does_less_is_rejected_by_differential_half(self):
+        repo = self.copy_fixture()
+        res = self.gate(
+            repo, "gate",
+            "--old", "src/hot.py", "--new", "src/cheat.py",
+            "--fn-name", "dedup", "--min-speedup", "2.0",
+            "--samples", "3", "--differential-count", "40", "--json",
+        )
+        self.assertNotEqual(res.returncode, 0, res.stdout + res.stderr)
+        blob = res.stdout + res.stderr
+        self.assertIn("differential", blob)
+        self.assertIn("rejected", blob)
+
+    def test_streams_c_and_g_available(self):
+        repo = self.copy_fixture()
+        self.assertEqual(common_module.STREAMS["C"]["status"], "available")
+        self.assertEqual(common_module.STREAMS["G"]["status"], "available")
+        git(repo, "init", "-q", "-b", "main")
+        git(repo, "config", "user.email", "test@example.com")
+        git(repo, "config", "user.name", "Test User")
+        install_scripts(repo)
+        for stream in ("C", "G"):
             res = script(repo, "ledger.py", "next", "--stream", stream, "--json")
             self.assertEqual(res.returncode, 0, res.stderr)
 
