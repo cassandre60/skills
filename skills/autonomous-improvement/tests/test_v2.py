@@ -1596,3 +1596,120 @@ class DocumentationInvariantTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+"""Validator tests: the rows the parser cannot see must be reported.
+
+Red before `ledger.py validate` existed: there was no command that could tell
+a fleet that its registry was invisible.
+"""
+
+import json
+
+
+class ValidateTests(RepoTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.repo, _ = python_repo(self.tmp)
+        commit(self.repo)
+
+    def _validate(self, *extra):
+        return script(self.repo, "ledger.py", "validate", *extra)
+
+    def test_decorated_status_makes_a_row_invisible(self) -> None:
+        """A Status cell with extra text is skipped by the parser - report it."""
+        ledger = self.repo / "docs" / "AUTONOMOUS_WORK_LEDGER.md"
+        write(
+            ledger,
+            ledger_text(
+                "| 2026-01-01 | A (Mutation) | `src/app.py` | `abc123456` | "
+                "COMPLETED (second round: 98 candidates) | #1 | did the work | trigger |",
+                row("src/app.py", "abc123456"),
+            ),
+        )
+        proc = self._validate()
+        self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("invisible", proc.stdout)
+        self.assertIn("COMPLETED (second round", proc.stdout)
+
+    def test_compound_target_and_hash_cells_are_invisible(self) -> None:
+        ledger = self.repo / "docs" / "AUTONOMOUS_WORK_LEDGER.md"
+        write(
+            ledger,
+            ledger_text(
+                "| 2026-01-01 | A (Mutation) | `src/app.py`, `tests/test_app.py` | "
+                "`abc123456`, `def789012` | COMPLETED | #1 | did the work | trigger |",
+            ),
+        )
+        proc = self._validate()
+        self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("more than one path", proc.stdout)
+        self.assertIn("more than one hash", proc.stdout)
+
+    def test_stale_hash_is_reported(self) -> None:
+        """A row whose hash is not the blob at HEAD is a stale audit."""
+        ledger = self.repo / "docs" / "AUTONOMOUS_WORK_LEDGER.md"
+        write(ledger, ledger_text(row("src/app.py", "000000000")))
+        proc = self._validate()
+        self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("stale", proc.stdout)
+
+    def test_a_well_formed_ledger_validates_clean(self) -> None:
+        ledger = self.repo / "docs" / "AUTONOMOUS_WORK_LEDGER.md"
+        source = script(self.repo, "ledger.py", "check", "--target", "src/app.py")
+        self.assertNotEqual(source.returncode, 0)
+        # record a proper row, then validate
+        recorded = script(
+            self.repo,
+            "ledger.py",
+            "record",
+            "--stream",
+            "A",
+            "--target",
+            "src/app.py",
+            "--status",
+            "SOUND",
+            "--summary",
+            "no gaps",
+        )
+        self.assertEqual(recorded.returncode, 0, recorded.stdout + recorded.stderr)
+        proc = self._validate()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("every row is visible", proc.stdout)
+
+    def test_json_output_lists_the_problems(self) -> None:
+        ledger = self.repo / "docs" / "AUTONOMOUS_WORK_LEDGER.md"
+        write(
+            ledger,
+            ledger_text(
+                "| 2026-01-01 | A (Mutation) | `src/app.py` | `abc123456` | "
+                "COMPLETED (with a parenthetical) | #1 | did the work | trigger |",
+            ),
+        )
+        proc = self._validate("--json")
+        self.assertNotEqual(proc.returncode, 0)
+        report = json.loads(proc.stdout)
+        self.assertEqual(report["rows_total"], 1)
+        self.assertEqual(report["rows_visible"], 0)
+        self.assertEqual(len(report["invisible"]), 1)
+
+    def test_recorded_rows_are_visible(self) -> None:
+        """A row the tool writes must be a row the parser can see."""
+        recorded = script(
+            self.repo,
+            "ledger.py",
+            "record",
+            "--stream",
+            "A",
+            "--target",
+            "src/app.py",
+            "--status",
+            "SOUND",
+            "--summary",
+            "no gaps",
+        )
+        self.assertEqual(recorded.returncode, 0, recorded.stdout + recorded.stderr)
+        proc = self._validate("--json")
+        report = json.loads(proc.stdout)
+        self.assertEqual(report["rows_total"], 1)
+        self.assertEqual(report["rows_visible"], 1)
+        self.assertEqual(report["invisible"], [])
