@@ -64,6 +64,26 @@ plus the snapshot timer; if you keep the watchdog too, its exit code 3
 (distress) and `OnFailure=` hook remain useful for "every wake is failing",
 and nothing in it reads `wake.json`, so the two cannot fight.
 
+### The launcher: `assets/stateless-wake.sh`
+
+The deployable half of this shape. A timer runs it; it starts a **fresh**
+headless run per wake:
+
+1. it consults `fleet.py needs-brain --json` first — unchanged state means
+   it launches nothing at all (0 tokens, quiet hours stay free);
+2. it launches `$ORCH_WAKE_CMD` (default `opencode run --auto …`) with the
+   prompt from `$ORCH_PROMPT_FILE` and the ladder model, walking
+   `ORCH_MODEL_LADDER` on quota failures (error-line anchored, same rule as
+   the watchdog);
+3. it needs **no session id** — that is the point of the shape;
+4. exit codes: `0` quiet or woken, `2` misconfiguration, `3` total failure
+   (wire `OnFailure=` to it).
+
+Install it next to the timer (e.g. a `systemd --user` timer calling it
+every few minutes) and point `ORCH_WAKE_CMD` at your harness' one-shot form
+from the adapter table above. `tests/stateless_wake_test.sh` exercises it
+against a stub harness CLI and a stub `gh`.
+
 ## Cold start (fallback: immortal session)
 
 Use this shape when your harness has no headless one-shot mode, or when a

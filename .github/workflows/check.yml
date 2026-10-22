@@ -29,3 +29,5 @@ jobs:
         run: python3 -m unittest discover -s tests -v
       - name: Run the watchdog model-rotation test
         run: bash skills/autonomous-improvement/tests/watchdog_rotation_test.sh
+      - name: Run the stateless-wake launcher test
+        run: bash skills/autonomous-improvement/tests/stateless_wake_test.sh
