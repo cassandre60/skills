@@ -1596,3 +1596,54 @@ class DocumentationInvariantTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _flat(text: str) -> str:
+    """Collapse whitespace so an assertion survives a re-wrap."""
+    return " ".join(text.split())
+
+
+class MutationMeasurementContractTests(unittest.TestCase):
+    """The measurement contract: the engine's blind shapes, the two flags that
+    silently change a number, and the oracle set the kill criterion names.
+
+    Red before this change: none of it was written down, so a round could
+    report a clean kill rate while a third of the real gaps sat untouched.
+    """
+
+    def setUp(self) -> None:
+        self.engine = _flat(
+            (SKILL_ROOT / "references" / "01-mutation-engine.md").read_text(encoding="utf-8")
+        )
+        self.protocol = _flat(
+            (SKILL_ROOT / "references" / "04-workflow-and-roles.md").read_text(
+                encoding="utf-8"
+            )
+        )
+
+    def test_the_blind_shapes_are_named(self) -> None:
+        for shape in (
+            "a plain field copy",
+            "a dropped argument",
+            "a swapped branch",
+            "a changed literal",
+            "a different separator",
+        ):
+            self.assertIn(shape, self.engine, shape)
+
+    def test_a_hand_curated_supplement_is_required(self) -> None:
+        self.assertIn("hand-curated supplement", self.engine)
+        self.assertIn("kill criterion", self.engine)
+
+    def test_the_timeout_flag_is_a_reporting_hazard(self) -> None:
+        self.assertIn("counted as a kill", self.engine)
+        self.assertIn("timeout-counts-as excluded", self.engine)
+
+    def test_the_sampling_flag_is_a_reporting_hazard(self) -> None:
+        self.assertIn("samples", self.engine)
+        self.assertIn("max-mutants", self.engine)
+
+    def test_the_protocol_names_every_oracle_file(self) -> None:
+        self.assertIn("every oracle file", self.protocol.lower())
+        # the phrase lives in a shell comment, so assert on the part after it
+        self.assertIn("a second oracle may already kill it", self.protocol)
