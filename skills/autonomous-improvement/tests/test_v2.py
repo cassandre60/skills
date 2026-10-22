@@ -1621,6 +1621,7 @@ class StatelessWakeTests(RepoTestCase):
 
     def test_kill_switch_is_a_tend_only_reason(self):
         repo, env, _ = self.stage([self.red_pr()])
+        (repo / ".autonomous").mkdir(exist_ok=True)
         (repo / ".autonomous" / "STOP").write_text("")
         res = script(repo, "fleet.py", "needs-brain", "--json", env=env)
         payload = json.loads(res.stdout)
