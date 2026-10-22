@@ -19,8 +19,14 @@ cd ../<repo>-<slug>
 # 3. Baseline: one targeted test, on the mapped test file.
 <test_cmd> <test_file>                  # must pass on the base
 
+# 3b. Name EVERY oracle file, not only the mapped one: grep the test tree for
+#     the class/function being mutated and put every file that asserts on it
+#     in the test command. A survivor under a single-file criterion is not yet
+#     a gap - a second oracle may already kill it.
+
 # 4. Find the gap. For Stream A, run the engine; for Stream B, read the file.
-python3 scripts/autonomous/mutation_engine.py --source <target> --test-cmd "<targeted test cmd>" \
+python3 scripts/autonomous/mutation_engine.py --source <target> --test-cmd "<every oracle file>" \
+  --timeout-counts-as excluded --max-mutants 100 \
   --output-json .autonomous-last-run.json
 python3 scripts/autonomous/mutants.py ingest --report .autonomous-last-run.json
 
@@ -57,7 +63,7 @@ step 7. Another agent may have claimed the same target since step 1.
 | Class | What the PR body must attach |
 |---|---|
 | bugfix | Failing test on `origin/main` (red) + passing on the branch (green), with the full base sha |
-| test-only (Stream A) | Named mutant; test red **with the mutant applied**, green on clean source; seed/scope if generated |
+| test-only (Stream A) | Named mutant; test red **with the mutant applied**, green on clean source; seed/scope if generated; **which oracle files the kill criterion named**, and the hand-curated supplement for the shapes the engine cannot reach |
 | test-only (Stream B) | The vacuous/flaky behavior, the stronger assertion, and a before/after run |
 | perf | Before/after numbers on a pinned harness, spread not just median, differential test vs the old implementation |
 | refactor | No test files edited; same behavior proven by existing tests; mutation score not lower in the touched area |

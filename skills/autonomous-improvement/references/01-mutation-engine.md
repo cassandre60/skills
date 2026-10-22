@@ -96,6 +96,45 @@ Scope is a cost control, not a claim that only changed lines matter. A
 diff-scoped run can miss gaps elsewhere; the ledger records which scope was
 audited.
 
+## What the rule packs cannot reach
+
+The engine mutates **text**, so a class of changes has no text to mutate. These
+shapes are invisible to it, and a round that only runs the engine will report
+a clean kill rate while a third of the real gaps sit untouched:
+
+| Shape | Example |
+|---|---|
+| a plain field copy | `this.a = other.a` → `this.a = other.b` |
+| a returned expression | `return a + b` → `return a + c` |
+| a dropped argument | `f(a, b)` → `f(a)` |
+| a swapped branch | `if (x) { A } else { B }` → the arms exchanged |
+| a `??` fallback | `x ?? y` → `x ?? z`, or the fallback removed |
+| a changed literal | `size: 150` → `size: 100` |
+| a different separator | `join(", ")` → `join("; ")` |
+| a dropped `&&` operand | `a && b` → `a` |
+| a changed unit or key | a percentage written as a fraction |
+| argument order | `f(a, b)` → `f(b, a)` |
+
+**Budget a hand-curated supplement for them.** The supplement is a first-class
+part of a round, judged by the same kill criterion: apply one mutant at a
+time, run the targeted test, record the red run, restore, record the green
+rerun. Twenty to thirty hand-applied mutants per round is a normal budget, and
+on a live fleet they closed roughly **a third** of the pinned gaps. A round
+that reports only the engine's kill rate has not measured the file.
+
+## Two flags that change the number silently
+
+- **`--timeout-counts-as`** defaults to `killed`. A mutant that hangs the suite
+  is then counted as a kill, and a kill rate that includes hangs is not a
+  measurement. Pass `--timeout-counts-as excluded` and report hangs as their
+  own bucket — a hang is a behaviour worth knowing about, not a kill.
+- **`--max-mutants`** **samples** (seeded, default 30) after deduplication.
+  A run that samples reports a candidate count that is not the file's. Pass a
+  value above the candidate count, or state the sample and the seed.
+
+Both are visible in the run's `--output-json` (seed, shard, counts) — read it
+before quoting a number.
+
 ## Triage a survivor
 
 1. **Equivalent?** Does the mutation change observable behavior? If not, close
