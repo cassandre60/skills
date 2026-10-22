@@ -13476,11 +13476,19 @@ class LandingSeveralOwnPRsTests(unittest.TestCase):
             )
         )
 
+    def test_the_rule_is_stated_in_its_general_form(self) -> None:
+        self.assertIn("preserve the file's structure", self.protocol.lower())
+        self.assertIn("in any repo", self.protocol.lower())
+
     def test_the_rebuild_rule_is_stated(self) -> None:
-        self.assertIn("by rebuilding the file, not by keeping both", self.protocol.lower())
+        self.assertIn("by rebuilding the file", self.protocol.lower())
+        self.assertIn("rather than to keep both", self.protocol.lower())
 
     def test_the_trailing_construct_rule_is_stated(self) -> None:
-        self.assertIn("exactly once, at the end", self.protocol.lower())
+        self.assertIn("single trailing construct exactly once", self.protocol.lower())
+
+    def test_the_line_oriented_exception_is_stated(self) -> None:
+        self.assertIn("concatenation is", self.protocol.lower())
 
     def test_the_verification_step_is_stated(self) -> None:
         self.assertIn("verify the merged tree before pushing", self.protocol.lower())
