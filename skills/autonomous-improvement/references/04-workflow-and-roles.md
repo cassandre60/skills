@@ -193,6 +193,14 @@ sit red and the fleet looks busy while nothing converges.
    markers, and verify the pushed file contains none before moving on. A
    conflicted ledger pushed to a PR is worse than a missing row.
 
+7b. **Batch the fleet's own deliveries when another agent is merging too.**
+   Under strict protection every merge by anyone invalidates the other side's
+   green PR, and each invalidation costs a full CI cycle. When more than one
+   of the orchestrator's own PRs is ready, land them as **one** PR with one
+   commit per change: one CI cycle instead of N, and one protected-path
+   decision instead of N. (Verified 2026-10-22: three green PRs — two audit
+   rounds and a bugfix — landed as one, and the pattern held three times.)
+
 7. **Protected-file bookkeeping is batched, not bundled.** When a repo treats
    an audit ledger as a protected path, a worker's row for it blocks the PR on
    a gate label — and the gate's own message says such an edit "must be a
@@ -226,6 +234,17 @@ sit red and the fleet looks busy while nothing converges.
 
 - Stage by name, never `git add -A`.
 - Never `push --force` or `reset --hard` outside your own worktree.
+- **Re-sync a pushed branch by merging the base into it**, never by rebasing:
+  a rebase of a published branch needs a force-push, which the rule above
+  forbids. `git merge origin/main --no-edit`, push, wait for a fresh green on
+  the new head. (Under strict protection a green PR that does not contain the
+  base's tip cannot merge at all, and `--admin` does not bypass it — see
+  `07-moving-main.md`.)
+- **A branch created inside an existing worktree inherits that worktree's
+  commits.** Before opening a PR, `git diff origin/main...HEAD --stat` must
+  list only the files the task touched; if it lists a file the task never
+  touched, the branch carries someone else's commit — create it in a fresh
+  worktree instead.
 - Never delete a worktree you did not create. `orchestrator.py
   cleanup-worktree` only removes paths in its registry and refuses dirty or
   unpushed work without `--force`.

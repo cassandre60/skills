@@ -27,6 +27,20 @@ before anything else. First turn, in order:
    `assets/install-watchdog.sh`. If neither works, degrade to
    beats-only and record that in the journal: beats alone keep the loop
    alive; the watchdog is armor, not a requirement.
+4b. **Check the orchestrator's own checkout.** The owner's acceptance runs
+   against a checkout, and a checkout parked on a side branch makes that
+   acceptance run against a stale tree — invisibly, because `git status` is
+   clean. The branch and the distance from the base are one command:
+
+   ```sh
+   git -C <checkout> rev-parse --abbrev-ref HEAD
+   git -C <checkout> log --oneline HEAD..origin/main | wc -l
+   ```
+
+   The checkout the owner will run should be on the base branch and current.
+   (Verified 2026-10-22: a checkout sat on a branch whose content had been
+   squash-merged — so it was not an ancestor of `main` — and was 43 files
+   behind.)
 5. **Read the journal tail** (and the snapshots log after any gap):
    ledger status, open PRs, in-flight tabs supersede session memory —
    right after a restart this file is the fastest reliable read.
