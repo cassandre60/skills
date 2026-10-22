@@ -191,6 +191,31 @@ sit red and the fleet looks busy while nothing converges.
    it. A green run of a broken instrument is worse than a red one, because
    it is trusted.
 
+8b. **Landing several of your own PRs that touch the same file.** When the
+   orchestrator's own PRs each touch a shared file — a common test file, a
+   reference, a ledger — landing them one at a time produces a conflict on
+   every one after the first, and the conflict is an **append** conflict: both
+   sides added a block at the end of the same file. The recipe:
+
+   1. **Land in dependency order** — the PR whose change the others build on
+      first. A PR that needs another's code cannot be merged before it.
+   2. **Re-sync each one by MERGING the base into it** (never rebasing a
+      pushed branch), then let its checks re-run on the new head.
+   3. **Resolve an append conflict by REBUILDING the file, not by keeping both
+      sides.** "Keep both" concatenates the two blocks, and when the file
+      carries a trailing guard — a `__main__` block, a repeated helper, a
+      duplicated section — the result interleaves the fragments into a file
+      that may not even parse. Rebuild it instead: take the base's file, add
+      each branch's own blocks in order, and put the file's single trailing
+      construct (a `__main__` guard, a helper) exactly once, at the end.
+   4. **Verify the merged tree before pushing**: the file parses, its tests
+      pass, and the repo's own checks are green. A conflict resolution is
+      code, and it needs the same evidence as any other change.
+   5. **Check the pushed tree for conflict markers** — `git grep -n -E
+      '^(<<<<<<<|>>>>>>>)'` — and never push a file that carries them. (A
+      resolution committed with the markers still in it reached a remote once
+      in one session; it was caught by the same check and fixed.)
+
 8. **Batched ledger rows conflict with each other.** Every ledger row is
    inserted at the top of the same table, so two ledger branches collide on
    the same lines. When the orchestrator's ledger branch merges a base that

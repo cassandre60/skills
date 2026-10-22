@@ -13455,3 +13455,37 @@ class MutationMeasurementContractTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+def _flat_landing(text: str) -> str:
+    """Collapse whitespace so an assertion survives a re-wrap."""
+    return " ".join(text.split())
+
+
+class LandingSeveralOwnPRsTests(unittest.TestCase):
+    """The recipe for landing several of the orchestrator's own PRs that touch
+    the same file.
+
+    Red before this change: the recipe existed nowhere, and the session it
+    came from produced a conflict resolution that did not even parse.
+    """
+
+    def setUp(self) -> None:
+        self.protocol = _flat_landing(
+            (SKILL_ROOT / "references" / "04-workflow-and-roles.md").read_text(
+                encoding="utf-8"
+            )
+        )
+
+    def test_the_rebuild_rule_is_stated(self) -> None:
+        self.assertIn("by rebuilding the file, not by keeping both", self.protocol.lower())
+
+    def test_the_trailing_construct_rule_is_stated(self) -> None:
+        self.assertIn("exactly once, at the end", self.protocol.lower())
+
+    def test_the_verification_step_is_stated(self) -> None:
+        self.assertIn("verify the merged tree before pushing", self.protocol.lower())
+
+    def test_the_conflict_marker_check_is_stated(self) -> None:
+        self.assertIn("git grep", self.protocol)
+        self.assertIn("conflict markers", self.protocol.lower())
+
