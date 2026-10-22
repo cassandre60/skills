@@ -548,13 +548,17 @@ def _run_test_cmd(
     global _active_pgid
     start = time.time()
     try:
+        # A mutant rewrite keeps byte-length and mtime-second equal, so a
+        # stale pyc (clean or mutant bytecode) can look fresh and the test
+        # subprocess will believe it: false survivors, poisoned baselines.
+        env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
         proc = subprocess.Popen(
             argv,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            env=env,
             start_new_session=True,
-            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
         )
     except FileNotFoundError:
         raise EnvError(f"required tool not found: {argv[0]}")
@@ -627,6 +631,14 @@ def run_mutation_pass(
     recover_stale(source)
     ensure_clean(source, allow_dirty)
     actual_backend = _resolve_backend(backend)
+    # A pyc written before this pass (by an earlier tool run, a doc example,
+    # an IDE) stays "fresh" across this pass's same-second rewrites; drop the
+    # source's sibling cache so the baseline and every mutant load compile
+    # from source. Combined with PYTHONDONTWRITEBYTECODE in _run_test_cmd
+    # this closes the stale-bytecode window.
+    pycache = source.parent / "__pycache__"
+    if pycache.is_dir():
+        shutil.rmtree(pycache, ignore_errors=True)
     print(f"[*] Source: {source} (rule pack: {pack['name']})")
     print(f"[*] If interrupted: git checkout -- {source}")
 
