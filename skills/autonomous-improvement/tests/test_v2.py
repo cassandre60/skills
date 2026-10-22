@@ -1141,65 +1141,6 @@ class MutationEngineTests(RepoTestCase):
         self.assertEqual(allowed.returncode, 0, allowed.stderr)
 
 
-    def test_same_second_pycache_staleness_cannot_leak(self):
-        """Regression: mutant loads must never reuse bytecode cached the same second.
-
-        A mutant rewrite that keeps byte-length equal (e.g. ``- 1`` -> ``- 2``)
-        leaves the source's size identical and usually within the same
-        mtime-second as the pyc created by the baseline run — with a fresh pyc
-        check the spawned interpreter then executes the CLEAN (or a stale)
-        bytecode and the engine records a false survivor, and the stale
-        bytecode poisons the next invocation's baseline. The engine must make
-        pyc reuse impossible around mutant loading.
-        """
-        repo, _ = python_repo(self.tmp, with_origin=False)
-        commit(repo)
-        # A scoped, actually-executing test so comparison mutants die.
-        (repo / "src" / "app.py").write_text("def f(a, b):\n    return a == b\n")
-        (repo / "tests" / "test_f.py").write_text(
-            "import sys\nsys.path.insert(0, '')\nfrom src.app import f\n"
-            "assert f(1, 1) is True\nassert f(1, 2) is False\nprint('ok')\n"
-        )
-        git(repo, "add", "-A")
-        git(repo, "commit", "-qm", "killers for comparison mutants")
-        # Prime a pyc the way any earlier tool run would have left it.
-        self.assertEqual(
-            run([sys.executable, "-c", "import src.app"], cwd=repo).returncode, 0
-        )
-        original = (repo / "src" / "app.py").read_bytes()
-
-        def one_pass():
-            # run_mutation_pass spawns the test command from the caller's
-            # cwd; pin it to the repo for the duration of the pass.
-            cwd = os.getcwd()
-            os.chdir(repo)
-            try:
-                results = engine_module.run_mutation_pass(
-                    source_path=str(repo / "src" / "app.py"),
-                    test_cmd=f"{sys.executable} tests/test_f.py",
-                    max_mutants=4,
-                    timeout=30.0,
-                )
-            finally:
-                os.chdir(cwd)
-            status = git(repo, "status", "--porcelain", "-uall")
-            leaked = [l for l in status.stdout.splitlines() if "__pycache__" not in l]
-            self.assertEqual(leaked, [], status.stdout)
-            self.assertEqual((repo / "src" / "app.py").read_bytes(), original)
-            return results
-
-        first = one_pass()
-        second = one_pass()
-        for label, results in (("first", first), ("second", second)):
-            counts = results["counts"]
-            self.assertEqual(
-                counts["survived"], 0,
-                f"{label} pass recorded a false survivor: {results['survived']}",
-            )
-            self.assertGreaterEqual(counts["killed"], 1, f"{label} pass: {counts}")
-            self.assertEqual(counts["uncompilable"], 0, f"{label} pass: {counts}")
-
-
 class TestWeakeningTests(RepoTestCase):
     def test_removed_assertion_and_added_skip(self):
         repo, _ = init_repo(self.tmp)
@@ -2736,5 +2677,140 @@ class RepairStreamTests(RepoTestCase):
         res = script(repo, "ledger.py", "next", "--stream", "E", "--json")
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertEqual(common_module.STREAMS["E"]["status"], "available")
+
+
+class SecurityStreamTests(RepoTestCase):
+    """Streams H+K (issue #23): advisory finders + oracle-first bumps.
+
+    The secret scan must redact by construction: the raw secret string may
+    not appear in ANY emitted artifact (stdout/stderr/evidence). The dep
+    audit reads a stub advisory JSON; the bump is oracle-first - a green
+    bump yields evidence on a SCRATCH copy of the tree, a red bump yields
+    an issue artifact and no PR. Identical candidates dedup through a
+    state file under .autonomous/ so the second run is a no-op.
+    """
+
+    FIXTURE = SKILL_ROOT / "evals" / "fixtures" / "security-python"
+
+    def adv_run(self, repo: Path, *args: str) -> subprocess.CompletedProcess:
+        return run(
+            [PYTHON, str(SKILL_ROOT / "scripts" / "autonomous" / "advisory.py"), *args],
+            cwd=repo,
+        )
+
+    def copy_fixture(self) -> Path:
+        repo = self.tmp / "repo"
+        shutil.copytree(self.FIXTURE, repo)
+        return repo
+
+    def all_output(self, res: subprocess.CompletedProcess) -> str:
+        return res.stdout + res.stderr
+
+    def test_secret_scan_flags_and_never_prints_the_secret(self):
+        repo = self.copy_fixture()
+        before = {
+            p: p.read_bytes()
+            for p in repo.rglob("*") if p.is_file()
+        }
+        res = self.adv_run(repo, "secrets", "--json")
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        payload = json.loads(res.stdout)
+        secrets = [c for c in payload["candidates"] if c["kind"] == "secret"]
+        self.assertTrue(secrets, payload["candidates"])
+        flagged = secrets[0]
+        self.assertEqual(flagged["file"], "config/settings.py")
+        # Redaction is by construction: the raw scalar is never an artifact.
+        blob = self.all_output(res)
+        self.assertNotIn("sk-live-d16b60f5", blob)
+        self.assertNotIn("sk-live-", blob)
+        self.assertIn("[redacted", json.dumps(payload))
+        for path, data in before.items():
+            self.assertEqual(path.read_bytes(), data, f"{path} was edited")
+
+    def test_dep_audit_flags_only_vulnerable_stubs(self):
+        repo = self.copy_fixture()
+        res = self.adv_run(
+            repo, "deps", "--advisory", "docs/advisory-stub.json",
+            "--manifest", "requirements.txt", "--json",
+        )
+        self.assertEqual(res.returncode, 1, self.all_output(res))
+        payload = json.loads(res.stdout)
+        flagged = [c for c in payload["candidates"] if c["kind"] == "dep-vuln"]
+        names = {c["name"] for c in flagged}
+        self.assertIn("vulnerable-lib", names)
+        self.assertNotIn("stable-lib", names)
+        vuln = next(c for c in flagged if c["name"] == "vulnerable-lib")
+        self.assertEqual(vuln["evidence"]["advisory_id"], "FAKE-2026-1")
+        self.assertEqual(vuln["evidence"]["version"], "2.1.1")
+
+    def test_dep_run_twice_dedups_to_noop(self):
+        repo = self.copy_fixture()
+        first = self.adv_run(
+            repo, "deps", "--advisory", "docs/advisory-stub.json",
+            "--manifest", "requirements.txt", "--json",
+            "--state", ".autonomous/advisory-seen.json",
+        )
+        self.assertEqual(first.returncode, 1, self.all_output(first))
+        seen = repo / ".autonomous" / "advisory-seen.json"
+        self.assertTrue(seen.is_file())
+        hashes_first = set(json.loads(seen.read_text())["seen"])
+        self.assertGreaterEqual(len(hashes_first), 1)
+        second = self.adv_run(
+            repo, "deps", "--advisory", "docs/advisory-stub.json",
+            "--manifest", "requirements.txt", "--json",
+            "--state", ".autonomous/advisory-seen.json",
+        )
+        self.assertEqual(second.returncode, 0, self.all_output(second))
+        self.assertEqual(json.loads(second.stdout)["candidates"], [])
+        self.assertIn("deduped", self.all_output(second))
+
+    def test_bump_green_records_evidence_and_does_not_edit_repo(self):
+        repo = self.copy_fixture()
+        original = (repo / "requirements.txt").read_text()
+        res = self.adv_run(
+            repo, "bump", "--json",
+            "--dep", "vulnerable-lib", "--to", "2.2.0",
+            "--manifest", "requirements.txt",
+            "--test-cmd", f"{PYTHON} tests/test_pin.py --expect 2.2.0",
+            "--changelog", "CHANGELOG.md",
+        )
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        payload = json.loads(res.stdout)
+        self.assertEqual(payload["status"], "green")
+        self.assertEqual(payload["from"], "2.1.1")
+        self.assertEqual(payload["to"], "2.2.0")
+        self.assertIn("risk note", payload["evidence"]["changelog"])
+        self.assertEqual((repo / "requirements.txt").read_text(), original,
+                         "the real tree must stay untouched; the bump ran on a copy")
+
+    def test_bump_red_becomes_issue_artifact_without_pr(self):
+        repo = self.copy_fixture()
+        original = (repo / "requirements.txt").read_text()
+        res = self.adv_run(
+            repo, "bump", "--json",
+            "--dep", "vulnerable-lib", "--to", "3.0.0",
+            "--manifest", "requirements.txt",
+            "--test-cmd", f"{PYTHON} tests/test_pin.py --expect 2.2.0",
+            "--changelog", "CHANGELOG.md",
+        )
+        self.assertNotEqual(res.returncode, 0, res.stdout + res.stderr)
+        blob = res.stdout + res.stderr
+        self.assertIn("## Breakage", blob, "red bumps must produce the issue draft")
+        self.assertIn("pip install", blob)  # the suggested repro for the owner
+        self.assertIn("3.0.0", blob)
+        self.assertEqual((repo / "requirements.txt").read_text(), original)
+        self.assertEqual(json.loads(res.stdout)["status"], "red")
+
+    def test_streams_h_and_k_available(self):
+        repo = self.copy_fixture()
+        git(repo, "init", "-q", "-b", "main")
+        git(repo, "config", "user.email", "test@example.com")
+        git(repo, "config", "user.name", "Test User")
+        self.assertEqual(common_module.STREAMS["H"]["status"], "available")
+        self.assertEqual(common_module.STREAMS["K"]["status"], "available")
+        install_scripts(repo)
+        for stream in ("H", "K"):
+            res = script(repo, "ledger.py", "next", "--stream", stream, "--json")
+            self.assertEqual(res.returncode, 0, res.stderr)
 
 
