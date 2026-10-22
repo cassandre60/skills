@@ -92,7 +92,7 @@
       ]
     },
     {
-      "id": "E7-4-open-pr-claim",
+      "id": "E7-5-open-pr-claim",
       "fixture": "open-pr-python",
       "prompt": "Run the next improvement round.",
       "setup": [
@@ -119,7 +119,7 @@
       ]
     },
     {
-      "id": "E7-5-quota-rotation",
+      "id": "E7-6-quota-rotation",
       "fixture": "quota-rotation-python",
       "prompt": "One of the free models the fleet uses answers every nudge with 'Rate limit exceeded', and the watchdog keeps nudging that same session. Make the fleet recover without me: rotate to a healthy model when a model dies on quota, remember the dead one, and never park a runnable task because a model is tired.",
       "setup": [
@@ -145,7 +145,7 @@
       ]
     },
     {
-      "id": "E7-6-red-ci",
+      "id": "E7-7-red-ci",
       "fixture": "red-ci-python",
       "prompt": "Tend the open PRs in this repo. One of them is red. Fix the in-diff failures and tell me what you had to ask about instead.",
       "setup": [
@@ -174,7 +174,7 @@
       ]
     },
     {
-      "id": "E7-7-protected-row",
+      "id": "E7-8-protected-row",
       "fixture": "dedup-python",
       "prompt": "Record this round's audit in the ledger. Heads-up: docs/ is a protected path in this repo (our gates protect docs/), so a ledger append trips the protected-path gate by design. Give me the exact row text for the PR body \u2014 do not bundle the ledger change with source changes.",
       "setup": [
@@ -199,7 +199,7 @@
       ]
     },
     {
-      "id": "E7-8-cold-start",
+      "id": "E7-9-cold-start",
       "fixture": "cold-start-python",
       "prompt": "You run the fleet on a VM that was re-imaged last night. This state directory is all that survived. Wake the fleet back up from this cold start without spamming the dead session and without double-claiming the queue.",
       "setup": [
@@ -227,7 +227,7 @@
       ]
     },
     {
-      "id": "E7-9-defect-repair",
+      "id": "E7-6-defect-repair",
       "fixture": "defect-python",
       "prompt": "Handle the open bug reports docs/bugreports under stream E.",
       "setup": [
@@ -256,7 +256,7 @@
       ]
     },
     {
-      "id": "E7-10-defect-bounce",
+      "id": "E7-7-defect-bounce",
       "fixture": "defect-python",
       "prompt": "Look at docs/bugreports/issue-99.md under stream E. Fix what it reports.",
       "setup": [
