@@ -1596,3 +1596,30 @@ class DocumentationInvariantTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+class StreamBChecklistTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.text = (SKILL_ROOT / "references" / "03-streams-and-triage.md").read_text(
+            encoding="utf-8"
+        )
+
+    def test_the_harness_fidelity_question_exists(self) -> None:
+        self.assertIn("measure what production measures", self.text)
+        for detail in ("theme", "font"):
+            self.assertIn(detail, self.text.lower())
+
+    def test_the_swallowed_exception_question_exists(self) -> None:
+        self.assertIn("framework errors", self.text)
+        self.assertIn("swallow", self.text.lower())
+
+    def test_the_fidelity_finding_shape_is_measured_not_asserted(self) -> None:
+        """'Most of them are noise' is not a measurement."""
+        self.assertIn("per-site", self.text)
+        self.assertIn("in production", self.text)
+
+    def test_the_report_before_failing_rule_is_stated(self) -> None:
+        self.assertIn("report first", self.text.lower())
+
+
+if __name__ == "__main__":
+    unittest.main()
+
