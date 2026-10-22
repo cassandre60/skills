@@ -61,10 +61,6 @@ Tending the queue is work; generating into a full queue is the new parking:
 | **4. Machine budget** | One targeted test per mutant, one full-file run at the end of the task. Never run the whole suite locally — that is CI's job. One analyze/lint pass per task, on touched files, after the last edit. |
 | **5. Pool rotation** | A quota error changes the model; it is never retried on the model that just failed. The dead model is recorded, the next live model takes the task, and the wake that revives a frozen session names a live model. A gateway reporting "$0 balance" is a paid pool with no credit, not a free fallback. |
 
-The engine runs tests serially. `machine_budget.max_concurrent_tests` in config
-records the owner's cap for parallel shards/agents; it is not a per-run fan-out
-knob.
-
 ## Install into a repo
 
 ```bash
@@ -179,7 +175,7 @@ carry quota independent of the others — and must actually be free.
 | `references/03-streams-and-triage.md` | Deeper Stream A/B checklists and planned streams |
 | `references/04-workflow-and-roles.md` | The one canonical per-task protocol and evidence contract |
 | `references/05-unattended-operation.md` | Heartbeats, watchdog, quotas, fleet coordination (advanced) |
-| `references/07-moving-main.md` | Working on a repo that keeps merging; stale-base traps |
+| `references/06-moving-main.md` | Working on a repo that keeps merging; stale-base traps |
 | `references/gates-and-vocabulary.md` | Gate ids, optional vocabulary, and the "no gates yet" fallback |
 | `references/stack-adapters.md` | Concrete commands per stack |
 | `references/examples.md` | One end-to-end Stream A example and a good/bad Stream B finding |

@@ -3447,6 +3447,85 @@ class CandidateOrderingTests(unittest.TestCase):
         )
 
 
+class EvalHarnessTests(unittest.TestCase):
+    """evals/run.py: deterministic halves plus the red-proof they can fail.
+
+    The harness checks this repo's fixtures in temp copies; these tests are
+    its own CI contract: green on the current fixture set, red under a
+    deliberately impossible expectation (a harness that cannot fail proves
+    nothing), and setup commands that actually run from a git clone (the
+    empty-dir `cp -r <skill>/scripts/autonomous ...` trap fixed in evals.json
+    v2's mkdir -p lines).
+    """
+
+    def _harness(self, *flags: str) -> subprocess.CompletedProcess:
+        import os
+        import tempfile as _tempfile
+
+        script_path = SKILL_ROOT / "evals" / "run.py"
+        with _tempfile.TemporaryDirectory() as tmp_cwd:
+            proc = subprocess.run(
+                [str(PYTHON), str(script_path), *flags],
+                capture_output=True,
+                text=True,
+                cwd=tmp_cwd,
+                env=dict(os.environ),
+            )
+        return proc
+
+    def test_deterministic_case_green_and_recorded(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            name = Path(tmp) / "results.json"
+            res = self._harness(
+                "--deterministic",
+                "--case", "E7-3-dedup-second-run",
+                "--record-file", str(name),
+            )
+            self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+            payload = json.loads(name.read_text())
+            case = next(c for c in payload["cases"] if c["id"] == "E7-3-dedup-second-run")
+            self.assertEqual(case["status"], "pass", case.get("failures"))
+            self.assertTrue(all(c["status"] == "pass" for c in case["checks"]))
+
+    def test_negative_control_is_red(self):
+        res = self._harness("--negative-control", "--case", "E7-8-protected-row")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertIn("RED-PROOF", res.stdout)
+
+    def test_agent_only_case_still_runs_setup(self):
+        res = self._harness("--deterministic", "--case", "E7-9-cold-start")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertIn("agent-only", res.stdout)
+
+    def test_deterministic_runs_without_git_identity(self):
+        # CI/containers may have no git identity at all; the harness pins a
+        # throwaway one for its throwaway fixture repos instead of failing
+        # every setup line with "Author identity unknown".
+        import os
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as bare_home:
+            env = dict(os.environ)
+            env["HOME"] = bare_home
+            env["GIT_CONFIG_GLOBAL"] = "/dev/null"
+            env["GIT_CONFIG_SYSTEM"] = "/dev/null"
+            proc = subprocess.run(
+                [
+                    str(PYTHON),
+                    str(SKILL_ROOT / "evals" / "run.py"),
+                    "--deterministic",
+                    "--case", "E7-3-dedup-second-run",
+                ],
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("1 passed", proc.stdout)
+
+
 class DocumentationInvariantTests(unittest.TestCase):
     def test_skill_is_short(self):
         lines = (SKILL_ROOT / "SKILL.md").read_text().splitlines()
@@ -3477,7 +3556,7 @@ class DocumentationInvariantTests(unittest.TestCase):
             "references/03-streams-and-triage.md",
             "references/04-workflow-and-roles.md",
             "references/05-unattended-operation.md",
-            "references/07-moving-main.md",
+            "references/06-moving-main.md",
             "references/gates-and-vocabulary.md",
             "references/stack-adapters.md",
             "references/examples.md",

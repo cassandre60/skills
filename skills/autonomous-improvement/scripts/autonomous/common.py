@@ -45,7 +45,6 @@ DEFAULT_CONFIG = {
         "A": {"include": [], "exclude": [], "require_test": True, "priority_paths": []},
         "B": {"include": [], "exclude": [], "priority_paths": []},
     },
-    "machine_budget": {"max_concurrent_tests": 1},
     "pr_required": {"COMPLETED": True, "SOUND": False},
     "fleet": {
         "max_open_prs": 5,

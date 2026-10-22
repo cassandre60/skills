@@ -62,6 +62,8 @@ local instructions file. It is not an independent policy document.
      Keep the global write-back rules in mind: no speculation, no narration,
      no anything already obvious from reading the code. -->
 
+- [2026-10-21, glm-5.3-flash-free] `test_v2.py::MutationEngineTests.test_sigkill_recovery` flaked once under CPU load (traceback not captured) and passed on 9 subsequent runs of the same file — rerun before diagnosing a lone failure. Verified by: repeated `unittest discover -s tests -p "test_v2.py"` runs.
+
 ---
 
 Everything below is the **global baseline**, copied verbatim from
