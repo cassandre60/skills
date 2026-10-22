@@ -191,6 +191,43 @@ sit red and the fleet looks busy while nothing converges.
    it. A green run of a broken instrument is worse than a red one, because
    it is trusted.
 
+8b. **Landing several of your own branches that touch the same file.** The
+   general lesson, which applies in any repo and to any file kind:
+
+   > **When two branches append to the same file, the conflict resolution must
+   > preserve the file's structure — concatenating the two sides does not.**
+   > "Keep both" is a text operation. A file that ends in a single trailing
+   > construct — a `main` block, a closing marker, one top-level key, one
+   > trailing guard — ends up with two of them, and the result may not even
+   > load.
+
+   This generalises the ledger's own rule below, which already said to rebuild
+   rather than to keep both; the recipe below is the general case, and it is
+   git-level, so it holds whatever the repo is written in.
+
+   1. **Land in dependency order** — the branch whose change the others build
+      on first. A change that needs another's code cannot land before it.
+   2. **Re-sync by MERGING the base into the branch**, never by rebasing a
+      pushed branch (a rebase needs a force-push, which the git discipline
+      below forbids), and let the checks re-run on the new head.
+   3. **Resolve an append conflict by REBUILDING the file**: take the base's
+      file, add each branch's own blocks in order, and put the file's single
+      trailing construct exactly once, at the end. For a line-oriented file
+      with no trailing construct — a markdown table, a log — concatenation is
+      safe; for anything with structure, it is not.
+   4. **Verify the merged tree before pushing**: the file loads or validates,
+      the repo's own checks are green, and its tests pass. A conflict
+      resolution is a change like any other, and it needs the same evidence.
+   5. **Check the pushed tree for conflict markers** — `git grep -n -E
+      '^(<<<<<<<|>>>>>>>)'` — and never push a file that carries them.
+
+   (Worked example, 2026-10-22: six branches of one session each appended
+   tests to the same shared test file. Resolving the append conflicts by
+   concatenation interleaved the file's trailing `__main__` block between the
+   branches' code, and the result did not parse; one resolution was also
+   pushed with the conflict markers still in it. The recipe above is what
+   that session should have done.)
+
 8. **Batched ledger rows conflict with each other.** Every ledger row is
    inserted at the top of the same table, so two ledger branches collide on
    the same lines. When the orchestrator's ledger branch merges a base that

@@ -132,6 +132,26 @@ defect the noise had hidden. → **issue #47**
 
 ---
 
+## 5b. The session's own git mistakes, and the recipe they produced
+
+Four of the session's mis-steps were git mechanics, and each cost a cycle:
+
+- **A branch created inside an existing worktree inherits that worktree's
+  commits** (issue #50). Four PRs were mis-pushed this way: one PR carried
+  another issue's commit, and its diff touched a file the task never named.
+- **Amending after pushing needs a re-sync, not a force-push** (issue #50):
+  the local and remote histories diverge, and the recovery is a merge of the
+  remote branch back in.
+- **A conflict resolution committed with the markers still in it** reached a
+  remote once. The skill's own rule says to verify the pushed file contains
+  none; that check now has a command.
+- **"Keep both sides" is the wrong resolution for an append conflict.** Six
+  PRs of the session's own touched one shared test file. Resolving them by
+  concatenation interleaved the file's trailing `__main__` guard between
+  blocks, and the result did not parse. The recipe is now written down:
+  rebuild the file from the base plus each branch's own blocks, and verify
+  the merged tree before pushing.
+
 ## 6. What the skill already covered
 
 The content-hash dedup mechanism, the "forensics before reports" rule, the
