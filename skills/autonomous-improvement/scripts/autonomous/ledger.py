@@ -12,6 +12,7 @@ Usage:
   python3 scripts/autonomous/ledger.py record --stream A --target src/app.py \
       --status COMPLETED --pr '#42' --summary '...'
   python3 scripts/autonomous/ledger.py check --target src/app.py
+  python3 scripts/autonomous/ledger.py validate
 """
 
 from __future__ import annotations
@@ -25,11 +26,14 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from common import (
+    AUDITED_STATUSES,
+    DISPOSITION_STATUSES,
     EXIT_NEGATIVE,
     EXIT_OK,
     EnvError,
     Fatal,
     SEPARATOR_RE,
+    STATUSES,
     UsageError,
     candidate_paths,
     config_path,
@@ -50,14 +54,11 @@ from common import (
     stream_label,
     test_for_source,
 )
+from ledger_validate import validate_ledger
 from mutants import open_mutants_by_file
 
-AUDITED_STATUSES = {"COMPLETED", "SOUND"}
-# Negative dispositions: "the fleet was told no". They are memory, not audits:
-# a disposition applies only while the composite hash still matches, so any
-# content change re-opens the target (same rule as an audit going stale).
-DISPOSITION_STATUSES = {"REJECTED", "WONTFIX", "SUPERSEDED"}
-STATUSES = ("COMPLETED", "SOUND", "REJECTED", "WONTFIX", "SUPERSEDED")
+# The status vocabulary lives in common.py: ledger_validate.py needs the same
+# sets, and a second copy is a second thing to forget to update.
 
 
 @dataclass
@@ -790,6 +791,36 @@ def cmd_sync_rejections(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_validate(args: argparse.Namespace) -> int:
+    """Report the rows the parser cannot see, and targets whose row is stale."""
+    root = repo_root()
+    cfg = load_config(root, args.config)
+    ledger = _ledger_path(root, cfg, args.ledger)
+    report = validate_ledger(root, cfg, ledger)
+    if args.json:
+        json.dump(report, sys.stdout, indent=2)
+        sys.stdout.write("\n")
+    else:
+        print(f"[*] ledger: {report['ledger']}")
+        print(
+            f"[*] rows: {report['rows_visible']} visible of {report['rows_total']} in the table"
+        )
+        for item in report["invisible"]:
+            reasons = "; ".join(item["reasons"])
+            print(
+                f"[!] line {item['line']}: invisible row {item['pr']} "
+                f"({item['target']}) - {reasons}"
+            )
+        for item in report["stale"]:
+            print(
+                f"[!] {item['target']}: row {item['pr']} records {item['recorded']} "
+                f"but HEAD is {item['current']} - the audit is stale"
+            )
+        if not report["problems"]:
+            print("[+] every row is visible and every target is audited at HEAD")
+    return EXIT_NEGATIVE if report["problems"] else EXIT_OK
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Autonomous Work Ledger Manager (content-hash based, config-driven)"
@@ -831,6 +862,14 @@ def build_parser() -> argparse.ArgumentParser:
     check_parser.add_argument("--target", required=True, help="repo-relative target path")
     check_parser.add_argument("--stream", default="A", help="A/B (default A)")
     check_parser.set_defaults(func=cmd_check)
+
+    validate_parser = subparsers.add_parser(
+        "validate",
+        parents=[common_parent],
+        help="report rows the parser cannot see and targets whose row is stale",
+    )
+    validate_parser.add_argument("--json", action="store_true", help="machine-readable output")
+    validate_parser.set_defaults(func=cmd_validate)
 
     sync_parser = subparsers.add_parser(
         "sync-rejections",

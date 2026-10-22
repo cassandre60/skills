@@ -75,7 +75,14 @@ fi
 
 # A quota error is a stronger wake signal than a stale heartbeat: rotate the
 # model immediately, do not wait for the age threshold.
-QUOTA_RE='rate limit|rate_limit|429|quota|too many requests|insufficient balance|balance is at|exceeded your current|overloaded'
+QUOTA_RE='rate limit|rate_limit|429|quota|too many requests|insufficient balance|balance is at|exceeded your current'
+
+# An INFRASTRUCTURE outage is not a quota failure. The model is not exhausted:
+# rotating the ladder would burn every pool against the same broken endpoint,
+# and marking one dead would park a perfectly usable model for an hour. So an
+# outage ends the tick with the pool list untouched. "overloaded" is deliberately
+# NOT here: a gateway saying "overloaded" is usually an outage, not a quota.
+OUTAGE_RE='endpoint is unavailable|upstream request failed|service unavailable|bad gateway|gateway timeout|connection reset|connection refused|temporarily unavailable|econnrefused|socket hang up|502|503|504'
 
 failed_recently() { # $1: model id -> 0 when the model is in cooldown
   local model="$1" now ts
@@ -145,6 +152,10 @@ for model in "${candidates[@]}"; do
     bash -c "$RESUME_CMD" _ "$SID" "$NUDGE_MSG" "$model" >"$OUT" 2>&1
   RC=$?
   tail -c 800 "$OUT" >>"$LOG"
+  if grep -Eiq "$OUTAGE_RE" "$OUT"; then
+    echo "$(date -Is) model '$label' answered with an infrastructure outage; not a quota failure - the ladder and the cooldown list are left untouched, and the next tick retries" >>"$LOG"
+    exit 0
+  fi
   if grep -Eiq "$QUOTA_RE" "$OUT"; then
     echo "$(date -Is) model '$label' answered with a quota/balance failure; rotating" >>"$LOG"
     if [ -n "$model" ]; then
