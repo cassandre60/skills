@@ -39,7 +39,9 @@ at T2, and at T1 for anything referee-adjacent.
 
 ## The catalog
 
-Available now: **A** mutation, **B** adversarial test audit (`03`).
+Available now: **A** mutation, **B** adversarial test audit, and **J**
+simplification / dead code (`03`). J is first-wave T1 regardless of its T2
+target: issue/proposal output only until the owner promotes it.
 
 | Stream | Oracle in one line | Starts |
 |---|---|---|
@@ -50,15 +52,27 @@ Available now: **A** mutation, **B** adversarial test audit (`03`).
 | **G** Performance | pinned-bench delta beyond noise **and** differential equivalence | T2 |
 | **H** Security & supply chain | PoC/regression test flips, or vulnerable version exits green | T3 deps / T2 code |
 | **I** Docs & spec truthfulness | executable examples flip fail→pass; spec-id trace complete | T3 path |
-| **J** Simplification / dead code | suite green **and** touched-area mutation score not lower | T2 |
+| **J** Simplification / dead code | suite green **and** touched-area mutation score not lower | T1 first wave → T2 |
 | **K** Dependency evolution | build + targeted suite green on the bump; majors one per PR | T2 |
 | **L** Meta (fleet self-improvement) | proposal beats incumbent on history replay; eval set does not regress | T1/T2 capped |
 
-`ledger.py` rejects C–L with "planned, not implemented" until a stream ships
-its finder + oracle + eval fixture. A stream that exists only as an
-encouraging paragraph produces cosmetic churn with a fancy name — do not
-start work under these letters before their tooling lands; offer A/B, or
-file the finding as an issue (that *is* T1 behavior).
+`ledger.py` rejects still-planned letters with "planned, not implemented"
+until a stream ships its finder + oracle + eval fixture. J crossed that
+gate: `scripts/autonomous/simplify_gate.py` supplies the finder/oracle pair
+and `evals/fixtures/dead-code-python/` is its fixture. A stream that exists
+only as an encouraging paragraph produces cosmetic churn with a fancy name
+— do not start work under a locked letter before its tooling lands; offer
+A/B/J, or file the finding as an issue (that *is* T1 behavior).
+
+Stream J's shipped finder is intentionally narrow: Python statements after
+a block terminator, plus private module-level definitions with zero textual
+fan-in, suppressed where dynamic markers (`getattr`, `globals()`, dynamic
+import, registries) make unseen callers plausible. A coverage.py JSON
+report may strengthen or suppress the zero-fan-in heuristic. The finder
+only nominates; `simplify_gate.py oracle` decides by requiring the current
+targeted tests green, no deleted tracked test file, no previously killed
+mutant newly surviving, and a non-lowering mutation kill rate. The mutant
+denominator may shrink only for mutants on lines the change removed.
 
 Sequencing rationale in brief: **F** repairs the oracle A/B/E trust; **E**
 is the largest value unlock (pre-justified defects via issue/CI intake);

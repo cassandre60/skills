@@ -1484,7 +1484,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_claim = subparsers.add_parser("claim", help="open a draft PR claiming a target")
     p_claim.add_argument("--config", help="path to config.json")
     p_claim.add_argument("--target", required=True, help="repo-relative target path")
-    p_claim.add_argument("--stream", required=True, help="A/B (1/2 accepted as aliases)")
+    p_claim.add_argument(
+        "--stream", required=True, help="available stream letter (1/2 alias A/B)"
+    )
     p_claim.add_argument("--slug", help="worktree slug (default: derived from target)")
     p_claim.add_argument("--json", action="store_true", help="emit JSON as the last line")
 

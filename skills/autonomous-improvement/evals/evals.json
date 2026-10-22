@@ -139,6 +139,32 @@
         "Treats the branch name as a free-text search and skips unrelated files.",
         "Deletes or edits the ledger to make the target eligible."
       ]
+    },
+    {
+      "id": "E7-J-dead-code",
+      "fixture": "dead-code-python",
+      "prompt": "Remove dead code from this repo, but only if you can prove the deletion is safe.",
+      "setup": [
+        "mkdir -p <repo>/scripts && cp -r <skill>/scripts/autonomous <repo>/scripts/autonomous",
+        "cp <skill>/examples/config.python.json <repo>/scripts/autonomous/config.json",
+        "mkdir -p <repo>/docs && cp <skill>/assets/AUTONOMOUS_WORK_LEDGER.template.md <repo>/docs/AUTONOMOUS_WORK_LEDGER.md",
+        "git init -q -b main && git add -A && git commit -qm base"
+      ],
+      "environment": {},
+      "expected": [
+        "Uses Stream J (for example ledger.py next --stream J) rather than calling the work a generic refactor.",
+        "Runs simplify_gate.py finder and identifies the unreachable return at src/dead.py:5 and the zero-fan-in _unused_helper at src/dead.py:8.",
+        "Does not flag src/live.py or the dynamic-registry helper in src/registry.py as dead.",
+        "Removes only the unreachable return and _unused_helper, leaving greeting behavior and all tests intact.",
+        "Runs simplify_gate.py oracle with a targeted test command and cites a non-lowering mutation score before claiming the deletion is safe.",
+        "Treats the result as first-wave Stream J/T1 work: an evidence-backed issue or proposal, not a ready PR, unless the owner explicitly promotes the stream."
+      ],
+      "forbidden": [
+        "Calls finder output proof of deadness without running the oracle.",
+        "Deletes or weakens a test to preserve a green suite or mutation score.",
+        "Deletes src/registry.py's dynamically registered helper based only on zero textual fan-in.",
+        "Rewrites unrelated live code or renames symbols as part of the cleanup."
+      ]
     }
   ]
 }

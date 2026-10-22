@@ -1,16 +1,16 @@
 ---
 name: autonomous-improvement
-description: Run falsifiable, high-signal improvement cycles on a codebase instead of cosmetic churn — mutation testing to find tests that don't actually protect behavior, and adversarial audits of existing tests (vacuous assertions, flaky sleeps, over-mocking). Use when asked to "improve the repo", "audit the tests", "find weak or flaky tests", "improve test quality, not just coverage", "run mutation testing", or when "tests pass but I don't trust them" — or when an agent has spare budget and needs work that can be proven real (fails without the fix, not already done at this file's content, cheap enough to run locally). Given as a session's only prompt, it turns that session into an orchestrator that dispatches worker subagents instead of building itself (references/04-workflow-and-roles.md). Do not use for feature work, refactors, or one-off bugfixes.
+description: Run falsifiable, high-signal improvement cycles on a codebase instead of cosmetic churn — mutation testing to find tests that don't actually protect behavior, adversarial audits of existing tests (vacuous assertions, flaky sleeps, over-mocking), and oracle-guarded removal of proven dead code. Use when asked to "improve the repo", "audit the tests", "find weak or flaky tests", "improve test quality, not just coverage", "run mutation testing", "remove dead code safely", or when "tests pass but I don't trust them" — or when an agent has spare budget and needs work that can be proven real (fails without the fix, not already done at this file's content, cheap enough to run locally). Given as a session's only prompt, it turns that session into an orchestrator that dispatches worker subagents instead of building itself (references/04-workflow-and-roles.md). Do not use for feature work, unguarded refactors, or one-off bugfixes.
 ---
 
 # Autonomous Improvement
 
 Spend tokens on work that can be **mechanically falsified**, not on renames,
-prose, or checkbox tests. Two streams are active:
+prose, or checkbox tests. Three streams are active:
 
 - **A — mutation testing:** find behavior the suite does not protect.
-- **B — adversarial test audit:** find tests that cannot fail, assert mocks, or
-  sleep instead of synchronizing.
+- **B — adversarial test audit:** find tests that cannot fail, assert mocks, or sleep instead of synchronizing.
+- **J — simplification:** delete dead code only when tests stay green and the mutation score does not fall.
 
 Each round produces at most one small, evidence-backed PR. If there is no
 falsifiable gap, stop; that is a valid result.
@@ -144,17 +144,17 @@ The ledger is a git-tracked markdown table:
 - The hash is the blob at HEAD. `record` warns if the target is dirty;
   `--strict` makes that fatal.
 
-## Beyond testing (planned streams C–L)
+## Beyond testing (expansion streams C–L)
 
 Testing is the bootstrap, not the ceiling: streams C–L generalize the same
 five laws to fuzzing, defect repair, flakiness, performance, security, docs
 truthfulness, simplification, dependency evolution, and — capped and
-eval-gated — the fleet improving itself. Each must pass the stream contract
-in `references/08-recursive-self-improvement.md` (deterministic finder,
-mechanical oracle, content-addressed memory, bounded blast radius, referee
-isolation) before its letter unlocks; `ledger.py` rejects C–L until then.
-Do not start work under a locked letter or promise it in a PR; offer A/B, or
-file the finding as an evidence-backed issue.
+eval-gated — the fleet improving itself. **J is unlocked** in first-wave T1
+form: `simplify_gate.py` finds conservative dead-code candidates, and its
+oracle requires green tests, no deleted test file, and no lower mutation
+score. Every other letter must pass the stream contract (reference 08)
+before it unlocks; `ledger.py` rejects still-planned letters until then. Do not
+start work under a locked letter; offer A/B/J or file an evidence-backed issue.
 
 ## Unattended operation (advanced)
 
@@ -174,7 +174,7 @@ carry quota independent of the others — and must actually be free.
 |---|---|
 | `references/01-mutation-engine.md` | Rule packs, statuses, seeds/shards, diff scoping, triage |
 | `references/02-ledger-and-dedup.md` | Schema, newest-wins, composite hash, escaping, merge driver, draft-PR claims |
-| `references/03-streams-and-triage.md` | Deeper Stream A/B checklists and planned streams |
+| `references/03-streams-and-triage.md` | Deeper Stream A/B/J checklists and planned streams |
 | `references/04-workflow-and-roles.md` | The one canonical per-task protocol and evidence contract |
 | `references/05-unattended-operation.md` | Heartbeats, watchdog, quotas, fleet coordination (advanced) |
 | `references/07-moving-main.md` | Working on a repo that keeps merging; stale-base traps |

@@ -39,6 +39,7 @@ DEFAULT_CONFIG = {
     "candidates": {
         "A": {"include": [], "exclude": [], "require_test": True, "priority_paths": []},
         "B": {"include": [], "exclude": [], "priority_paths": []},
+        "J": {"include": [], "exclude": [], "priority_paths": []},
     },
     "machine_budget": {"max_concurrent_tests": 1},
     "pr_required": {"COMPLETED": True, "SOUND": False},
@@ -443,7 +444,7 @@ STREAMS: Dict[str, Dict[str, Any]] = {
     "G": {"label": "G (Performance)", "status": "planned"},
     "H": {"label": "H (Security & Supply Chain)", "status": "planned"},
     "I": {"label": "I (Docs & Spec Truthfulness)", "status": "planned"},
-    "J": {"label": "J (Simplification / Dead Code)", "status": "planned"},
+    "J": {"label": "J (Simplification / Dead Code)", "status": "available"},
     "K": {"label": "K (Dependency Evolution)", "status": "planned"},
     "L": {"label": "L (Meta: Fleet Self-Improvement)", "status": "planned"},
 }
@@ -467,7 +468,7 @@ def normalize_stream(value: str) -> str:
     if info["status"] != "available":
         raise UsageError(
             f"stream {info['label']} is planned, not implemented "
-            "(use A or B; see references/08-recursive-self-improvement.md)"
+            "(use A, B, or J; see references/08-recursive-self-improvement.md)"
         )
     return stream
 

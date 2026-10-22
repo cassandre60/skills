@@ -31,6 +31,7 @@ from common import (
     EnvError,
     Fatal,
     SEPARATOR_RE,
+    STREAMS,
     UsageError,
     candidate_paths,
     config_path,
@@ -830,7 +831,9 @@ def cmd_check(args: argparse.Namespace) -> int:
 
 def _stream_for_target(cfg: Dict[str, Any], target: str) -> Optional[str]:
     """Which configured stream owns this path, if any."""
-    for stream in ("A", "B"):
+    for stream, info in STREAMS.items():
+        if info.get("status") != "available":
+            continue
         section = cfg.get("candidates", {}).get(stream, {})
         include = section.get("include") or []
         exclude = section.get("exclude") or []
@@ -1001,7 +1004,9 @@ def build_parser() -> argparse.ArgumentParser:
     next_parser = subparsers.add_parser(
         "next", parents=[common_parent], help="find the next unaudited target"
     )
-    next_parser.add_argument("--stream", required=True, help="A/B (1/2 accepted as aliases)")
+    next_parser.add_argument(
+        "--stream", required=True, help="available stream letter (1/2 alias A/B)"
+    )
     next_parser.add_argument("--limit", type=int, default=1, help="number of candidates to print")
     next_parser.add_argument("--json", action="store_true", help="machine-readable output")
     next_parser.add_argument("--require-gh", action="store_true", help="fail if gh is unavailable")
@@ -1023,7 +1028,9 @@ def build_parser() -> argparse.ArgumentParser:
     record_parser = subparsers.add_parser(
         "record", parents=[common_parent], help="append an audit row"
     )
-    record_parser.add_argument("--stream", required=True, help="A/B (1/2 accepted as aliases)")
+    record_parser.add_argument(
+        "--stream", required=True, help="available stream letter (1/2 alias A/B)"
+    )
     record_parser.add_argument("--target", required=True, help="repo-relative target path")
     record_parser.add_argument("--status", required=True, help="COMPLETED or SOUND")
     record_parser.add_argument("--pr", help="PR/issue ref (required for COMPLETED by default)")
@@ -1038,7 +1045,9 @@ def build_parser() -> argparse.ArgumentParser:
         "check", parents=[common_parent], help="exit 0 iff audited at the current hash"
     )
     check_parser.add_argument("--target", required=True, help="repo-relative target path")
-    check_parser.add_argument("--stream", default="A", help="A/B (default A)")
+    check_parser.add_argument(
+        "--stream", default="A", help="available stream letter (default A)"
+    )
     check_parser.set_defaults(func=cmd_check)
 
     sync_parser = subparsers.add_parser(

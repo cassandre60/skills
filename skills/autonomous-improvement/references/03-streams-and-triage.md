@@ -1,7 +1,7 @@
 # Streams and Triage
 
-Two streams are available. Two more are planned and must not be promised to a
-user or started as busywork.
+Three streams are available: A, B, and first-wave J. The remaining catalog
+letters are planned and must not be promised to a user or started as busywork.
 
 ## Stream A — mutation testing
 
@@ -71,11 +71,48 @@ Every Stream B finding needs evidence: the line, why it cannot fail, and the
 proposed stronger assertion. "Rename this test" or "reformat this file" is not a
 finding.
 
-## Triage checklist (both streams)
+## Stream J — simplification / dead code
+
+Stream J starts at **T1**: file an evidence-backed issue or proposal; do not
+open ready PRs under it until the owner promotes the stream.
+
+1. `ledger.py next --stream J` selects a configured production source.
+2. Get candidates mechanically; do not eyeball a whole file and call code dead:
+   ```bash
+   python3 scripts/autonomous/simplify_gate.py finder src/app.py --json
+   ```
+   Finder v1 is Python-only and deliberately conservative: statements after a
+   block terminator, or private module-level definitions with zero textual
+   fan-in. It suppresses private-symbol candidates in files with dynamic
+   markers such as `getattr`, `globals()`, dynamic import, or registries. An
+   optional `--coverage-json coverage.json` report can suppress exercised
+   bodies or mark measured bodies as never executed.
+3. Make the smallest deletion that addresses one candidate. The finder output
+   is a nomination, never proof — framework entry points and computed names
+   are exactly the false-positive class to rule out before editing.
+4. Let the oracle decide:
+   ```bash
+   python3 scripts/autonomous/simplify_gate.py oracle \
+     --source src/app.py --base HEAD \
+     --test-cmd "<targeted test command>" --json
+   ```
+   Acceptance requires the current targeted tests green, no deleted tracked
+   test file, no lower mutation kill rate, and no previously killed mutant
+   newly surviving. Denominator shrink is allowed only for mutants whose
+   original lines were removed. If the oracle refuses, keep the code or file
+   the unresolved candidate as an issue; do not argue with the score.
+
+Two mutation reports can also be gated directly with
+`simplify_gate.py compare --before-json ... --after-json ...`, but a
+hand-supplied denominator allowance must cite the removed-line mutants it
+claims.
+
+## Triage checklist (all available streams)
 
 - [ ] Is the finding real on the current base, not an old worktree?
 - [ ] Is it already covered by another test or an open PR?
-- [ ] Is the proposed test fail-to-pass under the wording of Law 1?
+- [ ] Is the mechanical evidence explicit — fail-to-pass for A/B, or a
+      non-lowering mutation score for J?
 - [ ] Is the change limited to the target and its test?
 - [ ] Did you avoid editing the referee (specs, gates, CI, lint config, ratchets)?
 
@@ -96,9 +133,9 @@ This needs fixture databases for every historical schema version and a
 migration harness. Until then, do not run it as per-PR busywork. Typical targets
 for later: zero-row-loss migrations, orphan-row checks, cascade behavior.
 
-For the full planned catalog (streams C–L, including defect repair,
-flakiness, performance, security, docs truthfulness, simplification,
-dependency evolution, and the capped meta stream), the stream contract a
-new stream must pass, and the autonomy tiers it earns, see
-`08-recursive-self-improvement.md`. C and D above keep their original
-sketches; `08` is the admission gate for all of them.
+For the full expansion catalog (streams C–L, including defect repair,
+flakiness, performance, security, docs truthfulness, dependency evolution,
+and the capped meta stream), the stream contract a new stream must pass,
+and the autonomy tiers it earns, see `08-recursive-self-improvement.md`.
+J above is the first expansion stream to cross that gate. C and D above keep
+their original sketches; `08` is the admission gate for all of them.

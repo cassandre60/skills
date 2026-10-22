@@ -2428,5 +2428,236 @@ class DocumentationInvariantTests(unittest.TestCase):
             self.assertTrue((SKILL_ROOT / relative).exists(), relative)
 
 
+class StreamSimplifyTests(RepoTestCase):
+    """Stream J (#25): finder candidates only; mutation-score oracle decides."""
+
+    def fixture(self) -> Path:
+        return SKILL_ROOT / "evals" / "fixtures" / "dead-code-python"
+
+    def test_finder_flags_unreachable_and_zero_fanin(self):
+        repo, _ = python_repo(self.tmp)
+        fixture = self.fixture()
+        result = script(
+            repo,
+            "simplify_gate.py",
+            "finder",
+            str(fixture / "src" / "dead.py"),
+            "--scan-root",
+            str(fixture),
+            "--json",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        findings = json.loads(result.stdout)
+        by_kind = {(item["kind"], item["line"]) for item in findings}
+        self.assertIn(("unreachable", 5), by_kind)
+        self.assertIn(("zero-fanin-private", 8), by_kind)
+
+    def test_finder_clean_and_dynamic_files_have_no_candidates(self):
+        repo, _ = python_repo(self.tmp)
+        fixture = self.fixture()
+        for filename in ("live.py", "registry.py"):
+            result = script(
+                repo,
+                "simplify_gate.py",
+                "finder",
+                str(fixture / "src" / filename),
+                "--scan-root",
+                str(fixture),
+                "--json",
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(json.loads(result.stdout), [], filename)
+
+    def _report(self, killed: int, survived: int) -> dict:
+        killed_entries = [
+            {
+                "line": 2,
+                "original": "    return a == b",
+                "mutated": "    return a != b",
+                "description": "invert equality",
+            }
+        ] * killed
+        survived_entries = [
+            {
+                "line": 5,
+                "original": "    return value + 1",
+                "mutated": "    return value - 1",
+                "description": "invert addition",
+            }
+        ] * survived
+        total = killed + survived
+        return {
+            "source": "src/app.py",
+            "test_cmd": "python -m unittest tests.test_app",
+            "counts": {
+                "total": total,
+                "killed": killed,
+                "survived": survived,
+                "timeout": 0,
+                "uncompilable": 0,
+            },
+            "kill_rate": round(killed / total, 4) if total else 0.0,
+            "timeout_counts_as": "survived",
+            "mutants": {"killed": killed_entries, "survived": survived_entries},
+        }
+
+    def test_compare_refuses_lower_mutation_score(self):
+        repo, _ = python_repo(self.tmp)
+        before = write(
+            repo / "before.json", json.dumps(self._report(killed=4, survived=1))
+        )
+        after = write(repo / "after.json", json.dumps(self._report(killed=2, survived=3)))
+        result = script(
+            repo,
+            "simplify_gate.py",
+            "compare",
+            "--before-json",
+            str(before),
+            "--after-json",
+            str(after),
+            "--json",
+        )
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["verdict"], "refused")
+        self.assertTrue(any("score" in reason for reason in payload["reasons"]))
+
+    def test_finder_coverage_marks_missing_and_suppresses_executed_body(self):
+        repo, _ = python_repo(self.tmp)
+        fixture = self.fixture()
+        target = fixture / "src" / "dead.py"
+
+        def run_with_coverage(executed: list[int], missing: list[int]):
+            coverage = write(
+                repo / "coverage.json",
+                json.dumps(
+                    {
+                        "files": {
+                            str(target): {
+                                "executed_lines": executed,
+                                "missing_lines": missing,
+                            }
+                        }
+                    }
+                ),
+            )
+            result = script(
+                repo,
+                "simplify_gate.py",
+                "finder",
+                str(target),
+                "--scan-root",
+                str(fixture),
+                "--coverage-json",
+                str(coverage),
+                "--json",
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            return json.loads(result.stdout)
+
+        missing = run_with_coverage(executed=[1, 2, 3, 4, 8], missing=[5, 9])
+        helper = next(item for item in missing if item["kind"] == "zero-fanin-private")
+        self.assertIs(helper["zero_coverage"], True)
+
+        executed = run_with_coverage(executed=[1, 2, 3, 4, 8, 9], missing=[5])
+        self.assertNotIn(
+            "zero-fanin-private", {item["kind"] for item in executed}
+        )
+
+    def test_ledger_stream_j_selects_configured_source(self):
+        repo, _ = python_repo(self.tmp)
+        commit(repo)
+        result = script(repo, "ledger.py", "next", "--stream", "J", "--json")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(
+            "src/app.py",
+            [item["target"] for item in json.loads(result.stdout)["candidates"]],
+        )
+
+    def test_stream_for_target_recognizes_j_only_config(self):
+        cfg = {
+            "candidates": {
+                "A": {"include": [], "exclude": []},
+                "B": {"include": [], "exclude": []},
+                "J": {"include": ["src/**/*.py"], "exclude": []},
+            }
+        }
+        self.assertEqual(ledger_module._stream_for_target(cfg, "src/app.py"), "J")
+
+    def test_oracle_accepts_clean_dead_deletion(self):
+        repo, _ = python_repo(self.tmp)
+        write(
+            repo / "src" / "app.py",
+            "def f(a, b):\n"
+            "    return a == b\n"
+            "    return False\n"
+            "\n\n"
+            "def _unused_helper(value):\n"
+            "    return value + 1\n",
+        )
+        commit(repo, "seed dead code")
+        write(repo / "src" / "app.py", "def f(a, b):\n    return a == b\n")
+        test_cmd = (
+            f'{PYTHON} -c "from src.app import f; '
+            'assert f(1, 1) is True and f(1, 2) is False"'
+        )
+        result = script(
+            repo,
+            "simplify_gate.py",
+            "oracle",
+            "--source",
+            "src/app.py",
+            "--base",
+            "HEAD",
+            "--test-cmd",
+            test_cmd,
+            "--max-mutants",
+            "50",
+            "--json",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["verdict"], "accepted")
+        self.assertGreaterEqual(
+            payload["after"]["kill_rate"], payload["before"]["kill_rate"]
+        )
+        self.assertEqual(payload["deleted_test_files"], [])
+
+    def test_oracle_refuses_deleting_the_only_test_file(self):
+        repo, _ = python_repo(self.tmp)
+        write(
+            repo / "src" / "app.py",
+            "def f(a, b):\n"
+            "    return a == b\n"
+            "    return False\n",
+        )
+        commit(repo, "seed dead code with test")
+
+        write(repo / "src" / "app.py", "def f(a, b):\n    return a == b\n")
+        (repo / "tests" / "test_app.py").unlink()
+        test_cmd = (
+            f'{PYTHON} -c "from src.app import f; '
+            'assert f(1, 1) is True and f(1, 2) is False"'
+        )
+        result = script(
+            repo,
+            "simplify_gate.py",
+            "oracle",
+            "--source",
+            "src/app.py",
+            "--base",
+            "HEAD",
+            "--test-cmd",
+            test_cmd,
+            "--max-mutants",
+            "50",
+            "--json",
+        )
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["verdict"], "refused")
+        self.assertEqual(payload["deleted_test_files"], ["tests/test_app.py"])
+
+
 if __name__ == "__main__":
     unittest.main()
