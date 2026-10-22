@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import hashlib
 import json
 import os
 import re
@@ -483,6 +484,111 @@ def cmd_govern(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _wake_reasons(open_states: List[Dict[str, Any]]) -> List[str]:
+    """Reasons a wake would need a model turn, from state alone (issue #18)."""
+    reasons: List[str] = []
+    for state in sorted(open_states, key=lambda item: int(item.get("pr") or 0)):
+        pr = state.get("pr")
+        if state.get("owner_ask_pending"):
+            reasons.append(f"owner-ask #{pr} (answer or apply the request)")
+        if state.get("checks") == "red":
+            kind = state.get("red_kind") or "unknown"
+            reasons.append(f"red-pr #{pr} (fix or triage; red_kind={kind})")
+        elif state.get("checks") == "green":
+            reasons.append(f"green-unmerged-pr #{pr} (drive to merge)")
+    if not open_states:
+        reasons.append("queue-idle (no open fleet PRs; generate or widen targets)")
+    return reasons
+
+
+def _wake_digest(open_states: List[Dict[str, Any]], reasons: List[str]) -> str:
+    basis = "\n".join(
+        [f"{s.get('pr')}|{s.get('head_sha')}|{s.get('checks')}|{s.get('checks_sha')}" for s in open_states]
+        + list(reasons)
+    )
+    return hashlib.sha256(basis.encode("utf-8")).hexdigest()[:16]
+
+
+def cmd_needs_brain(args: argparse.Namespace) -> int:
+    """Stateless-wake predicate: spend a model turn only when state changed.
+
+    Reads the snapshot inputs (PR state via gh, or a stub; plus the ledger
+    indirectly through the queue) and the previous wake decision recorded in
+    the state dir. No session id is read or written: a *second fresh wake*
+    continues from the recorded digest, which is the whole point of the
+    stateless shape (issue #18).
+    """
+    root = main_repo_root()
+    cfg = load_config(root, args.config)
+    state_dir = _resolve_state_dir(root, args.state_dir)
+    state_dir.mkdir(parents=True, exist_ok=True)
+
+    prs_data, gh_warn = fetch_gh_prs(root, state="open", require_gh=args.require_gh)
+    if gh_warn:
+        eprint(f"[warn] {gh_warn}")
+    open_states = [evaluate_pr_checks(p) for p in prs_data]
+    reasons = _wake_reasons(open_states)
+    kill_switch_file = str((cfg.get("fleet", {}) or {}).get("kill_switch_file") or ".autonomous/STOP")
+    kill_switch_paths = [
+        root / kill_switch_file,
+        Path.cwd() / kill_switch_file,
+        root / ".autonomous" / "STOP",
+    ]
+    if any(path.exists() for path in kill_switch_paths):
+        reasons.append("kill-switch-present (tend the queue only; do not generate)")
+    digest = _wake_digest(open_states, reasons)
+
+    wake_path = state_dir / "wake.json"
+    previous: Dict[str, Any] = {}
+    if wake_path.is_file():
+        try:
+            previous = json.loads(wake_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            eprint(f"[warn] wake state unreadable, treating as first wake: {wake_path}")
+            previous = {}
+
+    unchanged = bool(previous) and previous.get("digest") == digest and not args.force
+    payload: Dict[str, Any] = {
+        "tool": "fleet.py needs-brain",
+        "needs_brain": not unchanged,
+        "reasons": reasons if not unchanged else [],
+        "previous_reason": reasons if unchanged else None,
+        "reason": (
+            "state unchanged since the last wake (0-token quiet)"
+            if unchanged
+            else "; ".join(reasons) or "nothing to do"
+        ),
+        "digest": digest,
+        "previous_digest": previous.get("digest"),
+        "open_prs": len(open_states),
+        "state_file": str(wake_path),
+        "note": (
+            "stateless: reads files only, writes the decision digest; "
+            "no session id is involved"
+        ),
+    }
+    if not unchanged:
+        write_json_atomic(
+            wake_path,
+            {
+                "schema": "stateless-wake/1",
+                "digest": digest,
+                "reasons": reasons,
+                "open_prs": len(open_states),
+            },
+        )
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        if unchanged:
+            print("[+] needs-brain: quiet (state unchanged since the last wake)")
+        else:
+            print("[*] needs-brain: a wake is warranted")
+            for reason in reasons:
+                print(f"    - {reason}")
+    return EXIT_OK
+
+
 def cmd_stats(args: argparse.Namespace) -> int:
     root = main_repo_root()
     prs_data, gh_warn = fetch_gh_prs(root, state="all", limit=200, require_gh=args.require_gh)
@@ -627,6 +733,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_gov.add_argument("--json", action="store_true", help="emit JSON")
     p_gov.add_argument("--require-gh", action="store_true", help="fail if gh is unavailable")
 
+    # needs-brain
+    p_brain = subparsers.add_parser(
+        "needs-brain", help="0-token quiet-hours predicate for stateless wakes"
+    )
+    p_brain.add_argument("--config", help="path to config.json")
+    p_brain.add_argument("--state-dir", help="directory holding wake.json")
+    p_brain.add_argument("--force", action="store_true", help="ignore the recorded decision digest")
+    p_brain.add_argument("--require-gh", action="store_true", help="fail if gh is unavailable")
+    p_brain.add_argument("--json", action="store_true", help="emit JSON")
+
     # stats
     p_stats = subparsers.add_parser("stats", help="compute fleet acceptance and metrics")
     p_stats.add_argument("--config", help="path to config.json")
@@ -643,6 +759,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             return cmd_pr_state(args)
         if args.command == "govern":
             return cmd_govern(args)
+        if args.command == "needs-brain":
+            return cmd_needs_brain(args)
         if args.command == "stats":
             return cmd_stats(args)
         raise UsageError(f"unknown command: {args.command}")

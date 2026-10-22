@@ -2,13 +2,74 @@
 
 This reference is for multi-day, owner-away fleets and for every session
 running as the Orchestrator (`04`) — its cold start lives here. A single
-session doing an explicit Stream A/B task does not need it. Harness sections
-default to opencode + systemd on Linux; adapt or ignore for another harness.
+session doing an explicit Stream A/B task does not need it.
 
-## Cold start (skill-only boot)
+**Two shapes exist, and the order matters (issue #18):** the *stateless
+wake* (§Stateless wake) is the primary unattended shape — a fresh headless
+run per wake whose state is `state/*.json` + ledger + journal, with no
+session id involved. The long-lived-session + beats + watchdog dance
+(§Cold start onward) is retained as the **fallback** for harnesses without
+a headless one-shot mode; its verified lessons are kept intact, not
+deleted. Divergent advice, when the two disagree, follows the stateless
+shape — because the failure classes it removes (dead-pool resume, session
+id rot, nudge bursts after a freeze) were all observed, not theorized.
 
-A session whose only instruction is this skill starts its own operation
-before anything else. First turn, in order:
+## Stateless wake (primary shape)
+
+A timer (or any scheduler) launches a **fresh** headless Orchestrator run
+per wake. The run reads files only — `state/*.json` (snapshot + PR state),
+the ledger, the journal tail — decides, dispatches or escalates, appends
+its state-line updates, and exits. Nothing about the next wake depends on
+this run staying alive, so the model ladder simply parameterizes the
+launch and there is no resume-into-a-dead-pool failure class at all.
+
+**Spend a turn only when state changed.** `fleet.py needs-brain --json` is
+the 0-token predicate that keys wake cadence off `gh` state + the snapshot
+(no model): it returns `needs_brain: true` with reasons such as
+`red-pr #7 (fix or triage)`, `green-unmerged-pr #12 (drive to merge)`,
+`owner-ask #n`, or `queue-idle (no open fleet PRs)`, and records the
+decision digest in `state/wake.json`. A second fresh wake on the same state
+prints `quiet (state unchanged since the last wake)` — quiet hours cost 0
+tokens even with live pools. The timer keeps running; the model does not.
+
+### Harness adapter table
+
+Rows marked **verified** were exercised here; rows marked *unverified* are
+written from the harness' documented surface and must be re-checked against
+your installed version before you trust them (house style: an unverified
+row is a lead, not a fact).
+
+| Harness | One-shot headless run | JSON/usage | Model pin | Resume (optional) |
+|---|---|---|---|---|
+| **opencode** (verified) | `opencode run --auto "<prompt>"` | `--format json`; no turn/budget cap flag exists in `run --help` — keep wake prompts scoped instead of relying on a cap | `-m provider/model#variant` | `-s <session-id>` (or `--continue`); *not required* by this shape |
+| **Claude Code** (*unverified*) | `claude -p "<prompt>"` | `--output-format json`; `--max-turns N`, `--max-budget-usd X` (verify names on your version) | per-harness model flag/env | `--resume <id>` |
+| **Codex** (*unverified*) | `codex exec "<prompt>"` | `--json` (verify schema) | per-harness flag | resume flag if the version has one |
+
+Worker dispatch differs by harness and is stated rather than assumed:
+
+- opencode (verified): worker subagents exist as subagent sessions, so a
+  worker is an in-run dispatch; a worker pinned to a model is a
+  dispatch-time choice.
+- Claude Code / Codex (*unverified*): assume "workers are separate headless
+  runs" until you verify a native subagent with its own context — that is
+  exactly the isolation this shape wants anyway.
+
+**The watchdog's role after the switch** (one paragraph, no archaeology):
+with stateless wakes, the timer *starts* a run instead of *resuming* a
+session, so `assets/watchdog.sh`'s session-id file and model ladder become
+optional — keep the script when you run the fallback shape, or when you
+want a wall-clock nudge for a wedged in-run worker. In the stateless shape
+the equivalent liveness check is `fleet.py needs-brain` (did state change?)
+plus the snapshot timer; if you keep the watchdog too, its exit code 3
+(distress) and `OnFailure=` hook remain useful for "every wake is failing",
+and nothing in it reads `wake.json`, so the two cannot fight.
+
+## Cold start (fallback: immortal session)
+
+Use this shape when your harness has no headless one-shot mode, or when a
+single long conversation is the deployment's deliberate choice. A session
+whose only instruction is this skill starts its own operation before
+anything else. First turn, in order:
 
 1. **Find the state.** Look for the durable state dir outside the repo
    (`~/.local/share/<project>-oracle/`, or the name a prior run deployed).

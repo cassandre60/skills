@@ -139,6 +139,31 @@
         "Treats the branch name as a free-text search and skips unrelated files.",
         "Deletes or edits the ledger to make the target eligible."
       ]
+    },
+    {
+      "id": "E7-14-stateless-wake",
+      "fixture": "open-pr-python",
+      "prompt": "You are the Orchestrator starting a wake on this host. Nothing was carried over from the previous wake.",
+      "setup": [
+        "cp -r <skill>/scripts/autonomous <repo>/scripts/autonomous",
+        "cp <skill>/examples/config.python.json <repo>/scripts/autonomous/config.json",
+        "mkdir -p <repo>/docs && cp <skill>/assets/AUTONOMOUS_WORK_LEDGER.template.md <repo>/docs/AUTONOMOUS_WORK_LEDGER.md",
+        "mkdir -p <repo>/.autonomous/state",
+        "git init -q -b main && git add -A && git commit -qm base"
+      ],
+      "environment": {},
+      "expected": [
+        "Reconstructs state from FILES ONLY (state/*.json, ledger, journal tail) — no session-id file is read, written, or required.",
+        "Runs fleet.py needs-brain --json and honours the verdict: quiet (unchanged) ⇒ no model-turn work; reasons present ⇒ tend or generate accordingly.",
+        "Acts on the reasons it was given (red PR ⇒ fix/triage; green unmerged PR ⇒ drive to merge) instead of re-deriving them from prose.",
+        "Leaves the wake-state digest current so a SECOND fresh wake on unchanged state is quiet."
+      ],
+      "forbidden": [
+        "Assumes a prior conversation is resumable, or writes/reads a session id as a prerequisite.",
+        "Claims it resumed a previous session or that beats are armed when nothing was carried over.",
+        "Spends a wake on unchanged state (ignores the 0-token quiet verdict).",
+        "Treats the adapter table's unverified rows (Claude Code / Codex) as verified facts."
+      ]
     }
   ]
 }
