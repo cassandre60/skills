@@ -39,10 +39,9 @@ diff back to green, re-asks the owner per item when a protected-path gate
 needs a label, and merges only on green **for the current head sha**. The
 loop is in "The CI green loop" in `04`.
 
-Audit-ledger bookkeeping is batched, not bundled: workers report the row
-text, and the Orchestrator lands the rows in one separate ledger PR per
-wave — so a protected-file gate costs one owner decision per wave, not one
-per PR.
+Audit-ledger bookkeeping is batched, not bundled: workers report the row text,
+and the Orchestrator lands the rows in one separate ledger PR per wave — so a
+protected-file gate costs one owner decision per wave, not one per PR.
 
 A dead pool never parks a task: the task is re-dispatched on a live model —
 the session's own, dispatched unpinned, first — and when the tracked targets
@@ -50,6 +49,7 @@ run out, the next candidates are the files with no ledger row yet.
 
 Tending the queue is work; generating into a full queue is the new parking:
 `scripts/autonomous/fleet.py govern` checks open-PR caps and kill-switches.
+Idle capacity turns the fleet's own history into skill proposals — never a merge (`05`).
 
 ## The five laws
 
@@ -178,7 +178,7 @@ carry quota independent of the others — and must actually be free.
 | `references/02-ledger-and-dedup.md` | Schema, newest-wins, composite hash, escaping, merge driver, the validator |
 | `references/03-streams-and-triage.md` | Deeper Stream A/B checklists and planned streams |
 | `references/04-workflow-and-roles.md` | The one canonical per-task protocol and evidence contract |
-| `references/05-unattended-operation.md` | Heartbeats, watchdog, quotas, fleet coordination (advanced) |
+| `references/05-unattended-operation.md` | Heartbeats, watchdog, quotas, fleet coordination, the improvement cadence (advanced) |
 | `references/07-moving-main.md` | Working on a repo that keeps merging; stale-base traps |
 | `references/gates-and-vocabulary.md` | Gate ids, optional vocabulary, and the "no gates yet" fallback |
 | `references/stack-adapters.md` | Concrete commands per stack |
