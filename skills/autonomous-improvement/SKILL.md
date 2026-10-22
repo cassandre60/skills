@@ -75,7 +75,10 @@ cp <skill>/assets/AUTONOMOUS_WORK_LEDGER.template.md <repo>/docs/AUTONOMOUS_WORK
 
 Edit the `config.json` copy to name the repo's real test, format, analyze, and
 gate commands. Every command is an **argv array**; a missing key is
-skipped with `[skip] <step> not configured`. See `references/stack-adapters.md`
+skipped with `[skip] <step> not configured`. Set also the candidate globs and
+the source-to-test mapping — both repo-specific, and an empty candidate list
+now means *not configured* rather than an empty queue. Verify the mapping once
+with `ledger.py next --stream A --limit 3`. See `references/stack-adapters.md`
 for Python, Dart/Flutter, TypeScript/JavaScript, and Go examples.
 
 ## Quick start (one round)
@@ -140,9 +143,8 @@ The ledger is a git-tracked markdown table:
   by opening a draft PR early; `sync-rejections` records closed PRs.
 - Cells are escaped (`\|`, `\\`); rows must stay append-only. Add the
   `merge=union` fragment from `assets/gitattributes.fragment.txt` so parallel
-  appends merge without conflicts.
-- The hash is the blob at HEAD. `record` warns if the target is dirty;
-  `--strict` makes that fatal.
+  appends merge without conflicts, and the Status cell must be the bare token.
+- The hash is the blob at HEAD; `record` warns if the target is dirty.
 
 ## Beyond testing (planned streams C–L)
 
@@ -173,7 +175,7 @@ carry quota independent of the others — and must actually be free.
 | File | Read when |
 |---|---|
 | `references/01-mutation-engine.md` | Rule packs, statuses, seeds/shards, diff scoping, triage |
-| `references/02-ledger-and-dedup.md` | Schema, newest-wins, composite hash, escaping, merge driver, draft-PR claims |
+| `references/02-ledger-and-dedup.md` | Schema, newest-wins, composite hash, escaping, merge driver, the validator |
 | `references/03-streams-and-triage.md` | Deeper Stream A/B checklists and planned streams |
 | `references/04-workflow-and-roles.md` | The one canonical per-task protocol and evidence contract |
 | `references/05-unattended-operation.md` | Heartbeats, watchdog, quotas, fleet coordination (advanced) |
@@ -190,10 +192,9 @@ carry quota independent of the others — and must actually be free.
   make a gate pass. `scripts/autonomous/test_weakening_check.py` is the local
   tripwire when the repo has no gate system.
 - Delete a gate that stops paying; do not accumulate ceremony.
-- If the repo has no gates, run the project's own CI commands locally on touched
-  files only and use the tripwire. Never block on a `gates.sh` that does not
-  exist.
+- If the repo has no gates, run the project's CI commands locally on touched files
+  only and use the tripwire. Never block on a `gates.sh` that does not exist.
 
 *Honest limit: gates verify conformance to the spec, not the truth of the spec.
-Mutation here does not replace AST-based tools (Stryker, PIT, mutmut,
-cargo-mutants); it is the zero-dependency fallback.*
+Mutation here does not replace AST-based tools (Stryker, PIT, mutmut, cargo-mutants);
+it is the zero-dependency fallback.*
