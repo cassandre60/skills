@@ -62,6 +62,10 @@ local instructions file. It is not an independent policy document.
      Keep the global write-back rules in mind: no speculation, no narration,
      no anything already obvious from reading the code. -->
 
+- [2026-10-22, glm-5.3-flash-free] `python3 -m unittest ... -k "A OR B"` runs **0 tests** on Python 3.14 (no error, just "NO TESTS RAN") — run one `-k` per pattern, or one `-k` per class. Verified by: repeated scoped runs of `skills/autonomous-improvement/tests/test_v2.py`.
+- [2026-10-22, glm-5.3-flash-free] `tests/support.py::install_scripts()` `rmtree`s `<repo>/scripts/autonomous`, so any test config must be written AFTER it (`support.write_config()`), and the runtime config path is `<repo>/scripts/autonomous/config.json` — not the repo root. Verified by: DoctorTests/StreamLTests staging (config silently ignored before install, honored after).
+- [2026-10-22, glm-5.3-flash-free] In serial merges of the autonomous-improvement PRs, resolving `tests/test_v2.py` with a naive "keep both sides" union silently TRUNCATES a test class at interleaved hunks (compiler is the only detector), and merged `README.md` must be regenerated (`scripts/generate_readme.py`) rather than hand-merged. Verified by: local merge-train rehearsal (scratch worktree, `git merge origin/<branch>`), finding `FlakeStreamTests` cut mid-method.
+
 ---
 
 Everything below is the **global baseline**, copied verbatim from
