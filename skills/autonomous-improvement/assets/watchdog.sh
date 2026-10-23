@@ -30,8 +30,9 @@
 #                     Empty = no rotation (session default only).
 #   ORCH_MODEL_COOLDOWN seconds a model that failed with a quota error is skipped
 #                     (default 3600 = 1 h)
+#   ORCH_FAILURE_TTL  seconds before a model_failures entry is pruned
+#                     (default 604800 = 7 days; keeps the file bounded)
 #   ORCH_NUDGE_MODELS  how many ladder models to try per tick (default 3)
-#   ORCH_FAILURE_RETENTION seconds a model_failure entry is kept (default 604800 = 7d)
 #   ORCH_MIN_INTERVAL  minimum seconds between nudge rounds (default 600)
 #   ORCH_AUTHORIZED_PROVIDERS  providers the owner authorises for the fleet
 #                     (default: opencode). A ladder entry outside this list is
@@ -48,6 +49,17 @@
 #                     dead pool floods the session: each attempt delivers its
 #                     message BEFORE the model call fails, so a 4-model ladder
 #                     at a 20-minute timer is 4 stale messages per tick.
+#
+# Exit codes: 0 = tick done (nothing to do, or a model woke the session);
+#             3 = total failure (every attempted model failed — wire
+#             systemd `OnFailure=` or an owner notification to it, else a
+#             dead fleet is discovered by silence).
+#
+# Quota signatures are error-line anchored: a quota term counts only on a
+# line shaped like a harness ERROR, so a nudge that SUCCEEDS while merely
+# mentioning limits does not park its model. A harness reporting quota on a
+# bare non-error line is not detected (accepted risk; the retry ladder and
+# the stale-heartbeat path cover it) — see references/05.
 #
 # Harness-specific: the default resume command is for opencode. Read your
 # harness docs for its headless resume-session flags; do not copy these flags
@@ -98,28 +110,45 @@ fi
 # A quota error is a stronger wake signal than a stale heartbeat: rotate the
 # model immediately, do not wait for the age threshold.
 #
-# Signature discipline (2026-10-21): grepping the nudge output for loose quota
-# words parks a model whose agent merely *summarizes* a journal incident that
-# mentions rate limits. A quota failure therefore needs evidence: either an
-# error-shaped line naming the limit (strong), or the loose words together
-# with a failing nudge exit (weak made credible by the failure).
-QUOTA_WORDS='rate limit|rate_limit|429|quota|too many requests|insufficient balance|balance is at|exceeded your current'
-QUOTA_STRONG_RE="(error|failed|failure|exception|fatal).*($QUOTA_WORDS)|insufficient balance|balance is at \\\$0"
-
-is_quota_failure() { # $1: nudge exit code, $2: nudge output file
-  grep -Eiq "$QUOTA_STRONG_RE" "$2" && return 0
-  if [ "$1" -ne 0 ] && grep -Eiq "$QUOTA_WORDS" "$2"; then
-    return 0
-  fi
-  return 1
-}
+# Signatures are tight on purpose (issue #19): a quota term only counts on a
+# line that looks like a harness ERROR, so a nudge that SUCCEEDS while merely
+# discussing limits ("rate limit handled yesterday, quota notes filed") does
+# not park its model. Accepted risk, documented in references/05: a harness
+# that reports quota exhaustion on a bare line with no error prefix is not
+# detected here — the attempt-marker still backdates nothing, so the next
+# stale tick retries and walks the ladder anyway.
+ERROR_LINE_RE='^[[:space:]]*(Error|ERROR|error)\b|^[[:space:]]*HTTP[[:space:]]*429|^[[:space:]]*429[[:space:]]|curl: \(22\)|^[[:space:]]*[A-Za-z]+Error:'
+QUOTA_RE='rate limit|rate_limit|429|quota|too many requests|insufficient balance|balance is at|exceeded your current'
 
 # An INFRASTRUCTURE outage is not a quota failure. The model is not exhausted:
 # rotating the ladder would burn every pool against the same broken endpoint,
 # and marking one dead would park a perfectly usable model for an hour. So an
 # outage ends the tick with the pool list untouched. "overloaded" is deliberately
-# NOT here: a gateway saying "overloaded" is usually an outage, not a quota.
+# NOT a quota term: a gateway saying "overloaded" is usually an outage.
 OUTAGE_RE='endpoint is unavailable|upstream request failed|service unavailable|bad gateway|gateway timeout|connection reset|connection refused|temporarily unavailable|econnrefused|socket hang up|502|503|504'
+
+quota_failure() { # $1: output file -> 0 when an ERROR-shaped line carries a quota signal
+  grep -E "$ERROR_LINE_RE" "$1" 2>/dev/null | grep -Eiq "$QUOTA_RE"
+}
+
+# Cooldown entries older than the TTL are pruned every tick so
+# model_failures cannot grow without bound (issue #19).
+FAIL_TTL="${ORCH_FAILURE_TTL:-604800}" # 7 days
+prune_failures() {
+  local now tmp m ts
+  [ -f "$FAIL_FILE" ] || return 0
+  now=$(date +%s)
+  tmp="$(mktemp)"
+  while read -r m ts; do
+    [ -n "${m:-}" ] || continue
+    case "$ts" in ''|*[!0-9]*) continue ;; esac
+    if [ $(( now - ts )) -lt "$FAIL_TTL" ]; then
+      printf '%s %s\n' "$m" "$ts" >>"$tmp"
+    fi
+  done <"$FAIL_FILE"
+  mv "$tmp" "$FAIL_FILE"
+}
+prune_failures
 
 # A DEAD MODEL is neither a quota exhaustion nor an outage: the pool/model was
 # removed or disabled, and retrying it on this tick or the next changes
@@ -130,7 +159,11 @@ OUTAGE_RE='endpoint is unavailable|upstream request failed|service unavailable|b
 DEAD_MODEL_RE='model unavailable|model is not available|no such model|model not found|unknown model|model disabled'
 
 failed_recently() { # $1: model id -> 0 when the model is in cooldown
-  local model="$1" now ts
+  # `m` MUST be local: read into a global would clobber the caller's
+  # ladder loop variable, and an EMPTY failure file (which the TTL prune
+  # below can produce) blanks the model via read's EOF - the ladder would
+  # silently degrade to the session default.
+  local model="$1" now ts m
   now=$(date +%s)
   [ -f "$FAIL_FILE" ] || return 1
   while read -r m ts; do
@@ -145,27 +178,6 @@ mark_failed() { # $1: model id
   now=$(date +%s)
   printf '%s %s\n' "$model" "$now" >>"$FAIL_FILE"
 }
-
-# The failure log is append-only otherwise; drop entries older than the
-# retention window (default 7 days) and malformed lines, once per tick.
-RETENTION="${ORCH_FAILURE_RETENTION:-604800}"
-prune_failures() {
-  [ -f "$FAIL_FILE" ] || return 0
-  local now m ts tmp
-  now=$(date +%s)
-  tmp="$FAIL_FILE.tmp"
-  : >"$tmp"
-  while read -r m ts; do
-    case "$ts" in
-      *[!0-9]*|"") continue ;;
-    esac
-    if [ $(( now - ts )) -le "$RETENTION" ]; then
-      printf '%s %s\n' "$m" "$ts" >>"$tmp"
-    fi
-  done <"$FAIL_FILE"
-  mv "$tmp" "$FAIL_FILE"
-}
-prune_failures
 
 authorized_model() { # $1: model id -> 0 when its provider is owner-authorised
   local provider="${1%%/*}"
@@ -295,7 +307,7 @@ for model in "${candidates[@]}"; do
     echo "$(date -Is) model '$label' answered with an infrastructure outage; not a quota failure - the ladder and the cooldown list are left untouched, and the next tick retries" >>"$LOG"
     exit 0
   fi
-  if is_quota_failure "$RC" "$OUT"; then
+  if quota_failure "$OUT"; then
     echo "$(date -Is) model '$label' answered with a quota/balance failure; rotating" >>"$LOG"
     [ -n "$model" ] && mark_failed "$model"
     continue
@@ -335,10 +347,12 @@ done
 # (bounded by last_nudge/MIN_INTERVAL) retries at once instead of waiting out
 # a freshness the session never earned. Then leave evidence the owner can see
 # without reading this log.
+#
+# Exit 3 (distinct distress code, issue #19): the tick ended in total
+# failure. Wire systemd `OnFailure=` or the owner heartbeat to it —
+# otherwise a dead fleet is discovered by silence.
 touch -d "@$(( $(date +%s) - MAX_AGE - 1 ))" "$HB"
 touch "$EXHAUSTED_FILE"
 alert_exhausted
-echo "$(date -Is) every attempted model failed; heartbeat left stale and an alert written for the next tick" >>"$LOG"
-# Total failure is distress systemd should be able to see: OnFailure= can
-# notify the owner (a dead fleet otherwise announces itself by silence).
+echo "$(date -Is) every attempted model failed; heartbeat left stale, an alert written, and exiting 3 (total failure)" >>"$LOG"
 exit 3

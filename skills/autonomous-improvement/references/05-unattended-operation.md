@@ -256,14 +256,19 @@ Two counters keep one frozen window cheap:
 3. Otherwise runs **one foreground nudge** into the same session, bounded by
    `timeout --signal=TERM --kill-after=60 "$ORCH_NUDGE_TIMEOUT"`.
 4. Logs the exit status (`124` = timed out). A tick where **every** attempted
-   model fails exits `3` — distress systemd can see: attach an
-   `OnFailure=` unit (ntfy/webhook/mail) so a dead fleet announces itself
-   instead of going silent. Quota classification is disciplined: an
-   error-shaped line, or loose limit words *on a failing exit* — an agent
-   summarizing an old incident never parks its own model. An infrastructure
-   outage (broken endpoint) ends the tick with the ladder untouched: the
-   model is not exhausted, and burning the ladder against one broken
-   endpoint would park a usable fleet.
+   model fails exits `3` (the other exits are `0`) — distress systemd can
+   see: attach an `OnFailure=` unit (ntfy/webhook/mail) so a dead fleet
+   announces itself instead of going silent. Quota signatures are
+   **error-line anchored**: a quota term counts only on a line shaped like a
+   harness error (`Error: ...`, `HTTP 429`, a `curl: (22)` line). A nudge
+   that *succeeds* while merely mentioning limits — an agent summarizing the
+   journal, say — does not park its model. Accepted risk, stated rather than
+   implied: a harness that reports quota exhaustion on a bare, non-error
+   line is not detected here; the heartbeat stays stale because the session
+   never really woke, so the retry ladder covers it on the next tick. An
+   infrastructure outage (broken endpoint) ends the tick with the ladder
+   untouched: the model is not exhausted, and burning the ladder against one
+   broken endpoint would park a usable fleet.
 
 There is no `pgrep`, no background branch, and no `setsid`. V1's dead-process
 branch launched `setsid nohup ... &` from a `Type=oneshot` unit; systemd tracks
@@ -282,7 +287,7 @@ foreground path sidesteps the cgroup problem entirely.
 - `watchdog.log` — append-only log.
 - `watchdog.lock` — flock file.
 - `model_failures` — `model timestamp` per quota-failed model (cooldown list);
-  entries older than `ORCH_FAILURE_RETENTION` (default 7 days) are pruned
+  entries older than `ORCH_FAILURE_TTL` (default 7 days) are pruned
   each tick so the list cannot grow without bound.
 - `last_nudge` — timestamp of the last nudge round (storm protection).
 - `watchdog.env` — the `ORCH_*` variables, read by the systemd service via
