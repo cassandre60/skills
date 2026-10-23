@@ -1637,6 +1637,36 @@ class WorkerLifecycleContractTests(unittest.TestCase):
         # "overloaded" is an outage word, not a quota word
         self.assertNotIn("overloaded", _flat_lifecycle(self.watchdog).split("QUOTA_RE=")[1].split("'")[0])
 
+    def test_an_unclassified_non_zero_exit_still_rotates(self) -> None:
+        # The classifier decides HOW to record a failure, never WHETHER it is
+        # one: a new error string must not become a silent success.
+        self.assertIn("exit status is the contract", self.unattended.lower())
+        self.assertIn('if [ "$RC" -ne 0 ]', self.watchdog)
+
+    def test_a_timeout_is_judged_by_the_heartbeat(self) -> None:
+        # A preempted turn and a long turn look identical in the output; the
+        # session's own heartbeat is the witness.
+        self.assertIn("judged by the heartbeat", self.unattended.lower())
+        self.assertIn('"$RC" -eq 124', self.watchdog)
+
+    def test_exhaustion_leaves_an_out_of_band_alert(self) -> None:
+        self.assertIn("alert.md", self.unattended.lower())
+        self.assertIn("ALERT_FILE", self.watchdog)
+
+    def test_the_ladder_is_owner_scoped(self) -> None:
+        self.assertIn("ORCH_AUTHORIZED_PROVIDERS", self.unattended)
+        self.assertIn("ORCH_AUTHORIZED_PROVIDERS", self.watchdog)
+        self.assertIn("throwaway session", self.unattended.lower())
+
+    def test_rotation_switches_the_session_model(self) -> None:
+        self.assertIn("ORCH_SWITCH_SESSION_MODEL", self.unattended)
+        self.assertIn("switch_session_model", self.watchdog)
+
+    def test_the_install_is_checked_for_drift(self) -> None:
+        self.assertIn("installing is a copy", self.unattended.lower())
+        installer = (ASSETS / "install-watchdog.sh").read_text(encoding="utf-8")
+        self.assertIn("--check", installer)
+
     def test_the_checkpoint_covers_new_files(self) -> None:
         self.assertIn("stage new files by name", self.unattended.lower())
 
@@ -11712,6 +11742,43 @@ class WorkerLifecycleContractTests(unittest.TestCase):
         self.assertIn("OUTAGE_RE", self.watchdog)
         # "overloaded" is an outage word, not a quota word
         self.assertNotIn("overloaded", _flat(self.watchdog).split("QUOTA_RE=")[1].split("'")[0])
+
+    def test_a_dead_model_is_its_own_failure_class(self) -> None:
+        # Verified 2026-10-23: `Model unavailable` matched neither the quota
+        # nor the outage list, so the tick was logged "done" and the ladder
+        # was never tried for seven hours.
+        self.assertIn("dead model", self.unattended.lower())
+        self.assertIn("DEAD_MODEL_RE", self.watchdog)
+
+    def test_an_unclassified_non_zero_exit_still_rotates(self) -> None:
+        # The classifier decides HOW to record a failure, never WHETHER it is
+        # one: a new error string must not become a silent success.
+        self.assertIn("exit status is the contract", self.unattended.lower())
+        self.assertIn('if [ "$RC" -ne 0 ]', self.watchdog)
+
+    def test_a_timeout_is_judged_by_the_heartbeat(self) -> None:
+        # A preempted turn and a long turn look identical in the output; the
+        # session's own heartbeat is the witness.
+        self.assertIn("judged by the heartbeat", self.unattended.lower())
+        self.assertIn('"$RC" -eq 124', self.watchdog)
+
+    def test_exhaustion_leaves_an_out_of_band_alert(self) -> None:
+        self.assertIn("alert.md", self.unattended.lower())
+        self.assertIn("ALERT_FILE", self.watchdog)
+
+    def test_the_ladder_is_owner_scoped(self) -> None:
+        self.assertIn("ORCH_AUTHORIZED_PROVIDERS", self.unattended)
+        self.assertIn("ORCH_AUTHORIZED_PROVIDERS", self.watchdog)
+        self.assertIn("throwaway session", self.unattended.lower())
+
+    def test_rotation_switches_the_session_model(self) -> None:
+        self.assertIn("ORCH_SWITCH_SESSION_MODEL", self.unattended)
+        self.assertIn("switch_session_model", self.watchdog)
+
+    def test_the_install_is_checked_for_drift(self) -> None:
+        self.assertIn("installing is a copy", self.unattended.lower())
+        installer = (ASSETS / "install-watchdog.sh").read_text(encoding="utf-8")
+        self.assertIn("--check", installer)
 
     def test_the_checkpoint_covers_new_files(self) -> None:
         self.assertIn("stage new files by name", self.unattended.lower())
