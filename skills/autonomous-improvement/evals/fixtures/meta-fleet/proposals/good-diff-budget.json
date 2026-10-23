@@ -1,0 +1,20 @@
+{
+  "schema": "stream-l-proposal/1",
+  "kind": "param-tune",
+  "touches": ["fleet.candidates.A.diff_max_files"],
+  "basis": "3 of 14 recorded rows are stream-A mutation-rework rows whose reason is 'oversized diff' (RW-711..RW-713); median rework owner-minutes is 40.0",
+  "claims": {
+    "stream": "A",
+    "metric": "median_owner_minutes",
+    "filter": {"kind": "mutation-rework", "outcome": "rework", "rework_reason": "oversized diff"},
+    "before": 40.0,
+    "after": 18.0
+  },
+  "multi_objective": {
+    "owner_minutes_delta": -22.0,
+    "ci_minutes_delta": 0.0,
+    "tokens_delta": 0.0,
+    "accepted_value_delta": 0.0,
+    "acceptance_rate_estimate_14d": 0.7
+  }
+}

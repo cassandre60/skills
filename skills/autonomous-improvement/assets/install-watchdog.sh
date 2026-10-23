@@ -121,7 +121,7 @@ do_install() {
 # class), and the watchdog log looked like the old bug for seven hours after
 # the fix existed. Run this at every cold start and after every skill update.
 do_check() {
-  local rc=0 asset installed
+  local rc=0 asset installed unit env_file exec_path
   for asset in watchdog.sh snapshot.sh; do
     installed="$INSTALL_DIR/$asset"
     if [ ! -f "$installed" ]; then
@@ -134,8 +134,34 @@ do_check() {
       rc=1
     fi
   done
+  # The env file is inert unless the installed unit loads it. A hand-written
+  # unit that omits EnvironmentFile leaves every ORCH_* setting at its default
+  # — including an empty ladder — while the script bytes look current.
+  # Verified 2026-10-23: a fleet ran with an empty ladder because its unit
+  # only set ORCH_STATE_DIR, so a merged watchdog fix could never rotate.
+  unit="$UNIT_DIR/$SERVICE"
+  if [ ! -f "$unit" ]; then
+    echo "[!] $unit is missing; run ./install-watchdog.sh"
+    rc=1
+  else
+    env_file="$(sed -n 's/^EnvironmentFile=-*//p' "$unit" | head -1)"
+    env_file="${env_file/#%h/$HOME}"
+    exec_path="$(sed -n 's/^ExecStart=//p' "$unit" | head -1)"
+    exec_path="${exec_path/#%h/$HOME}"
+    if [ -z "$env_file" ]; then
+      echo "[!] $unit has no EnvironmentFile=; ORCH_* settings (the model ladder) never reach the service"
+      rc=1
+    elif [ ! -f "$env_file" ]; then
+      echo "[!] $unit reads $env_file, which does not exist"
+      rc=1
+    fi
+    if [ -n "$exec_path" ] && [ "$exec_path" != "$INSTALL_DIR/watchdog.sh" ]; then
+      echo "[!] $unit runs '$exec_path', not the installed '$INSTALL_DIR/watchdog.sh'"
+      rc=1
+    fi
+  fi
   if [ "$rc" -eq 0 ]; then
-    echo "[+] installed watchdog and snapshot match the skill assets"
+    echo "[+] installed watchdog and snapshot match the skill assets; the unit loads its env file"
   fi
   return "$rc"
 }

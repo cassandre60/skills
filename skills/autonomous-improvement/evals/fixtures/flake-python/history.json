@@ -1,0 +1,13 @@
+{
+  "schema": "stream-f/1",
+  "description": "Synthetic CI check history: test_counter_flake showed both outcomes at the same shas (re-runs on one sha), test_counter_fixed stayed green. The finder's zero-false-positive duty: everything green here stays unflagged.",
+  "meta": {"cost_s": {}},
+  "runs": [
+    {"sha": "r1", "job": "unit", "labels": {"tests/test_counter_flake.py": "fail", "tests/test_counter_fixed.py": "pass"}},
+    {"sha": "r1", "job": "unit", "labels": {"tests/test_counter_flake.py": "pass", "tests/test_counter_fixed.py": "pass"}},
+    {"sha": "r2", "job": "unit", "labels": {"tests/test_counter_flake.py": "fail", "tests/test_counter_fixed.py": "pass"}},
+    {"sha": "r2", "job": "unit", "labels": {"tests/test_counter_flake.py": "pass", "tests/test_counter_fixed.py": "pass"}},
+    {"sha": "r3", "job": "unit", "labels": {"tests/test_counter_flake.py": "fail", "tests/test_counter_fixed.py": "pass"}},
+    {"sha": "r3", "job": "unit", "labels": {"tests/test_counter_flake.py": "pass", "tests/test_counter_fixed.py": "pass"}}
+  ]
+}

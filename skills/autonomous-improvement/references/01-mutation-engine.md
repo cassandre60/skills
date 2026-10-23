@@ -39,15 +39,39 @@ across lines. This is heuristic; verify any survivor that looks suspicious.
 - Unknown extensions exit 2 and list the supported ones. There is no silent
   "0 mutants, success".
 
+## Backends
+
+The regex engine ("sregex") stays the guaranteed-available backend:
+zero-dependency, syntactic, honest that survivors need human triage. It is the
+fallback, not a replacement for Stryker/PIT/mutmut/cargo-mutants/gremlins.
+
+`--backend {auto,sregex}` (default `auto`): with no external-mutator adapter
+built, `auto` resolves to `sregex` and prints that resolution, so a run's
+backend is never implicit or silently renamed.
+
+| Backend | Status |
+|---|---|
+| `sregex` | available (this engine) |
+| `stryker` (JS/TS) | planned — needs a recorded report fixture |
+| `mutmut` (Python) | planned — needs a recorded report fixture |
+| `cargo-mutants` (Rust) | planned — needs a recorded report fixture |
+| `gremlins` (Go) | planned — needs a recorded report fixture |
+| `pit` (Java) | planned — needs a recorded report fixture |
+
+An adapter normalizes its tool's report into the verdict schema above so
+triage/ledger/evidence flows are unchanged. Its normalization is tested against
+a **recorded** report of that tool before the backend table above changes; no
+adapter ships without a fixture.
+
 ## Statuses
 
 | State | Meaning | Counted in kill rate |
 |---|---|---|
 | `KILLED` | Targeted tests failed under the mutant. | yes |
-| `SURVIVED` | Tests passed; candidate gap, triage required. | yes |
-| `UNCONFIRMED` | Passed once, then the clean suite flaked or the mutant stopped surviving on re-application. | no |
+| `SURVIVED` | Tests passed **and** the clean-source confirmation run held; candidate gap, triage required. | yes |
 | `UNCOMPILABLE` | An anchored compiler-error pattern matched. | no |
-| `TIMEOUT` | Test command exceeded the per-mutant timeout. | configurable |
+| `TIMEOUT` | Test command exceeded the effective timeout. | configurable |
+| `UNVERIFIED` | A survivor whose clean-source confirmation run failed: the suite is unreliable on clean source, so the pass proves nothing. Not work. | no |
 
 Timeouts are **baseline-relative** by default: per-mutant timeout =
 `max(--timeout-factor (5) × baseline, --timeout-floor (20s))`, because a fixed
@@ -81,6 +105,38 @@ Compile classification is anchored per language (for example
 `^\S+\.dart:\d+:\d+: Error: ` and `^\s*(SyntaxError|IndentationError|TabError):`),
 so ordinary assertion failures that contain words like "error" are not
 misclassified. It is still a heuristic; counts are reported separately.
+
+## Timeouts
+
+The per-mutant timeout is baseline-relative by default: `max(5 x baseline
+elapsed, 20s)` (#16). `--timeout`, when given explicitly, wins (flags are
+preserved). A fixed timeout is a loaded-VM trap: TIMEOUT counts as KILLED by
+default, so a contended box manufactures kill rate. Scaling off the measured
+baseline keeps the classification honest regardless of machine load.
+`--output-json` records both `timeout_mode` and `timeout_effective`.
+
+## Survivor confirmation and verdict cache
+
+`--confirm-survivors N` (default 1; `0` disables): before a pass under the
+mutant is reported as `SURVIVED`, the same targeted command is re-run on
+restored (clean) source. A failing or timing-out confirmation demotes the
+mutant to `UNVERIFIED` and it never enters triage — a suite that cannot be
+trusted on clean source grades mutants by coin flip (#16 item 3). Quarantining
+a flaky suite is Stream F's job, not the engine's.
+
+Verdicts are cached per (source bytes, test command) with a mutant id
+(`line:sha12(mutated text)`) in `.autonomous/mutant-cache.json`:
+
+- a second identical run reuses every verdict (`cache_hits` in the JSON);
+- changing the source or the test command invalidates the cache by
+  construction (the stored composite no longer matches);
+- survived entries are stored only **after** confirmation, so a cache hit can
+  never smuggle an unconfirmed pass into work;
+- `--no-cache` bypasses the file; an unreadable cache is ignored with a
+  printed warning, never trusted.
+
+Add `.autonomous/mutant-cache.json` to `.gitignore`
+(`assets/gitignore.fragment.txt`).
 
 ## Safety and crash recovery
 

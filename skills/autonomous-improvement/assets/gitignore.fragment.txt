@@ -6,5 +6,9 @@
 # Python bytecode, if the scripts are copied into the repo.
 __pycache__/
 
-# Fleet machine state (evidence artifacts, snapshots, kill switch).
+# Autonomy state: repair/red-green evidence, advisory dedup records and the
+# verdict cache are run state, not repository truth — they must never appear
+# as a PR diff. Fleet snapshots and kill-switch state live under the same
+# rule. The cache is keyed on (source bytes, test command), so a source or
+# test change invalidates it by construction.
 .autonomous/

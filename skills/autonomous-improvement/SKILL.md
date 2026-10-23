@@ -6,15 +6,20 @@ description: Run falsifiable, high-signal improvement cycles on a codebase inste
 # Autonomous Improvement
 
 Spend tokens on work that can be **mechanically falsified**, not on renames,
-prose, or checkbox tests. Three streams are active:
+prose, or checkbox tests. Eleven streams are active:
 
-- **A — mutation testing:** find behavior the suite does not protect.
-- **B — adversarial test audit:** find tests that cannot fail, assert mocks,
-  sleep instead of synchronizing, or measure in a harness unlike production.
-- **J — simplification:** delete dead code only when tests stay green and the mutation score does not fall.
+- **A — mutation testing:** behavior the suite does not protect.
+- **B — adversarial test audit:** tests that cannot fail, assert mocks, or sleep instead of syncing.
+- **C — property / fuzz:** recorded seeds, shrunk counterexamples retained (`fuzz_shrink.py`).
+- **E — defect repair:** issue intake, a repro that must be red on main (`repair.py`).
+- **F — flake & determinism:** CI-history finder plus an N-run oracle.
+- **G — performance:** bench delta **and** output equivalence, both mandatory (`perf_gate.py`).
+- **H+K — security & dependency:** stub-advisory audits, redacting secret scan, oracle-first bumps (`advisory.py`).
+- **I — docs & spec truth:** runnable examples, symbol/spec drift (`docs_truth.py`).
+- **J — simplification:** delete dead code only when tests stay green and the mutation score does not fall (`simplify_gate.py`).
+- **L — meta (gated):** own kill switch, replay-gated claims, L4 issue-only (`meta.py`).
 
-Each round produces at most one small, evidence-backed PR. If there is no
-falsifiable gap, stop; that is a valid result.
+Each round produces at most one small, evidence-backed PR; no gap is a valid result.
 
 ## Who runs the round
 
@@ -28,11 +33,9 @@ with the session-id/wake-grid boot kept as the long-lived-session fallback.
 
 When a worker or the session itself dies with a quota error, the Orchestrator
 **rotates the model**, it does not retry the same one: enumerate the live
-models, re-dispatch on a different one, and put the dead model on the
-journal's dead-pool list. A resume that wakes a frozen session must name a
-live model too — verified 2026-10-20: seven nudges on the frozen model, every
-one answered "Rate limit exceeded", across an 8-hour freeze while another
-free model stayed alive. See "Model rotation" in `05`.
+models, re-dispatch on a different one, and record the dead model on the
+journal's dead-pool list; a resumed frozen session must wake on a live model
+too (the freeze record is in `05`). See "Model rotation" in `05`.
 
 A PR is not done when it is created. The Orchestrator owns each PR to merge:
 it reads the checks on every wake, drives a red check that sits inside the
@@ -49,7 +52,7 @@ the session's own, dispatched unpinned, first — and when the tracked targets
 run out, the next candidates are the files with no ledger row yet.
 
 Tending the queue is work; generating into a full queue is the new parking:
-`scripts/autonomous/fleet.py govern` checks open-PR caps and kill-switches.
+`scripts/autonomous/fleet.py govern` checks open-PR caps, kill-switches, and the `fleet.py doctor` preflight (report, don't dispatch).
 Idle capacity turns the fleet's own history into skill proposals — never a merge (`05`).
 
 ## The five laws
@@ -61,10 +64,6 @@ Idle capacity turns the fleet's own history into skill proposals — never a mer
 | **3. Worktree isolation** | Every task runs in an isolated worktree branched from the configured base (`origin/main` by default). Stage by name; never run destructive git commands outside your own worktree. |
 | **4. Machine budget** | One targeted test per mutant, one full-file run at the end of the task. Never run the whole suite locally — that is CI's job. One analyze/lint pass per task, on touched files, after the last edit. |
 | **5. Pool rotation** | A quota error changes the model; it is never retried on the model that just failed. The dead model is recorded, the next live model takes the task, and the wake that revives a frozen session names a live model. A gateway reporting "$0 balance" is a paid pool with no credit, not a free fallback. |
-
-The engine runs tests serially. `machine_budget.max_concurrent_tests` in config
-records the owner's cap for parallel shards/agents; it is not a per-run fan-out
-knob.
 
 ## Install into a repo
 
@@ -95,27 +94,28 @@ Full commands, worktree cleanup, and the evidence contract: `references/04-workf
 
 ## Stream A — mutation testing
 
-The engine is regex-based, with per-language rule packs under `scripts/autonomous/mutation_rules/`
-(Stryker reports normalize via `--backend stryker`; `auto` falls back to regex). One line at a
-time, baseline-relative timeouts, survivor confirmation, verdict cache.
+The engine is regex-based (`scripts/autonomous/mutation_rules/`): one mutant
+line at a time, one targeted test run per mutant, a timeout scaled off the
+measured baseline, clean-source confirm passes, and a persisted verdict
+cache — stryker reports normalize via `--backend stryker` (`auto` → regex).
 
 - `KILLED`: the suite noticed. No work.
 - `SURVIVED`: a candidate gap. **Triage first** — equivalent mutants, string or
-  comment noise, and regex false positives are real. Record the verdict with
-  `mutants.py record`; open survivors keep the file in `next`.
+  comment noise, and regex false positives are real. Record it with `mutants.py
+  record`; open survivors keep the file in `next`.
 - `UNCOMPILABLE`: an anchored compiler-error pattern matched; excluded from the
   kill rate. Never "fix" these with tests.
 - `TIMEOUT`: reported separately; counted as killed by default. Change with
   `--timeout-counts-as`.
 
 A survivor becomes work only when you can state the behavior it breaks and write
-a test that is red with the mutant and green without it. The test passes on
-`origin/main` by construction; that is expected (Law 1).
+a test that is red with the mutant and green without it (it passes on
+`origin/main` by construction — that is expected: Law 1).
 
 Safety: the engine refuses a dirty source unless `--allow-dirty`, writes
-`<file>.mutbak` + `<file>.mutlock`, restores on SIGTERM/SIGINT/SIGHUP, and
-recovers a stale backup after SIGKILL. Add these patterns to `.gitignore`; see
-`assets/gitignore.fragment.txt`. Shards need separate worktrees.
+`<file>.mutbak` + `<file>.mutlock` (restores on SIGTERM/SIGINT/SIGHUP, recovers
+a stale backup after SIGKILL), and needs these patterns in `.gitignore`
+(`assets/gitignore.fragment.txt`). Shards need separate worktrees.
 
 ## Stream B — adversarial test audit
 
@@ -147,17 +147,16 @@ The ledger is a git-tracked markdown table:
   appends merge without conflicts, and the Status cell must be the bare token.
 - The hash is the blob at HEAD; `record` warns if the target is dirty.
 
-## Beyond testing (expansion streams C–L)
+## Beyond testing (planned stream D; L is gated)
 
-Testing is the bootstrap, not the ceiling: streams C–L generalize the same
+Testing is the bootstrap, not the ceiling. Streams C–I and K generalize the
 five laws to fuzzing, defect repair, flakiness, performance, security, docs
-truthfulness, simplification, dependency evolution, and — capped and
-eval-gated — the fleet improving itself. **J is unlocked** in first-wave T1
-form: `simplify_gate.py` finds conservative dead-code candidates, and its
-oracle requires green tests, no deleted test file, and no lower mutation
-score. Every other letter must pass the stream contract (reference 08)
-before it unlocks; `ledger.py` rejects still-planned letters until then. Do not
-start work under a locked letter; offer A/B/J or file an evidence-backed issue.
+truth, simplification, and dependency evolution — each behind its shipped
+finder + oracle + eval fixture (reference 08). **L** (the fleet improving
+itself) is its own kill-switched, replay-gated stream with T2 caps; **D**
+(migration safety) is still planned. While a stream's tooling is absent,
+`ledger.py` rejects its letter: offer an unlocked stream (J is first-wave
+T1 — issue/proposal only), or file the finding as an evidence-backed issue.
 
 ## Unattended operation (advanced)
 

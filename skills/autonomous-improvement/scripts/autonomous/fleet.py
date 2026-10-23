@@ -4,13 +4,15 @@
 Deterministic state spine for autonomous-improvement runs:
   * snapshot: records main SHA, open PR statuses, and worktree dirty counts to disk (0 tokens);
   * pr-state: emits references/04 state line per PR with head-sha-vs-run-sha verification;
-  * govern: checks kill-switch and WIP PR caps before dispatch;
+  * govern: checks kill-switch, WIP PR caps, and acceptance rate floors before dispatch;
+  * doctor: read-only blast-radius preflight (auth/scopes, protection, linger, timers, disk, worktrees);
   * stats: computes acceptance rates, CI iterations, and renders weekly owner digest.
 
 Usage:
   python3 scripts/autonomous/fleet.py snapshot [--state-dir <dir>]
   python3 scripts/autonomous/fleet.py pr-state [--json] [--pr <num>]
   python3 scripts/autonomous/fleet.py govern [--json]
+  python3 scripts/autonomous/fleet.py doctor [--json]
   python3 scripts/autonomous/fleet.py stats [--json] [--days <N>]
   python3 scripts/autonomous/fleet.py needs-brain [--json]
   python3 scripts/autonomous/fleet.py wake [--state-dir <dir>] [--harness-cmd <argv>]
@@ -25,13 +27,16 @@ from __future__ import annotations
 import argparse
 import datetime
 import email.utils
+import hashlib
 import json
 import os
 import re
 import shlex
 import shutil
+import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -453,6 +458,301 @@ def cmd_snapshot(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _doctor_check(name: str, severity: str, ok: bool, detail: str) -> Dict[str, Any]:
+    return {"name": name, "severity": severity, "ok": bool(ok), "detail": detail}
+
+
+def _doctor_run(argv: List[str], timeout: int = 20) -> Optional[subprocess.CompletedProcess]:
+    """Run a doctor probe; None when the tool is missing."""
+    try:
+        return run(argv, quiet=True, timeout=timeout)
+    except Exception:  # missing tool / timeout
+        return None
+
+
+def _origin_repo_slug(root: Path) -> Optional[str]:
+    proc = _doctor_run(["git", "remote", "get-url", "origin"], timeout=10)
+    if proc is None or proc.returncode != 0:
+        return None
+    url = (proc.stdout or "").strip()
+    match = re.search(r"[:/]([^/:]+/[^/]+?)(?:\.git)?/?$", url)
+    return match.group(1) if match else None
+
+
+def run_doctor_checks(root: Path, cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Read-only blast-radius preflight (issue #19): advice becomes checks.
+
+    Hard failures are dispatch blockers; soft findings are warnings the
+    Orchestrator reports and continues past (documented per check).
+    """
+    fleet_cfg = cfg.get("fleet", {}) or {}
+    doctor_cfg = fleet_cfg.get("doctor", {}) or {}
+    merge_policy = str(fleet_cfg.get("merge_policy") or "never")
+    checks: List[Dict[str, Any]] = []
+
+    # 1. gh auth identity
+    auth = _doctor_run(["gh", "auth", "status"], timeout=20)
+    auth_text = ((auth.stdout or "") + (auth.stderr or "")) if auth else ""
+    account_match = re.search(r"account\s+([A-Za-z0-9._-]+)", auth_text)
+    checks.append(
+        _doctor_check(
+            "gh-auth",
+            "hard",
+            bool(auth and auth.returncode == 0 and account_match),
+            (
+                f"logged in as {account_match.group(1)}"
+                if account_match
+                else "gh auth status failed or no account line (gh missing, logged out, or offline)"
+            ),
+        )
+    )
+
+    # 2. Token scopes vs the merge policy
+    forbidden = set(
+        doctor_cfg.get("forbidden_token_scopes")
+        or ["admin:org", "delete_repo", "admin:public_key", "admin:repo_hook"]
+    )
+    scopes_match = re.search(r"Token scopes:\s*(.*)", auth_text)
+    scopes = (
+        [s.strip().strip("'\"") for s in scopes_match.group(1).split(",") if s.strip()]
+        if scopes_match
+        else []
+    )
+    overbroad = sorted(forbidden.intersection(scopes))
+    checks.append(
+        _doctor_check(
+            "token-scopes",
+            "hard",
+            not overbroad,
+            (
+                f"scopes {scopes or 'unknown'} carry no merge/admin-capable entry"
+                if not overbroad
+                else f"token scopes include {overbroad} while merge_policy={merge_policy!r}; "
+                "re-scope the token to plain repo access"
+            ),
+        )
+    )
+
+    # 3. Branch protection on the base branch (merge_policy=never requires the
+    #    agent to be structurally unable to merge, not merely instructed not to)
+    branch = str(cfg.get("base_ref") or "origin/main").split("/")[-1]
+    slug = _origin_repo_slug(root)
+    if slug:
+        prot = _doctor_run(["gh", "api", f"repos/{slug}/branches/{branch}/protection"], timeout=20)
+        prot_ok = bool(prot and prot.returncode == 0 and "required" in (prot.stdout or ""))
+        require = bool(doctor_cfg.get("require_branch_protection", merge_policy == "never"))
+        checks.append(
+            _doctor_check(
+                "branch-protection",
+                "hard" if require else "soft",
+                prot_ok or not require,
+                (
+                    f"required reviews present on {slug}@{branch}"
+                    if prot_ok
+                    else f"no protection with required reviews readable on {slug}@{branch}"
+                ),
+            )
+        )
+    else:
+        checks.append(
+            _doctor_check(
+                "branch-protection",
+                "hard" if doctor_cfg.get("require_branch_protection") else "soft",
+                False if doctor_cfg.get("require_branch_protection") else True,
+                "no origin remote to verify branch protection against",
+            )
+        )
+
+    # 4. Linger (a user session that dies with SSH kills the timers)
+    os_user = str(doctor_cfg.get("os_user") or os.environ.get("USER") or "unknown")
+    linger = _doctor_run(["loginctl", "show-user", os_user, "-p", "Linger", "--value"], timeout=10)
+    linger_value = (linger.stdout or "").strip().lower() if linger else ""
+    checks.append(
+        _doctor_check(
+            "linger",
+            "hard",
+            linger_value == "yes",
+            (
+                f"loginctl reports Linger={linger_value or 'unknown'} for {os_user}"
+                + ("" if linger_value == "yes" else "; enable it (loginctl enable-linger) or timers die with the session")
+            ),
+        )
+    )
+
+    # 5. Watchdog timer active (soft by default: dev boxes may not install it)
+    timer = _doctor_run(["systemctl", "--user", "is-active", "orchestrator-watchdog.timer"], timeout=10)
+    timer_state = (timer.stdout or "").strip() if timer else ""
+    timer_required = bool(doctor_cfg.get("require_timer", False))
+    checks.append(
+        _doctor_check(
+            "watchdog-timer",
+            "hard" if timer_required else "soft",
+            timer_state == "active" or not timer_required,
+            f"orchestrator-watchdog.timer is {timer_state or 'unavailable'}",
+        )
+    )
+
+    # 6. State-dir consistency (or stateless wake configured)
+    if bool(fleet_cfg.get("stateless_wake")):
+        checks.append(_doctor_check("state-dir", "soft", True, "stateless wake configured; no session state required"))
+    else:
+        state_dir = _resolve_state_dir(root)
+        sid = state_dir / "opencode_session_id"
+        checks.append(
+            _doctor_check(
+                "state-dir",
+                "soft",
+                sid.exists() or state_dir.exists(),
+                (
+                    f"state dir {state_dir} present"
+                    if sid.exists() or state_dir.exists()
+                    else f"no state dir at {state_dir} (first wake?)"
+                ),
+            )
+        )
+
+    # 7. Disk headroom for N worktrees
+    min_free_gb = float(doctor_cfg.get("min_free_gb", 5))
+    usage = shutil.disk_usage(str(root))
+    free_gb = usage.free / (1024**3)
+    checks.append(
+        _doctor_check(
+            "disk-headroom",
+            "hard",
+            free_gb >= min_free_gb,
+            f"{free_gb:.1f} GiB free (floor {min_free_gb} GiB)",
+        )
+    )
+
+    # 8. Clock skew against the snapshot job's reference (when one exists)
+    ref_path = _resolve_state_dir(root) / "clock_reference"
+    if ref_path.exists():
+        try:
+            reference = float(ref_path.read_text(encoding="utf-8").strip())
+            skew = abs(time.time() - reference)
+            max_skew = float(doctor_cfg.get("max_clock_skew_seconds", 300))
+            checks.append(
+                _doctor_check(
+                    "clock-skew",
+                    "hard",
+                    skew <= max_skew,
+                    f"{skew:.0f}s from the snapshot clock reference (max {max_skew:.0f}s)",
+                )
+            )
+        except (OSError, ValueError):
+            checks.append(_doctor_check("clock-skew", "soft", True, "clock reference unreadable; skipped"))
+    else:
+        checks.append(
+            _doctor_check("clock-skew", "soft", True, "no clock reference yet (the snapshot job writes one)")
+        )
+
+    # 9. Worktree registry has no orphans
+    orphans: List[str] = []
+    wt_list = _doctor_run(["git", "worktree", "list", "--porcelain"], timeout=10)
+    if wt_list and wt_list.returncode == 0:
+        for line in (wt_list.stdout or "").splitlines():
+            if line.startswith("worktree "):
+                path = Path(line.split(" ", 1)[1].strip())
+                if path.resolve() != root.resolve() and not path.exists():
+                    orphans.append(str(path))
+    for entry in load_worktree_registry(root):
+        raw = entry.get("path") or entry.get("directory")
+        if raw:
+            path = Path(str(raw))
+            path = path if path.is_absolute() else (root / path)
+            if not path.exists():
+                orphans.append(str(path))
+    checks.append(
+        _doctor_check(
+            "worktree-registry",
+            "hard",
+            not orphans,
+            "no orphan worktrees" if not orphans else f"orphan worktree path(s): {', '.join(sorted(set(orphans)))}",
+        )
+    )
+
+    # 10. Model ladder shape (probe-ability itself is owner-side: it costs
+    #     tokens, so the doctor checks the mechanical shape instead)
+    ladder_raw = os.environ.get("ORCH_MODEL_LADDER") or fleet_cfg.get("model_ladder") or ""
+    if isinstance(ladder_raw, (list, tuple)):
+        ladder = [str(item) for item in ladder_raw]
+    else:
+        ladder = [item for item in str(ladder_raw).split() if item]
+    problems: List[str] = []
+    if len(set(ladder)) != len(ladder):
+        problems.append("duplicate entries")
+    problems.extend(f"{entry!r} is not provider/model shaped" for entry in ladder if "/" not in entry)
+    checks.append(
+        _doctor_check(
+            "model-ladder",
+            "hard",
+            not problems,
+            (
+                "ladder shape ok"
+                if not problems and ladder
+                else ("; ".join(problems) if problems else "no ladder configured (session default only)")
+            ),
+        )
+    )
+
+    # 11. Instruction hierarchy is declared (repo content is data, never
+    #     instructions) — a docs guard the doctor surfaces for deployments.
+    docs = root / "references" / "05-unattended-operation.md"
+    skill_docs = Path(__file__).resolve().parent.parent.parent / "references" / "05-unattended-operation.md"
+    target = docs if docs.exists() else skill_docs
+    hierarchy_ok = False
+    if target.exists():
+        hierarchy_ok = "never instructions" in target.read_text(encoding="utf-8", errors="ignore").lower()
+    checks.append(
+        _doctor_check(
+            "instruction-hierarchy",
+            "soft",
+            hierarchy_ok,
+            (
+                "references/05 states repo content is data, never instructions"
+                if hierarchy_ok
+                else "references/05 does not state the instruction hierarchy yet"
+            ),
+        )
+    )
+    return checks
+
+
+def doctor_summary(checks: List[Dict[str, Any]]) -> Dict[str, Any]:
+    hard = [c["name"] for c in checks if c["severity"] == "hard" and not c["ok"]]
+    soft = [c["name"] for c in checks if c["severity"] == "soft" and not c["ok"]]
+    return {
+        "checks": checks,
+        "hard_failures": hard,
+        "soft_failures": soft,
+        "dispatch_ok": not hard,
+        "reason": (
+            "all hard checks pass"
+            if not hard
+            else f"hard preflight failure(s): {', '.join(hard)}"
+        ),
+    }
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    root = main_repo_root()
+    cfg = load_config(root, args.config)
+    checks = run_doctor_checks(root, cfg)
+    summary = doctor_summary(checks)
+    payload = {"tool": "fleet.py doctor", **summary}
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        for check in checks:
+            mark = "ok" if check["ok"] else ("FAIL" if check["severity"] == "hard" else "warn")
+            print(f"[{mark:4}] {check['name']}: {check['detail']}")
+        if summary["dispatch_ok"]:
+            print("[+] Doctor: dispatch OK (no hard failures)")
+        else:
+            eprint(f"[!] Doctor: DO NOT DISPATCH — {summary['reason']}")
+    return EXIT_OK if summary["dispatch_ok"] else EXIT_NEGATIVE
+
+
 def cmd_govern(args: argparse.Namespace) -> int:
     root = main_repo_root()
     cfg = load_config(root, args.config)
@@ -460,6 +760,7 @@ def cmd_govern(args: argparse.Namespace) -> int:
 
     max_open_prs = int(fleet_cfg.get("max_open_prs", 5))
     max_new_prs_per_day = int(fleet_cfg.get("max_new_prs_per_day", 6))
+    min_acceptance_rate_14d = float(fleet_cfg.get("min_acceptance_rate_14d", 0.5))
     kill_switch_file = str(fleet_cfg.get("kill_switch_file") or ".autonomous/STOP")
 
     # 1. Kill-switch check
@@ -480,6 +781,26 @@ def cmd_govern(args: argparse.Namespace) -> int:
                 print(json.dumps(payload, indent=2))
             else:
                 eprint(f"[!] Governor: DISPATCH BLOCKED ({payload['reason']})")
+            return EXIT_NEGATIVE
+
+    # 1b. Doctor gate (opt-in): on a deployment with doctor.enforce=true, a
+    #     hard preflight failure blocks dispatch the same way the kill switch
+    #     does — blocked-with-reason, never a silent continue.
+    if (fleet_cfg.get("doctor", {}) or {}).get("enforce"):
+        doctor = doctor_summary(run_doctor_checks(root, cfg))
+        if not doctor["dispatch_ok"]:
+            payload = {
+                "dispatch": False,
+                "reason": f"doctor preflight failed ({', '.join(doctor['hard_failures'])})",
+                "open_prs": 0,
+                "tend": [],
+                "doctor": doctor,
+            }
+            if args.json:
+                print(json.dumps(payload, indent=2))
+            else:
+                eprint(f"[!] Governor: DISPATCH BLOCKED ({payload['reason']})")
+                eprint("    Fix the doctor failure or set fleet.doctor.enforce=false deliberately.")
             return EXIT_NEGATIVE
 
     # 2. Query open PRs
@@ -538,6 +859,56 @@ def cmd_govern(args: argparse.Namespace) -> int:
             eprint(f"[!] Governor: DISPATCH BLOCKED ({payload['reason']})")
         return EXIT_NEGATIVE
 
+    # 5. Acceptance-rate floor (last 14 days). Only enforced against settled
+    # verdicts (merged vs closed-unmerged) in the window: a fresh fleet with
+    # no settled PRs has no evidence yet and must keep dispatching -- the
+    # governor measures outcomes, it does not prevent the first one.
+    if min_acceptance_rate_14d > 0:
+        settled_data, settle_warn = fetch_gh_prs(
+            root, state="all", limit=200, require_gh=args.require_gh
+        )
+        if settle_warn:
+            eprint(f"[warn] {settle_warn}")
+        now = datetime.datetime.now(datetime.timezone.utc)
+        merged_14d = 0
+        closed_unmerged_14d = 0
+        for p in settled_data:
+            created_str = p.get("createdAt")
+            if created_str:
+                try:
+                    dt = datetime.datetime.fromisoformat(
+                        created_str.replace("Z", "+00:00")
+                    )
+                    if (now - dt).total_seconds() > 14 * 86400:
+                        continue
+                except (ValueError, TypeError):
+                    continue
+            state = str(p.get("state") or "").upper()
+            if p.get("mergedAt") or state == "MERGED":
+                merged_14d += 1
+            elif state == "CLOSED":
+                closed_unmerged_14d += 1
+        settled_14d = merged_14d + closed_unmerged_14d
+        rate_14d = (merged_14d / settled_14d) if settled_14d > 0 else 0.0
+        if settled_14d > 0 and rate_14d < min_acceptance_rate_14d:
+            payload = {
+                "dispatch": False,
+                "reason": (
+                    f"acceptance floor missed "
+                    f"(14d: {merged_14d}/{settled_14d} = {rate_14d:.2f} "
+                    f"< {min_acceptance_rate_14d:.2f})"
+                ),
+                "open_prs": open_count,
+                "tend": tend,
+                "acceptance_rate_14d": round(rate_14d, 4),
+                "min_acceptance_rate_14d": min_acceptance_rate_14d,
+            }
+            if args.json:
+                print(json.dumps(payload, indent=2))
+            else:
+                eprint(f"[!] Governor: DISPATCH BLOCKED ({payload['reason']})")
+            return EXIT_NEGATIVE
+
     payload = {
         "dispatch": True,
         "reason": "within limits",
@@ -550,6 +921,111 @@ def cmd_govern(args: argparse.Namespace) -> int:
         print(f"[+] Governor: DISPATCH ALLOWED (open PRs: {open_count}/{max_open_prs})")
         if tend:
             print(f"    Tend queue: {', '.join(f'PR #{n}' for n in tend)}")
+    return EXIT_OK
+
+
+def _wake_reasons(open_states: List[Dict[str, Any]]) -> List[str]:
+    """Reasons a wake would need a model turn, from state alone (issue #18)."""
+    reasons: List[str] = []
+    for state in sorted(open_states, key=lambda item: int(item.get("pr") or 0)):
+        pr = state.get("pr")
+        if state.get("owner_ask_pending"):
+            reasons.append(f"owner-ask #{pr} (answer or apply the request)")
+        if state.get("checks") == "red":
+            kind = state.get("red_kind") or "unknown"
+            reasons.append(f"red-pr #{pr} (fix or triage; red_kind={kind})")
+        elif state.get("checks") == "green":
+            reasons.append(f"green-unmerged-pr #{pr} (drive to merge)")
+    if not open_states:
+        reasons.append("queue-idle (no open fleet PRs; generate or widen targets)")
+    return reasons
+
+
+def _wake_digest(open_states: List[Dict[str, Any]], reasons: List[str]) -> str:
+    basis = "\n".join(
+        [f"{s.get('pr')}|{s.get('head_sha')}|{s.get('checks')}|{s.get('checks_sha')}" for s in open_states]
+        + list(reasons)
+    )
+    return hashlib.sha256(basis.encode("utf-8")).hexdigest()[:16]
+
+
+def cmd_needs_brain(args: argparse.Namespace) -> int:
+    """Stateless-wake predicate: spend a model turn only when state changed.
+
+    Reads the snapshot inputs (PR state via gh, or a stub; plus the ledger
+    indirectly through the queue) and the previous wake decision recorded in
+    the state dir. No session id is read or written: a *second fresh wake*
+    continues from the recorded digest, which is the whole point of the
+    stateless shape (issue #18).
+    """
+    root = main_repo_root()
+    cfg = load_config(root, args.config)
+    state_dir = _resolve_state_dir(root, args.state_dir)
+    state_dir.mkdir(parents=True, exist_ok=True)
+
+    prs_data, gh_warn = fetch_gh_prs(root, state="open", require_gh=args.require_gh)
+    if gh_warn:
+        eprint(f"[warn] {gh_warn}")
+    open_states = [evaluate_pr_checks(p) for p in prs_data]
+    reasons = _wake_reasons(open_states)
+    kill_switch_file = str((cfg.get("fleet", {}) or {}).get("kill_switch_file") or ".autonomous/STOP")
+    kill_switch_paths = [
+        root / kill_switch_file,
+        Path.cwd() / kill_switch_file,
+        root / ".autonomous" / "STOP",
+    ]
+    if any(path.exists() for path in kill_switch_paths):
+        reasons.append("kill-switch-present (tend the queue only; do not generate)")
+    digest = _wake_digest(open_states, reasons)
+
+    wake_path = state_dir / "wake.json"
+    previous: Dict[str, Any] = {}
+    if wake_path.is_file():
+        try:
+            previous = json.loads(wake_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            eprint(f"[warn] wake state unreadable, treating as first wake: {wake_path}")
+            previous = {}
+
+    unchanged = bool(previous) and previous.get("digest") == digest and not args.force
+    payload: Dict[str, Any] = {
+        "tool": "fleet.py needs-brain",
+        "needs_brain": not unchanged,
+        "reasons": reasons if not unchanged else [],
+        "previous_reason": reasons if unchanged else None,
+        "reason": (
+            "state unchanged since the last wake (0-token quiet)"
+            if unchanged
+            else "; ".join(reasons) or "nothing to do"
+        ),
+        "digest": digest,
+        "previous_digest": previous.get("digest"),
+        "open_prs": len(open_states),
+        "state_file": str(wake_path),
+        "note": (
+            "stateless: reads files only, writes the decision digest; "
+            "no session id is involved"
+        ),
+    }
+    if not unchanged:
+        write_json_atomic(
+            wake_path,
+            {
+                "schema": "stateless-wake/1",
+                "digest": digest,
+                "reasons": reasons,
+                "open_prs": len(open_states),
+            },
+        )
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        if unchanged:
+            print("[+] needs-brain: quiet (state unchanged since the last wake)")
+        else:
+            print("[*] needs-brain: a wake is warranted")
+            for reason in reasons:
+                print(f"    - {reason}")
     return EXIT_OK
 
 
@@ -715,21 +1191,6 @@ def _needs_brain_from_states(
     }
 
 
-def cmd_needs_brain(args: argparse.Namespace) -> int:
-    root = main_repo_root()
-    cfg = load_config(root, args.config)
-    prs_data, gh_warn = fetch_gh_prs(root, state="open", require_gh=args.require_gh)
-    if gh_warn:
-        eprint(f"[warn] {gh_warn}")
-    states = [evaluate_pr_checks(p) for p in prs_data]
-    result = _needs_brain_from_states(root, cfg, states)
-    if args.json:
-        print(json.dumps(result, indent=2))
-    elif result["needs_brain"]:
-        print(f"[*] Brain needed: {', '.join(result['reasons'])}")
-    else:
-        print(f"[*] Quiet: {', '.join(result['reasons']) or 'nothing pending'}")
-    return EXIT_OK if result["needs_brain"] else EXIT_NEGATIVE
 
 
 def _wake_prompt(
@@ -912,262 +1373,9 @@ def cmd_wake(args: argparse.Namespace) -> int:
 # cold-start rule is "do not dispatch on a hard failure — report instead".
 
 
-def _probe(argv: List[str], cwd: Path):
-    try:
-        return run(argv, cwd=cwd, quiet=True)
-    except EnvError:
-        return None
 
 
-def cmd_doctor(args: argparse.Namespace) -> int:
-    root = main_repo_root()
-    cfg = load_config(root, args.config)
-    fleet_cfg = cfg.get("fleet", {}) or {}
-    merge_policy = str(fleet_cfg.get("merge_policy", "never"))
-    state_dir = _resolve_state_dir(root, args.state_dir)
-    checks: List[Dict[str, Any]] = []
 
-    def add(name: str, status: str, detail: str) -> None:
-        checks.append({"name": name, "status": status, "detail": detail})
-
-    # gh identity + repo view (one fetch, reused below)
-    auth = _probe(["gh", "auth", "status"], root)
-    gh_ok = auth is not None and auth.returncode == 0
-    add(
-        "gh-auth",
-        "ok" if gh_ok else "fail",
-        "gh authenticated" if gh_ok else "gh missing or not authenticated",
-    )
-    repo_view: Optional[Dict[str, Any]] = None
-    if gh_ok:
-        proc = _probe(
-            ["gh", "repo", "view", "--json", "nameWithOwner,viewerPermission"], root
-        )
-        if proc is not None and proc.returncode == 0:
-            try:
-                parsed = json.loads(proc.stdout)
-                repo_view = parsed if isinstance(parsed, dict) else None
-            except json.JSONDecodeError:
-                repo_view = None
-
-    # Token reach vs the configured merge policy.
-    if not gh_ok:
-        add("token-scopes", "skip", "gh unavailable; cannot inspect the token")
-    else:
-        combined = (auth.stdout or "") + (auth.stderr or "")
-        match = re.search(r"Token scopes:\s*(.+)", combined)
-        if match:
-            scopes = {
-                part.strip().strip("'\"")
-                for part in match.group(1).split(",")
-                if part.strip()
-            }
-            over = sorted(
-                scopes
-                & {"repo", "admin:org", "admin:enterprise", "delete_repo", "workflow"}
-            )
-            if over and merge_policy == "never":
-                add(
-                    "token-scopes",
-                    "fail",
-                    f"token carries {', '.join(over)} but merge_policy=never; "
-                    "use a fine-grained token without merge/admin reach",
-                )
-            elif over:
-                add("token-scopes", "warn", f"broad scopes present: {', '.join(over)}")
-            else:
-                add("token-scopes", "ok", f"scopes: {', '.join(sorted(scopes)) or '(none)'}")
-        elif repo_view:
-            perm = str(repo_view.get("viewerPermission") or "unknown")
-            if perm == "ADMIN" and merge_policy == "never":
-                add(
-                    "token-scopes",
-                    "fail",
-                    "viewerPermission ADMIN on the target repo but merge_policy=never; "
-                    "run the fleet as a lesser-privileged identity",
-                )
-            elif perm in ("ADMIN", "MAINTAIN"):
-                add("token-scopes", "warn", f"viewerPermission {perm} (broad)")
-            else:
-                add(
-                    "token-scopes",
-                    "ok",
-                    f"viewerPermission {perm}; no classic scopes (fine-grained token)",
-                )
-        else:
-            add("token-scopes", "skip", "no scopes line and no repo view available")
-
-    # Branch protection on the base branch.
-    if gh_ok and repo_view and repo_view.get("nameWithOwner"):
-        base_branch = str(cfg.get("base_ref") or "origin/main").split("/")[-1]
-        proc = _probe(
-            [
-                "gh", "api",
-                f"repos/{repo_view['nameWithOwner']}/branches/{base_branch}/protection",
-            ],
-            root,
-        )
-        if proc is not None and proc.returncode == 0:
-            contexts: List[Any] = []
-            try:
-                data = json.loads(proc.stdout)
-                contexts = (data.get("required_status_checks") or {}).get("contexts") or []
-            except (json.JSONDecodeError, AttributeError):
-                contexts = []
-            if contexts:
-                add("branch-protection", "ok", f"{base_branch} protected; required: {contexts}")
-            else:
-                add("branch-protection", "warn", f"{base_branch} protected but no required status checks")
-        else:
-            add(
-                "branch-protection",
-                "fail" if merge_policy == "never" else "warn",
-                f"{base_branch} is not branch-protected; with merge_policy=never the "
-                "token's discipline is the only merge barrier",
-            )
-    else:
-        add("branch-protection", "skip", "repo identity unavailable")
-
-    # User timers must survive logout.
-    user = os.environ.get("USER", "")
-    proc = (
-        _probe(["loginctl", "show-user", user, "-p", "Linger", "--value"], root)
-        if user
-        else None
-    )
-    if proc is None:
-        add("linger", "skip", "loginctl unavailable (not a systemd host?)")
-    elif proc.stdout.strip() == "yes":
-        add("linger", "ok", "Linger=yes; user timers run while logged out")
-    elif proc.returncode == 0:
-        add(
-            "linger",
-            "fail",
-            "Linger is not enabled: user timers stop at logout "
-            "(sudo loginctl enable-linger)",
-        )
-    else:
-        add("linger", "skip", "loginctl probe failed")
-
-    # Exactly one starter should be awake.
-    def timer_active(unit: str) -> Optional[bool]:
-        probe = _probe(["systemctl", "--user", "is-active", unit], root)
-        if probe is None:
-            return None
-        return probe.stdout.strip() == "active"
-
-    wake_on = timer_active("orchestrator-wake.timer")
-    watchdog_on = timer_active("orchestrator-watchdog.timer")
-    if wake_on is None and watchdog_on is None:
-        add("timers", "skip", "systemctl unavailable")
-    elif wake_on and watchdog_on:
-        add("timers", "warn", "both wake and watchdog timers active: the fleet wakes twice per decision")
-    elif wake_on:
-        add("timers", "ok", "stateless wake timer active")
-    elif watchdog_on:
-        add("timers", "ok", "watchdog timer active (fallback shape)")
-    else:
-        add("timers", "warn", "no wake/watchdog timer active; nothing starts the fleet")
-
-    # State dir + worktree registry hygiene.
-    if state_dir.exists():
-        if os.access(state_dir, os.W_OK):
-            add("state-dir", "ok", f"{state_dir} exists and is writable")
-        else:
-            add("state-dir", "fail", f"{state_dir} is not writable")
-    else:
-        add("state-dir", "warn", f"{state_dir} missing (first wake creates it)")
-
-    registry = load_worktree_registry(root)
-    orphans = [
-        str(entry.get("slug") or entry.get("path"))
-        for entry in registry
-        if entry.get("path") and not Path(str(entry["path"])).exists()
-    ]
-    if orphans:
-        add("worktree-registry", "warn", f"orphaned entries (path gone): {', '.join(orphans)}")
-    else:
-        add("worktree-registry", "ok", f"{len(registry)} registered worktree(s), no orphans")
-
-    secret_hits: List[str] = []
-    for entry in registry:
-        wpath = Path(str(entry.get("path") or ""))
-        if not wpath.exists():
-            continue
-        for name in (".env", "id_rsa", "id_ed25519"):
-            if (wpath / name).exists():
-                secret_hits.append(f"{wpath.name}/{name}")
-        secret_hits.extend(f"{wpath.name}/{p.name}" for p in wpath.glob("*.pem"))
-    if secret_hits:
-        add("worktree-secrets", "warn", f"secret-looking files in worktrees: {', '.join(secret_hits)}")
-    else:
-        add("worktree-secrets", "ok", "no .env/key material at worktree roots")
-
-    # Disk headroom (worktrees are full checkouts; this is a floor, not a budget).
-    min_free_gb = float(fleet_cfg.get("doctor_min_free_gb", 2))
-    free_gb = shutil.disk_usage(root).free / 1e9
-    if free_gb < min_free_gb:
-        add("disk", "fail", f"{free_gb:.1f} GB free < configured floor {min_free_gb} GB")
-    else:
-        add("disk", "ok", f"{free_gb:.1f} GB free (floor {min_free_gb} GB)")
-
-    # Clock skew vs GitHub's Date header (best effort).
-    clock_done = False
-    if gh_ok:
-        proc = _probe(["gh", "api", "-i", "rate_limit"], root)
-        if proc is not None and proc.returncode == 0:
-            date_match = re.search(r"^Date:\s*(.+)$", proc.stdout or "", re.MULTILINE)
-            if date_match:
-                try:
-                    server = email.utils.parsedate_to_datetime(date_match.group(1).strip())
-                    skew = abs(
-                        (datetime.datetime.now(datetime.timezone.utc) - server).total_seconds()
-                    )
-                    if skew > 300:
-                        add("clock", "fail", f"clock skew vs GitHub is {skew:.0f}s (>300s)")
-                    elif skew > 60:
-                        add("clock", "warn", f"clock skew vs GitHub is {skew:.0f}s")
-                    else:
-                        add("clock", "ok", f"clock skew vs GitHub is {skew:.0f}s")
-                    clock_done = True
-                except (ValueError, TypeError):
-                    clock_done = False
-    if not clock_done:
-        add("clock", "skip", "no Date header available to compare against")
-
-    # Model ladder presence (probing spends quota; wakes discover death live).
-    ladder = os.environ.get("ORCH_MODEL_LADDER", "").split() or [
-        str(m) for m in (fleet_cfg.get("model_ladder") or [])
-    ]
-    if ladder:
-        add("model-ladder", "ok", f"{len(ladder)} model(s) configured for rotation")
-    else:
-        add(
-            "model-ladder",
-            "warn",
-            "empty ladder: no quota rotation; one dead pool freezes dispatch",
-        )
-
-    ok_all = all(item["status"] != "fail" for item in checks)
-    if args.json:
-        print(json.dumps({"ok": ok_all, "checks": checks}, indent=2))
-    else:
-        marks = {"ok": "[ok]  ", "warn": "[warn]", "fail": "[FAIL]", "skip": "[skip]"}
-        for item in checks:
-            print(f"{marks[item['status']]} {item['name']}: {item['detail']}")
-        print(
-            "[+] Doctor: no hard failures." if ok_all
-            else "[!] Doctor: hard failures present — do not dispatch; report instead."
-        )
-    return EXIT_OK if ok_all else EXIT_NEGATIVE
-
-
-# --- Claim + publish transport (issue #17) --------------------------------
-# The claim mechanism used to be prose ("open a draft PR early") that the
-# canonical protocol contradicted by opening the PR at the end. claim makes
-# the documented mechanism real at minute 1; publish renders the final body
-# from the evidence artifact (never free text) and is the only path that
-# flips draft -> ready.
 
 CLAIM_LABEL = "autonomous-improvement"
 
@@ -1455,11 +1663,26 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_state.add_argument("--json", action="store_true", help="emit JSON")
     p_state.add_argument("--require-gh", action="store_true", help="fail if gh is unavailable")
 
+    # doctor
+    p_doc = subparsers.add_parser("doctor", help="read-only blast-radius preflight")
+    p_doc.add_argument("--config", help="path to config.json")
+    p_doc.add_argument("--json", action="store_true", help="emit JSON")
+
     # govern
     p_gov = subparsers.add_parser("govern", help="evaluate governor dispatch limits")
     p_gov.add_argument("--config", help="path to config.json")
     p_gov.add_argument("--json", action="store_true", help="emit JSON")
     p_gov.add_argument("--require-gh", action="store_true", help="fail if gh is unavailable")
+
+    # needs-brain
+    p_brain = subparsers.add_parser(
+        "needs-brain", help="0-token quiet-hours predicate for stateless wakes"
+    )
+    p_brain.add_argument("--config", help="path to config.json")
+    p_brain.add_argument("--state-dir", help="directory holding wake.json")
+    p_brain.add_argument("--force", action="store_true", help="ignore the recorded decision digest")
+    p_brain.add_argument("--require-gh", action="store_true", help="fail if gh is unavailable")
+    p_brain.add_argument("--json", action="store_true", help="emit JSON")
 
     # stats
     p_stats = subparsers.add_parser("stats", help="compute fleet acceptance and metrics")
@@ -1478,14 +1701,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_claim.add_argument("--slug", help="worktree slug (default: derived from target)")
     p_claim.add_argument("--json", action="store_true", help="emit JSON as the last line")
 
-    # needs-brain
-    p_brain = subparsers.add_parser(
-        "needs-brain", help="0-token predicate: does anything await a model decision?"
-    )
-    p_brain.add_argument("--config", help="path to config.json")
-    p_brain.add_argument("--json", action="store_true", help="emit JSON")
-    p_brain.add_argument("--require-gh", action="store_true", help="fail if gh is unavailable")
-
     # wake
     p_wake = subparsers.add_parser(
         "wake", help="stateless wake: snapshot, needs-brain gate, one fresh harness run"
@@ -1499,14 +1714,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_wake.add_argument("--model", help="single model override for {model}")
     p_wake.add_argument("--print-prompt", action="store_true", help="also print the wake prompt")
     p_wake.add_argument("--require-gh", action="store_true", help="fail if gh is unavailable")
-
-    # doctor
-    p_doc = subparsers.add_parser(
-        "doctor", help="read-only deployment checks (exit nonzero on hard failures)"
-    )
-    p_doc.add_argument("--config", help="path to config.json")
-    p_doc.add_argument("--state-dir", help="state directory to inspect")
-    p_doc.add_argument("--json", action="store_true", help="emit JSON")
 
     # publish
     p_pub = subparsers.add_parser(
@@ -1527,8 +1734,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             return cmd_snapshot(args)
         if args.command == "pr-state":
             return cmd_pr_state(args)
+        if args.command == "doctor":
+            return cmd_doctor(args)
         if args.command == "govern":
             return cmd_govern(args)
+        if args.command == "needs-brain":
+            return cmd_needs_brain(args)
         if args.command == "stats":
             return cmd_stats(args)
         if args.command == "needs-brain":

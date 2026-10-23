@@ -39,9 +39,30 @@ at T2, and at T1 for anything referee-adjacent.
 
 ## The catalog
 
-Available now: **A** mutation, **B** adversarial test audit, and **J**
-simplification / dead code (`03`). J is first-wave T1 regardless of its T2
-target: issue/proposal output only until the owner promotes it.
+Available now: **A** mutation, **B** adversarial test audit (`03`),
+**C** property/fuzz (`fuzz_shrink.py`), **E** defect repair (`repair.py`),
+**G** performance (`perf_gate.py`: pinned bench delta AND differential
+equivalence — both halves mandatory), **H+K** security & dependency
+(`advisory.py`: stub-advisory pin audits, a secret scan that redacts by
+construction, oracle-first bumps), **I** docs & spec truth
+(`docs_truth.py`), **J** simplification / dead code (`simplify_gate.py`:
+a narrow finder with a proven-safe oracle — first-wave T1: issue/proposal
+only until the owner promotes the stream), and **L** meta — gated behind
+its own kill switch (`meta.py`: claims replayed from recorded fleet
+history, L4 surfaces issue-only, lessons expire). **D** (migration
+safety) remains planned.
+**F** flake & determinism (`flakes.py`: finder + N-run oracle), the first
+expansion stream. The oracle demands ZERO failing runs after a fix —
+"passed twice in a row" is not evidence — and names a cause class
+(timing / order-dependence / shared state / external resource). Allowed fix
+shapes: poll-with-deadline, virtual clock, isolation or seed pinning,
+deterministic ordering. Banned: longer sleeps, blanket retries, and
+quarantine or `@skip` without a root-cause issue plus expiry. The finder can
+only EMIT candidates (static flake idioms + mixed-outcome CI history); never
+quarantine on a finder hit alone. Memory: ledger stream `F`, dedup key is the
+test-content hash; when a "flake" candidate turns out to be a real product
+bug, hand the finding to the defect-repair stream's intake instead of
+recording a negative row here.
 
 | Stream | Oracle in one line | Starts |
 |---|---|---|
@@ -57,12 +78,10 @@ target: issue/proposal output only until the owner promotes it.
 | **L** Meta (fleet self-improvement) | proposal beats incumbent on history replay; eval set does not regress | T1/T2 capped |
 
 `ledger.py` rejects still-planned letters with "planned, not implemented"
-until a stream ships its finder + oracle + eval fixture. J crossed that
-gate: `scripts/autonomous/simplify_gate.py` supplies the finder/oracle pair
-and `evals/fixtures/dead-code-python/` is its fixture. A stream that exists
-only as an encouraging paragraph produces cosmetic churn with a fancy name
-— do not start work under a locked letter before its tooling lands; offer
-A/B/J, or file the finding as an issue (that *is* T1 behavior).
+until a stream ships its finder + oracle + eval fixture. A stream that exists
+only as an encouraging paragraph produces cosmetic churn with a fancy name —
+do not start work under a locked letter before its tooling lands; offer
+A/B/F/J, or file the finding as an issue (that *is* T1 behavior).
 
 Stream J's shipped finder is intentionally narrow: Python statements after
 a block terminator, plus private module-level definitions with zero textual
