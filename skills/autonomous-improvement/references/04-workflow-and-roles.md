@@ -119,6 +119,13 @@ The Orchestrator:
 - **re-derives the queue from the codebase**: when the tracked targets are
   exhausted, the next candidates are the files with no ledger row yet. An
   exhausted list is a signal to look wider, not to idle;
+- **spends idle capacity on the skill itself**: when the queue has nothing
+  meaningful left and the machine has spare capacity, a slice of that
+  capacity — at least 10% of the time left, and at least once a week — goes
+  to reviewing the fleet's own session history for the rules that misfired.
+  The duty is in `05`; the method, and what a proposal has to carry, are in
+  `references/09-session-history-review.md`. It produces a proposal; it never
+  produces a merge;
 - **keeps the dispatch brief short and carries its pre-checks**: the brief
   states the task, the evidence contract, the machine budget and that task's
   traps, and it includes the ledger pre-check plus the instruction that
