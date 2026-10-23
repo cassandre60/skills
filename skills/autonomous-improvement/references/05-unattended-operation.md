@@ -141,6 +141,68 @@ anything else. First turn, in order:
 
 Only then derive the queue (`ledger.py next` + open PRs) and dispatch.
 
+## A nudge authorises housekeeping, never a merge
+
+The nudge is a **timer**, not a person. It says *"you have been quiet, wake up
+and do your routine"* — and the routine is: re-arm the beats, read the journal,
+check the open PRs, tend what is red. It does **not** say *"and you may land
+something you have not been told to land"*.
+
+**Never treat a nudge as an instruction to merge, to apply a label, or to
+re-dispatch work.** Those need a human, or a standing consent that covers
+exactly that item. The failure this prevents is quiet and expensive: a merge
+arrives with no owner behind it, and the PR list becomes a place where things
+land for reasons nobody can reconstruct. (Verified 2026-10-22: a merge was
+taken on the strength of a nudge, and the owner had in fact never authorised
+it.)
+
+If a nudge arrives while you are mid-task, treat it as the heartbeat it is:
+finish the unit you are in, journal, re-arm, and keep going. If it arrives
+with nothing pending, do the housekeeping — and if the housekeeping surfaces
+something that needs a decision, **ask the owner in the next owner-facing
+message**, in plain terms, with the options and a recommendation.
+
+## The cadence: spare capacity improves the skill
+
+A fleet that has run out of product work has one job left: get better at the
+work it does have. So the Orchestrator spends a **slice of its idle capacity
+on the skill itself** — and it does so by **reading the fleet's own session
+history**, not by running the skill's own rounds against the skill's own
+code. The latter finds bugs in the tooling; it says nothing about whether
+the *rules* are right, and it spends the fleet's budget on a target nobody
+asked for. The method is in `references/09-session-history-review.md`.
+
+**When.** Two conditions, both true:
+
+- the work queue has **nothing meaningful left** — no target the ledger says
+  is unaudited, no open PR waiting to be driven, no red check inside a diff;
+- the machine has **spare capacity** — the pool is alive, the governor has
+  hit no WIP or acceptance cap, and the disk is not the constraint.
+
+**How much.** At least **10% of the remaining time**, and **at least once a
+week** even when the queue is never empty. The 10% is a floor, not a target:
+one rule that would have prevented a real defect is worth more than ten
+rounds of a well-covered file.
+
+**What it produces.** A **proposal**, never a merge. A proposal is a rule
+change (a PR against the skill, with the rule's own test) or, for anything
+that touches the referee, an **issue**. What a proposal has to carry — the
+evidence, the scope, and the rule it would have prevented — is in `09`.
+
+**What it does not authorise.** The cadence is a duty to *propose*:
+
+- it does **not** authorise a merge, a label, a re-dispatch, or any other
+  decision the owner has reserved. The rules that decide who merges what are
+  unchanged by this section.
+- it does **not** authorise editing the referee — the five laws, the stream
+  contract, the eval sets, the tier floors, the merge policy. Those are
+  issues, and the owner decides them.
+- it does **not** authorise a PR against the product repo. The review reads
+  the product repo's history; it does not change the product.
+
+A nudge is not the cadence, and the cadence is not a nudge's permission: see
+"A nudge authorises housekeeping, never a merge" above.
+
 ## The one invariant
 
 **Never end a turn with zero pending wakeups.** A background job that completes
@@ -153,7 +215,13 @@ session has.
 - On each wake, re-arm only what expired. Pending sleeps cost no model quota.
 - Keep a journal **outside the repo** (for example
   `~/.local/share/<project>-oracle/journal.md`) so recovery does not depend on
-  reconstructing state from memory.
+  reconstructing state from memory — and outside **any tree the harness
+  manages**, because the harness may prune or repair it under you. On a host
+  where the harness manages `~/.local/share`, keep the journal somewhere else
+  entirely. (Verified 2026-10-21 on opencode: the fleet's state sat in the
+  server's own snapshot tree, whose git-dir shares the object store; a `git
+  worktree prune` broke that store and the server's repair took the journal
+  with it. The state moved to a plain directory of its own.)
 - One batched shell call per wake; one line of prose when nothing changed.
 - Stretch the grid when free-pool pressure is high (for example 30, 60, 120
   minutes): completed sleeps are free, but every wake turn spends tokens
@@ -296,8 +364,17 @@ model will not lift on its own.
 
 ```sh
 ./assets/install-watchdog.sh
+./assets/install-watchdog.sh --check      # is the installed copy current?
 ./assets/install-watchdog.sh --uninstall
 ```
+
+**Installing is a copy, not a link — verify it is current.** A fix in
+`assets/` does nothing to a running fleet until it is reinstalled. Verified
+2026-10-23: the fleet ran a copy one day older than the asset (it still
+poisoned the heartbeat and had no outage class) while the asset already fixed
+both — the log looked like the old bug for seven hours after the fix existed.
+`--check` exits non-zero when the installed scripts differ from the assets;
+run it at every cold start and after every skill update.
 
 The installer is idempotent: copies `watchdog.sh` to
 `~/.local/share/orchestrator/`, copies
@@ -489,13 +566,60 @@ fleet parks a healthy model or burns a ladder against a broken endpoint.
 |---|---|---|
 | **Quota** | `rate limit`, `429`, `insufficient balance`, `balance is at $0` | **Rotate** the model; record the pool as failed (cooldown). |
 | **Outage** | `Endpoint is unavailable`, `upstream request failed`, `503`, `connection reset`, `overloaded` | **Do not rotate, do not park a pool.** The model is not exhausted: every ladder entry would hit the same broken endpoint, and marking one dead parks a usable model for an hour. Log it and let the next tick retry. |
+| **Dead model** | `Model unavailable`, `no such model`, `unknown model`, `model disabled` | **Rotate** at once and park it: the pool was removed or disabled, so retrying it changes nothing. |
 | **Task failure** | the worker died with its work intact | Forensics, then re-dispatch (see *Failure anatomy*). |
 
-The watchdog's two signature lists keep the classes apart: `QUOTA_RE` marks a
-model failed, `OUTAGE_RE` ends the tick with the cooldown list untouched.
-"overloaded" belongs to the **outage** list — a gateway saying "overloaded" is
-usually sick, not out of quota. (Verified 2026-10-22: a fleet lost two tabs in
-one tick to `Endpoint is unavailable` while the pool was healthy.)
+The watchdog's signature lists only decide *how* to record a failure —
+`QUOTA_RE` and `DEAD_MODEL_RE` park the model, `OUTAGE_RE` ends the tick with
+the cooldown list untouched. "overloaded" belongs to the **outage** list — a
+gateway saying "overloaded" is usually sick, not out of quota. (Verified
+2026-10-22: a fleet lost two tabs in one tick to `Endpoint is unavailable`
+while the pool was healthy.)
+
+**Exit status is the contract; the signature is only a label.** A non-zero
+exit that matches no list still rotates. Verified 2026-10-23: the fleet's
+session default was a removed free pool, every nudge exited 1 with
+`Model unavailable`, no list matched, the tick was logged "done", and the
+ladder was never tried — seven hours of nudges delivered into a session that
+could not run a turn. The "done" line in the log is what hid it.
+
+**A timeout is judged by the heartbeat, not by the exit code.** After
+`ORCH_NUDGE_TIMEOUT` the attempt is ambiguous: a long turn and a preempted
+turn that never woke look identical in the output. The session touches
+`last_beat` when it wakes, so a heartbeat newer than the attempt start means
+the turn ran (do not inject a second nudge); an unchanged heartbeat means
+nothing woke (rotate).
+
+**Exhaustion leaves an out-of-band alert.** When every model fails there is
+nothing left to try in-process: write `ALERT.md` in the state directory
+(deduplicated by `ORCH_ALERT_INTERVAL`) with the models tried, the last output
+and the exact recovery commands. A watchdog that fails quietly is
+indistinguishable from an idle fleet.
+
+**A dead fleet must not flood the session.** Each nudge attempt delivers its
+message *before* the model call fails, so a tick that exhausts a four-model
+ladder leaves four questions in the conversation — and a 20-minute timer
+repeats that all day. After an exhausted tick the watchdog backs off for
+`ORCH_RETRY_AFTER_EXHAUSTION` (default 1800) and logs that it did; the alert
+already carries the news. Verified 2026-10-22: six stale nudges queued in a
+session that could not answer one.
+
+**The ladder is owner-scoped.** `ORCH_AUTHORIZED_PROVIDERS` (default
+`opencode`) is the owner's approved pool; a ladder entry from any other
+provider is refused and logged, never tried. The same rule governs ad-hoc
+probing: **a health check uses a throwaway session** (`cd /tmp && opencode run
+-m provider/model "reply OK"`), never `-s <live session>`. `run -s` *resumes*
+the session and persists the model, so a "probe" both injects a message into
+the real conversation and moves the fleet onto a model the owner did not
+authorise (verified 2026-10-23 — the owner noticed the switch before the agent
+did).
+
+**Rotation per turn is not a switch.** A ladder model that carries a nudge
+proves it is alive; make it the session's model too
+(`ORCH_SWITCH_SESSION_MODEL`, default on, via the documented
+`POST /api/session/<id>/model`) so the next interactive turn also runs on a
+live pool. Rotating only the headless nudge leaves the owner's own turns on
+the dead default — exactly the "the model did not get switched" failure.
 
 A quota error is a routing decision, not a retry decision. The orchestrator
 rotates the **model**, it never re-dispatches the one that just failed.
@@ -616,6 +740,45 @@ Per-wake duty, on top of the checklist: every open PR carries a state line
 either being fixed, or it is an owner ask — and an owner ask is re-asked every
 wake until it is answered.
 
+## The suite must give the same result everywhere
+
+The fleet's own tests run on whatever host the fleet runs on — a laptop, a
+CI runner, a headless VM that exports the fleet's configuration into the
+environment. A test that inherits an ambient variable is therefore **red on
+some hosts and green on others**, and it is a flake with a long fuse: it
+fails on the machines the fleet happens to use, and it buries real failures
+behind a familiar one.
+
+So: **a test that runs a tool gives that tool a controlled environment** — the
+variables it depends on set explicitly, the ones it must not inherit cleared
+explicitly, and its home pointed at its own temporary tree. Then it cannot
+touch anything outside its sandbox, whatever host it runs on.
+
+(Verified 2026-10-22: the installer test inherited `ORCH_STATE_DIR` from the
+host, wrote its configuration file into the **real** state directory, and
+failed there while passing in CI. The fix is one line — clear the variable
+before running the installer — and the general rule is the paragraph above.)
+
+## The disk is part of the machine budget
+
+The machine budget in the five laws counts **test runs**. It does not count
+**worktrees**, and a worktree is not a folder of source: a checkout plus its
+build assets is **hundreds of megabytes** each.
+
+- **Budget the worktrees, not only the tests.** Twenty live worktrees is
+  8–20 GB — the same class of cost as a full suite, arriving without anyone
+  running a command.
+- **Clean up as part of the round**, not as an end-of-session chore. A
+  worktree whose PR has merged is garbage; a dead tab's is evidence, so
+  preserve its diff first and remove it after.
+- **Watch the free space**, because a full disk breaks the fleet's memory
+  and its armor: the journal's writes start failing, and the watchdog stops.
+
+(Verified 2026-10-21: 21 registered worktrees at ~395 MB each, plus 3.8 GB
+of leftover engine temp, filled the root filesystem to 96% (2.0 GB free).
+The journal's intermittent ENOENT — reads *and* writes — turned out to be
+the disk, and removing 54 worktrees reclaimed 18 GB.)
+
 ## Failure anatomy and relaunch
 
 When a fleet is cancelled (rate limits, harness restart):
@@ -629,6 +792,11 @@ When a fleet is cancelled (rate limits, harness restart):
     Keep a second copy of the journal on a DIFFERENT filesystem (a tmpfs
     `/tmp` copy is enough) after each write, and restore from that copy if the
     original ever really does go missing.
+    The same holds for **writes**: an append can be lost while the file stays
+    intact, so the journal's memory can be missing an entry that reported
+    success. Write the entry to a temp file, move it into place, and read the
+    tail back to confirm it is there. (Verified 2026-10-21: two journal
+    appends were lost this way, both of them reported as successful.)
 0. **Forensics before reports.** A tab that returned an empty report may
    still be running: check for a live mutation engine, a moving file mtime,
    and dirty files in its worktree. A killed tab leaves its worktree in a

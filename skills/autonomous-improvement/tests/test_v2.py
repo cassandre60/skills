@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import importlib
 import json
 import os
@@ -36,6 +35,7 @@ from support import (
 
 sys.path.insert(0, str(SCRIPTS))
 import common as common_module  # noqa: E402
+import hashlib  # noqa: E402
 import ledger as ledger_module  # noqa: E402
 import mutants as mutants_module  # noqa: E402
 import mutation_engine as engine_module  # noqa: E402
@@ -48,6 +48,377 @@ class RepoTestCase(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.tmp = Path(self._tmp.name)
         self.addCleanup(self._tmp.cleanup)
+
+
+def _flat(text: str) -> str:
+    """Collapse whitespace so an assertion survives a re-wrap."""
+    return " ".join(text.split())
+
+
+def _flat_lifecycle(text: str) -> str:
+    """Collapse whitespace so an assertion survives a re-wrap."""
+    return " ".join(text.split())
+
+
+def _flat_git(text: str) -> str:
+    """Collapse whitespace so an assertion survives a re-wrap."""
+    return " ".join(text.split())
+
+
+def _flat_ask(text: str) -> str:
+    """Collapse whitespace so an assertion survives a re-wrap."""
+    return " ".join(text.split())
+
+
+def _flat_landing(text: str) -> str:
+    """Collapse whitespace and drop markdown emphasis, so an assertion
+    survives a re-wrap or a `**bold**` that moved."""
+    return " ".join(text.replace("*", "").replace("`", "").split())
+
+
+class StreamBChecklistTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.text = (SKILL_ROOT / "references" / "03-streams-and-triage.md").read_text(
+            encoding="utf-8"
+        )
+
+    def test_the_harness_fidelity_question_exists(self) -> None:
+        self.assertIn("measure what production measures", self.text)
+        for detail in ("theme", "font"):
+            self.assertIn(detail, self.text.lower())
+
+    def test_the_swallowed_exception_question_exists(self) -> None:
+        self.assertIn("framework errors", self.text)
+        self.assertIn("swallow", self.text.lower())
+
+    def test_the_fidelity_finding_shape_is_measured_not_asserted(self) -> None:
+        """'Most of them are noise' is not a measurement."""
+        self.assertIn("per-site", self.text)
+        self.assertIn("in production", self.text)
+
+    def test_the_report_before_failing_rule_is_stated(self) -> None:
+        self.assertIn("report first", self.text.lower())
+
+
+class GitRealityContractTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.moving = _flat_git(
+            (SKILL_ROOT / "references" / "07-moving-main.md").read_text(encoding="utf-8")
+        )
+        self.protocol = _flat_git(
+            (SKILL_ROOT / "references" / "04-workflow-and-roles.md").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.unattended = _flat_git(
+            (SKILL_ROOT / "references" / "05-unattended-operation.md").read_text(
+                encoding="utf-8"
+            )
+        )
+
+    def test_strict_protection_is_named(self) -> None:
+        self.assertIn("strict branch protection", self.moving.lower())
+        self.assertIn("--admin", self.moving)
+
+    def test_the_resync_is_a_merge_not_a_rebase(self) -> None:
+        self.assertIn("merge the base into the branch", self.moving.lower())
+        self.assertIn("git merge origin/main", self.moving)
+        self.assertIn("never by rebasing", self.protocol.lower())
+
+    def test_branch_inheritance_is_named(self) -> None:
+        self.assertIn("inherits that worktree's commits", self.protocol.lower())
+        self.assertIn("git diff origin/main...HEAD --stat", self.protocol)
+
+    def test_batched_deliveries_are_named(self) -> None:
+        self.assertIn("Batch the fleet's own deliveries", self.protocol)
+        self.assertIn("one commit per change", self.protocol)
+
+    def test_the_owners_checkout_is_checked_at_cold_start(self) -> None:
+        self.assertIn("orchestrator's own checkout", self.unattended.lower())
+        self.assertIn("rev-parse --abbrev-ref HEAD", self.unattended)
+
+
+class OwnerAskContractTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.protocol = _flat_ask(
+            (SKILL_ROOT / "references" / "04-workflow-and-roles.md").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.unattended = _flat_ask(
+            (SKILL_ROOT / "references" / "05-unattended-operation.md").read_text(
+                encoding="utf-8"
+            )
+        )
+
+    def test_the_ask_states_three_plain_things(self) -> None:
+        for phrase in (
+            "what changes",
+            "what it costs",
+            "what happens if the owner declines",
+        ):
+            self.assertIn(phrase, self.protocol.lower(), phrase)
+
+    def test_the_consent_record_has_its_four_fields(self) -> None:
+        for field in ("class", "authority", "date", "withdrawal path"):
+            self.assertIn(field, self.protocol.lower(), field)
+
+    def test_consent_is_per_item(self) -> None:
+        self.assertIn("consent is per item", self.protocol.lower())
+        self.assertIn("standing consent", self.protocol.lower())
+
+    def test_the_gh_fallbacks_are_documented(self) -> None:
+        self.assertIn("gh api --method POST", self.unattended)
+        self.assertIn("repos/<owner>/<repo>/issues/<n>/labels", self.unattended)
+
+    def test_the_repo_override_rule_is_stated(self) -> None:
+        self.assertIn("always pass", self.unattended.lower())
+        self.assertIn("-r <owner>/<repo>", self.unattended.lower())
+        self.assertIn("parent", self.unattended.lower())
+
+
+class ConfigGuardTests(RepoTestCase):
+    def make(self, with_origin: bool = False):
+        repo, origin = python_repo(self.tmp, with_origin=with_origin)
+        commit(repo)
+        return repo, origin
+
+    def test_empty_include_is_a_named_configuration_error(self) -> None:
+        """An empty candidate list is 'not configured', not 'nothing to do'."""
+        repo, _ = self.make()
+        path = repo / "scripts" / "autonomous" / "config.json"
+        cfg = json.loads(path.read_text(encoding="utf-8"))
+        cfg["candidates"]["A"]["include"] = []
+        path.write_text(json.dumps(cfg), encoding="utf-8")
+        proc = script(repo, "ledger.py", "next", "--stream", "A")
+        self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("not configured", proc.stderr)
+        self.assertNotIn("No eligible targets remain", proc.stdout)
+
+    def test_missing_config_is_named_too(self) -> None:
+        """No config file at all: the message says which file to create."""
+        repo, _ = self.make()
+        (repo / "scripts" / "autonomous" / "config.json").unlink()
+        proc = script(repo, "ledger.py", "next", "--stream", "A")
+        self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("no config file at", proc.stderr)
+
+    def test_globs_that_match_nothing_are_reported_as_a_configuration_problem(self) -> None:
+        """0 candidates matched != 0 eligible targets."""
+        repo, _ = self.make()
+        path = repo / "scripts" / "autonomous" / "config.json"
+        cfg = json.loads(path.read_text(encoding="utf-8"))
+        cfg["candidates"]["A"]["include"] = ["nowhere/**/*.py"]
+        path.write_text(json.dumps(cfg), encoding="utf-8")
+        proc = script(repo, "ledger.py", "next", "--stream", "A")
+        self.assertIn("No candidate path matched", proc.stdout)
+        self.assertNotIn("No eligible targets remain", proc.stdout)
+
+    def test_the_dart_example_config_resolves_the_companion(self) -> None:
+        """The shipped example must map a source file to a test that exists."""
+        repo, _ = self.make()
+        # a repo laid out the way the Dart example describes
+        write(repo / "lib" / "src" / "view" / "x.dart", "def f():\n    return 1\n")
+        write(repo / "test" / "view" / "x_test.dart", "def test_x():\n    assert True\n")
+        commit(repo)
+        example = load_example("config.dart.json")
+        write_config(repo, example)
+        proc = script(repo, "ledger.py", "next", "--stream", "A", "--limit", "1")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("test/view/x_test.dart", proc.stdout)
+        self.assertNotIn("No candidate path matched", proc.stdout)
+
+
+class WorkerLifecycleContractTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.unattended = _flat(
+            (SKILL_ROOT / "references" / "05-unattended-operation.md").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.protocol = _flat(
+            (SKILL_ROOT / "references" / "04-workflow-and-roles.md").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.watchdog = (SKILL_ROOT / "assets" / "watchdog.sh").read_text(
+            encoding="utf-8"
+        )
+
+    def test_three_failure_classes_are_named(self) -> None:
+        self.assertIn("quota", self.unattended.lower())
+        self.assertIn("outage", self.unattended.lower())
+        self.assertIn("task failure", self.unattended.lower())
+
+    def test_an_outage_does_not_rotate_or_park_a_pool(self) -> None:
+        self.assertIn("do not rotate, do not park a pool", self.unattended.lower())
+        self.assertIn("OUTAGE_RE", self.watchdog)
+        # "overloaded" is an outage word, not a quota word
+        self.assertNotIn("overloaded", _flat(self.watchdog).split("QUOTA_RE=")[1].split("'")[0])
+
+    def test_a_dead_model_is_its_own_failure_class(self) -> None:
+        # Verified 2026-10-23: `Model unavailable` matched neither the quota
+        # nor the outage list, so the tick was logged "done" and the ladder
+        # was never tried for seven hours.
+        self.assertIn("dead model", self.unattended.lower())
+        self.assertIn("DEAD_MODEL_RE", self.watchdog)
+
+    def test_an_unclassified_non_zero_exit_still_rotates(self) -> None:
+        # The classifier decides HOW to record a failure, never WHETHER it is
+        # one: a new error string must not become a silent success.
+        self.assertIn("exit status is the contract", self.unattended.lower())
+        self.assertIn('if [ "$RC" -ne 0 ]', self.watchdog)
+
+    def test_a_timeout_is_judged_by_the_heartbeat(self) -> None:
+        # A preempted turn and a long turn look identical in the output; the
+        # session's own heartbeat is the witness.
+        self.assertIn("judged by the heartbeat", self.unattended.lower())
+        self.assertIn('"$RC" -eq 124', self.watchdog)
+
+    def test_exhaustion_leaves_an_out_of_band_alert(self) -> None:
+        self.assertIn("alert.md", self.unattended.lower())
+        self.assertIn("ALERT_FILE", self.watchdog)
+
+    def test_the_ladder_is_owner_scoped(self) -> None:
+        self.assertIn("ORCH_AUTHORIZED_PROVIDERS", self.unattended)
+        self.assertIn("ORCH_AUTHORIZED_PROVIDERS", self.watchdog)
+        self.assertIn("throwaway session", self.unattended.lower())
+
+    def test_rotation_switches_the_session_model(self) -> None:
+        self.assertIn("ORCH_SWITCH_SESSION_MODEL", self.unattended)
+        self.assertIn("switch_session_model", self.watchdog)
+
+    def test_the_install_is_checked_for_drift(self) -> None:
+        self.assertIn("installing is a copy", self.unattended.lower())
+        installer = (ASSETS / "install-watchdog.sh").read_text(encoding="utf-8")
+        self.assertIn("--check", installer)
+
+    def test_an_exhausted_tick_does_not_flood_the_session(self) -> None:
+        # Each attempt delivers its message before the model call fails, so a
+        # dead ladder at a 20-minute timer would queue four questions a tick.
+        self.assertIn("must not flood the session", self.unattended.lower())
+        self.assertIn("ORCH_RETRY_AFTER_EXHAUSTION", self.watchdog)
+
+    def test_the_checkpoint_covers_new_files(self) -> None:
+        self.assertIn("stage new files by name", self.unattended.lower())
+
+    def test_a_dead_tabs_untracked_work_is_preserved(self) -> None:
+        self.assertIn("dirty and untracked", self.unattended.lower())
+        self.assertIn("before touching its worktree", self.unattended.lower())
+
+    def test_the_dispatch_brief_carries_the_precheck(self) -> None:
+        self.assertIn("ledger.py check --target", self.unattended)
+        self.assertIn("correcting the brief's premise", self.unattended.lower())
+        self.assertIn("keeps the dispatch brief short", self.protocol.lower())
+
+
+class ValidateTests(RepoTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.repo, _ = python_repo(self.tmp)
+        commit(self.repo)
+
+    def _validate(self, *extra):
+        return script(self.repo, "ledger.py", "validate", *extra)
+
+    def test_decorated_status_makes_a_row_invisible(self) -> None:
+        """A Status cell with extra text is skipped by the parser - report it."""
+        ledger = self.repo / "docs" / "AUTONOMOUS_WORK_LEDGER.md"
+        write(
+            ledger,
+            ledger_text(
+                "| 2026-01-01 | A (Mutation) | `src/app.py` | `abc123456` | "
+                "COMPLETED (second round: 98 candidates) | #1 | did the work | trigger |",
+                row("src/app.py", "abc123456"),
+            ),
+        )
+        proc = self._validate()
+        self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("invisible", proc.stdout)
+        self.assertIn("COMPLETED (second round", proc.stdout)
+
+    def test_compound_target_and_hash_cells_are_invisible(self) -> None:
+        ledger = self.repo / "docs" / "AUTONOMOUS_WORK_LEDGER.md"
+        write(
+            ledger,
+            ledger_text(
+                "| 2026-01-01 | A (Mutation) | `src/app.py`, `tests/test_app.py` | "
+                "`abc123456`, `def789012` | COMPLETED | #1 | did the work | trigger |",
+            ),
+        )
+        proc = self._validate()
+        self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("more than one path", proc.stdout)
+        self.assertIn("more than one hash", proc.stdout)
+
+    def test_stale_hash_is_reported(self) -> None:
+        """A row whose hash is not the blob at HEAD is a stale audit."""
+        ledger = self.repo / "docs" / "AUTONOMOUS_WORK_LEDGER.md"
+        write(ledger, ledger_text(row("src/app.py", "000000000")))
+        proc = self._validate()
+        self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("stale", proc.stdout)
+
+    def test_a_well_formed_ledger_validates_clean(self) -> None:
+        ledger = self.repo / "docs" / "AUTONOMOUS_WORK_LEDGER.md"
+        source = script(self.repo, "ledger.py", "check", "--target", "src/app.py")
+        self.assertNotEqual(source.returncode, 0)
+        # record a proper row, then validate
+        recorded = script(
+            self.repo,
+            "ledger.py",
+            "record",
+            "--stream",
+            "A",
+            "--target",
+            "src/app.py",
+            "--status",
+            "SOUND",
+            "--summary",
+            "no gaps",
+        )
+        self.assertEqual(recorded.returncode, 0, recorded.stdout + recorded.stderr)
+        proc = self._validate()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("every row is visible", proc.stdout)
+
+    def test_json_output_lists_the_problems(self) -> None:
+        ledger = self.repo / "docs" / "AUTONOMOUS_WORK_LEDGER.md"
+        write(
+            ledger,
+            ledger_text(
+                "| 2026-01-01 | A (Mutation) | `src/app.py` | `abc123456` | "
+                "COMPLETED (with a parenthetical) | #1 | did the work | trigger |",
+            ),
+        )
+        proc = self._validate("--json")
+        self.assertNotEqual(proc.returncode, 0)
+        report = json.loads(proc.stdout)
+        self.assertEqual(report["rows_total"], 1)
+        self.assertEqual(report["rows_visible"], 0)
+        self.assertEqual(len(report["invisible"]), 1)
+
+    def test_recorded_rows_are_visible(self) -> None:
+        """A row the tool writes must be a row the parser can see."""
+        recorded = script(
+            self.repo,
+            "ledger.py",
+            "record",
+            "--stream",
+            "A",
+            "--target",
+            "src/app.py",
+            "--status",
+            "SOUND",
+            "--summary",
+            "no gaps",
+        )
+        self.assertEqual(recorded.returncode, 0, recorded.stdout + recorded.stderr)
+        proc = self._validate("--json")
+        report = json.loads(proc.stdout)
+        self.assertEqual(report["rows_total"], 1)
+        self.assertEqual(report["rows_visible"], 1)
+        self.assertEqual(report["invisible"], [])
 
 
 class LedgerTests(RepoTestCase):
@@ -192,8 +563,7 @@ class LedgerTests(RepoTestCase):
         stream_a = script(repo, "ledger.py", "next", "--stream", "A", "--json")
         alias = script(repo, "ledger.py", "next", "--stream", "1", "--json")
         self.assertEqual(json.loads(stream_a.stdout)["candidates"], json.loads(alias.stdout)["candidates"])
-        # C is available since issue #25; D is still a planned letter.
-        planned = script(repo, "ledger.py", "next", "--stream", "D")
+        planned = script(repo, "ledger.py", "next", "--stream", "C")
         self.assertEqual(planned.returncode, 2)
         self.assertIn("planned, not implemented", planned.stderr)
 
@@ -1182,6 +1552,8 @@ class TestWeakeningTests(RepoTestCase):
     all(shutil.which(tool) for tool in ("bash", "flock", "timeout", "stat", "date")),
     "watchdog shell dependencies are not installed",
 )
+
+
 class WatchdogTests(RepoTestCase):
     def test_fresh_heartbeat_skips_and_stale_runs_nudge(self):
         state = self.tmp / "state"
@@ -1229,6 +1601,11 @@ class WatchdogTests(RepoTestCase):
         env = dict(os.environ)
         env.update(HOME=str(home), PATH=f"{bin_dir}:{os.environ['PATH']}")
         env.pop("XDG_CONFIG_HOME", None)
+        # The installer reads ORCH_STATE_DIR from the environment. A machine
+        # that runs the watchdog (a fleet host) exports it, and the test then
+        # writes the env file into the REAL state dir instead of its temp
+        # home - a failure that depends on the machine, not on the code.
+        env.pop("ORCH_STATE_DIR", None)
         result = run([str(ASSETS / "install-watchdog.sh")], cwd=self.tmp, env=env)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         unit = home / ".config/systemd/user/orchestrator-watchdog.service"
@@ -1269,9 +1646,7 @@ class StreamRegistryTests(unittest.TestCase):
         # non-available letter must refuse with its full name, so a session
         # cannot drift into un-tooled work under a planned letter.
         for stream, info in common_module.STREAMS.items():
-            # Gated letters (L) pass normalize on purpose: their caller-side
-            # kill switch owns the refusal.
-            if info["status"] != "planned":
+            if info["status"] == "available":
                 continue
             with self.assertRaises(common_module.UsageError) as ctx:
                 common_module.normalize_stream(stream)
@@ -1581,6 +1956,8 @@ class DocumentationInvariantTests(unittest.TestCase):
             "references/04-workflow-and-roles.md",
             "references/05-unattended-operation.md",
             "references/07-moving-main.md",
+            "references/08-recursive-self-improvement.md",
+            "references/09-session-history-review.md",
             "references/gates-and-vocabulary.md",
             "references/stack-adapters.md",
             "references/examples.md",
@@ -1596,403 +1973,6 @@ class DocumentationInvariantTests(unittest.TestCase):
             "scripts/autonomous/fleet.py",
         ):
             self.assertTrue((SKILL_ROOT / relative).exists(), relative)
-
-
-if __name__ == "__main__":
-    unittest.main()
-def _flat(text: str) -> str:
-    """Collapse whitespace so an assertion survives a re-wrap."""
-    return " ".join(text.split())
-
-
-def _flat_lifecycle(text: str) -> str:
-    """Collapse whitespace so an assertion survives a re-wrap."""
-    return " ".join(text.split())
-
-
-class WorkerLifecycleContractTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.unattended = _flat(
-            (SKILL_ROOT / "references" / "05-unattended-operation.md").read_text(
-                encoding="utf-8"
-            )
-        )
-        self.protocol = _flat(
-            (SKILL_ROOT / "references" / "04-workflow-and-roles.md").read_text(
-                encoding="utf-8"
-            )
-        )
-        self.watchdog = (SKILL_ROOT / "assets" / "watchdog.sh").read_text(
-            encoding="utf-8"
-        )
-
-    def test_three_failure_classes_are_named(self) -> None:
-        self.assertIn("quota", self.unattended.lower())
-        self.assertIn("outage", self.unattended.lower())
-        self.assertIn("task failure", self.unattended.lower())
-
-    def test_an_outage_does_not_rotate_or_park_a_pool(self) -> None:
-        self.assertIn("do not rotate, do not park a pool", self.unattended.lower())
-        self.assertIn("OUTAGE_RE", self.watchdog)
-        # "overloaded" is an outage word, not a quota word
-        self.assertNotIn("overloaded", _flat(self.watchdog).split("QUOTA_RE=")[1].split("'")[0])
-
-    def test_the_checkpoint_covers_new_files(self) -> None:
-        self.assertIn("stage new files by name", self.unattended.lower())
-
-    def test_a_dead_tabs_untracked_work_is_preserved(self) -> None:
-        self.assertIn("dirty and untracked", self.unattended.lower())
-        self.assertIn("before touching its worktree", self.unattended.lower())
-
-    def test_the_dispatch_brief_carries_the_precheck(self) -> None:
-        self.assertIn("ledger.py check --target", self.unattended)
-        self.assertIn("correcting the brief's premise", self.unattended.lower())
-        self.assertIn("keeps the dispatch brief short", self.protocol.lower())
-
-
-
-
-"""Validator tests: the rows the parser cannot see must be reported.
-
-Red before `ledger.py validate` existed: there was no command that could tell
-a fleet that its registry was invisible.
-"""
-
-import json
-
-
-class ValidateTests(RepoTestCase):
-    def setUp(self) -> None:
-        super().setUp()
-        self.repo, _ = python_repo(self.tmp)
-        commit(self.repo)
-
-    def _validate(self, *extra):
-        return script(self.repo, "ledger.py", "validate", *extra)
-
-    def test_decorated_status_makes_a_row_invisible(self) -> None:
-        """A Status cell with extra text is skipped by the parser - report it."""
-        ledger = self.repo / "docs" / "AUTONOMOUS_WORK_LEDGER.md"
-        write(
-            ledger,
-            ledger_text(
-                "| 2026-01-01 | A (Mutation) | `src/app.py` | `abc123456` | "
-                "COMPLETED (second round: 98 candidates) | #1 | did the work | trigger |",
-                row("src/app.py", "abc123456"),
-            ),
-        )
-        proc = self._validate()
-        self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        self.assertIn("invisible", proc.stdout)
-        self.assertIn("COMPLETED (second round", proc.stdout)
-
-    def test_compound_target_and_hash_cells_are_invisible(self) -> None:
-        ledger = self.repo / "docs" / "AUTONOMOUS_WORK_LEDGER.md"
-        write(
-            ledger,
-            ledger_text(
-                "| 2026-01-01 | A (Mutation) | `src/app.py`, `tests/test_app.py` | "
-                "`abc123456`, `def789012` | COMPLETED | #1 | did the work | trigger |",
-            ),
-        )
-        proc = self._validate()
-        self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        self.assertIn("more than one path", proc.stdout)
-        self.assertIn("more than one hash", proc.stdout)
-
-    def test_stale_hash_is_reported(self) -> None:
-        """A row whose hash is not the blob at HEAD is a stale audit."""
-        ledger = self.repo / "docs" / "AUTONOMOUS_WORK_LEDGER.md"
-        write(ledger, ledger_text(row("src/app.py", "000000000")))
-        proc = self._validate()
-        self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        self.assertIn("stale", proc.stdout)
-
-    def test_a_well_formed_ledger_validates_clean(self) -> None:
-        ledger = self.repo / "docs" / "AUTONOMOUS_WORK_LEDGER.md"
-        source = script(self.repo, "ledger.py", "check", "--target", "src/app.py")
-        self.assertNotEqual(source.returncode, 0)
-        # record a proper row, then validate
-        recorded = script(
-            self.repo,
-            "ledger.py",
-            "record",
-            "--stream",
-            "A",
-            "--target",
-            "src/app.py",
-            "--status",
-            "SOUND",
-            "--summary",
-            "no gaps",
-        )
-        self.assertEqual(recorded.returncode, 0, recorded.stdout + recorded.stderr)
-        proc = self._validate()
-        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        self.assertIn("every row is visible", proc.stdout)
-
-    def test_json_output_lists_the_problems(self) -> None:
-        ledger = self.repo / "docs" / "AUTONOMOUS_WORK_LEDGER.md"
-        write(
-            ledger,
-            ledger_text(
-                "| 2026-01-01 | A (Mutation) | `src/app.py` | `abc123456` | "
-                "COMPLETED (with a parenthetical) | #1 | did the work | trigger |",
-            ),
-        )
-        proc = self._validate("--json")
-        self.assertNotEqual(proc.returncode, 0)
-        report = json.loads(proc.stdout)
-        self.assertEqual(report["rows_total"], 1)
-        self.assertEqual(report["rows_visible"], 0)
-        self.assertEqual(len(report["invisible"]), 1)
-
-    def test_recorded_rows_are_visible(self) -> None:
-        """A row the tool writes must be a row the parser can see."""
-        recorded = script(
-            self.repo,
-            "ledger.py",
-            "record",
-            "--stream",
-            "A",
-            "--target",
-            "src/app.py",
-            "--status",
-            "SOUND",
-            "--summary",
-            "no gaps",
-        )
-        self.assertEqual(recorded.returncode, 0, recorded.stdout + recorded.stderr)
-        proc = self._validate("--json")
-        report = json.loads(proc.stdout)
-        self.assertEqual(report["rows_total"], 1)
-        self.assertEqual(report["rows_visible"], 1)
-        self.assertEqual(report["invisible"], [])
-
-
-@unittest.skipUnless(
-    all(shutil.which(tool) for tool in ("bash", "flock", "timeout", "stat", "date")),
-    "watchdog shell dependencies are not installed",
-)
-
-
-class ConfigGuardTests(RepoTestCase):
-    def make(self, with_origin: bool = False):
-        repo, origin = python_repo(self.tmp, with_origin=with_origin)
-        commit(repo)
-        return repo, origin
-
-    def test_empty_include_is_a_named_configuration_error(self) -> None:
-        """An empty candidate list is 'not configured', not 'nothing to do'."""
-        repo, _ = self.make()
-        path = repo / "scripts" / "autonomous" / "config.json"
-        cfg = json.loads(path.read_text(encoding="utf-8"))
-        cfg["candidates"]["A"]["include"] = []
-        path.write_text(json.dumps(cfg), encoding="utf-8")
-        proc = script(repo, "ledger.py", "next", "--stream", "A")
-        self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        self.assertIn("not configured", proc.stderr)
-        self.assertNotIn("No eligible targets remain", proc.stdout)
-
-    def test_missing_config_is_named_too(self) -> None:
-        """No config file at all: the message says which file to create."""
-        repo, _ = self.make()
-        (repo / "scripts" / "autonomous" / "config.json").unlink()
-        proc = script(repo, "ledger.py", "next", "--stream", "A")
-        self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        self.assertIn("no config file at", proc.stderr)
-
-    def test_globs_that_match_nothing_are_reported_as_a_configuration_problem(self) -> None:
-        """0 candidates matched != 0 eligible targets."""
-        repo, _ = self.make()
-        path = repo / "scripts" / "autonomous" / "config.json"
-        cfg = json.loads(path.read_text(encoding="utf-8"))
-        cfg["candidates"]["A"]["include"] = ["nowhere/**/*.py"]
-        path.write_text(json.dumps(cfg), encoding="utf-8")
-        proc = script(repo, "ledger.py", "next", "--stream", "A")
-        self.assertIn("No candidate path matched", proc.stdout)
-        self.assertNotIn("No eligible targets remain", proc.stdout)
-
-    def test_the_dart_example_config_resolves_the_companion(self) -> None:
-        """The shipped example must map a source file to a test that exists."""
-        repo, _ = self.make()
-        # a repo laid out the way the Dart example describes
-        write(repo / "lib" / "src" / "view" / "x.dart", "def f():\n    return 1\n")
-        write(repo / "test" / "view" / "x_test.dart", "def test_x():\n    assert True\n")
-        commit(repo)
-        example = load_example("config.dart.json")
-        write_config(repo, example)
-        proc = script(repo, "ledger.py", "next", "--stream", "A", "--limit", "1")
-        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        self.assertIn("test/view/x_test.dart", proc.stdout)
-        self.assertNotIn("No candidate path matched", proc.stdout)
-
-
-@unittest.skipUnless(
-    all(shutil.which(tool) for tool in ("bash", "flock", "timeout", "stat", "date")),
-    "watchdog shell dependencies are not installed",
-)
-
-
-@unittest.skipUnless(
-    all(shutil.which(tool) for tool in ("bash", "flock", "timeout", "stat", "date")),
-    "watchdog shell dependencies are not installed",
-)
-
-
-class StreamBChecklistTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.text = (SKILL_ROOT / "references" / "03-streams-and-triage.md").read_text(
-            encoding="utf-8"
-        )
-
-    def test_the_harness_fidelity_question_exists(self) -> None:
-        self.assertIn("measure what production measures", self.text)
-        for detail in ("theme", "font"):
-            self.assertIn(detail, self.text.lower())
-
-    def test_the_swallowed_exception_question_exists(self) -> None:
-        self.assertIn("framework errors", self.text)
-        self.assertIn("swallow", self.text.lower())
-
-    def test_the_fidelity_finding_shape_is_measured_not_asserted(self) -> None:
-        """'Most of them are noise' is not a measurement."""
-        self.assertIn("per-site", self.text)
-        self.assertIn("in production", self.text)
-
-    def test_the_report_before_failing_rule_is_stated(self) -> None:
-        self.assertIn("report first", self.text.lower())
-
-
-
-
-
-"""Git-reality contract tests.
-
-Red before this change: the skill told a reader to rebase a pushed branch in
-one reference and never to force-push in another, and said nothing about
-strict protection, branch inheritance, or batching the fleet's own PRs.
-"""
-
-def _flat_git(text: str) -> str:
-    """Collapse whitespace so an assertion survives a re-wrap."""
-    return " ".join(text.split())
-
-
-class GitRealityContractTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.moving = _flat_git(
-            (SKILL_ROOT / "references" / "07-moving-main.md").read_text(encoding="utf-8")
-        )
-        self.protocol = _flat_git(
-            (SKILL_ROOT / "references" / "04-workflow-and-roles.md").read_text(
-                encoding="utf-8"
-            )
-        )
-        self.unattended = _flat_git(
-            (SKILL_ROOT / "references" / "05-unattended-operation.md").read_text(
-                encoding="utf-8"
-            )
-        )
-
-    def test_strict_protection_is_named(self) -> None:
-        self.assertIn("strict branch protection", self.moving.lower())
-        self.assertIn("--admin", self.moving)
-
-    def test_the_resync_is_a_merge_not_a_rebase(self) -> None:
-        self.assertIn("merge the base into the branch", self.moving.lower())
-        self.assertIn("git merge origin/main", self.moving)
-        self.assertIn("never by rebasing", self.protocol.lower())
-
-    def test_branch_inheritance_is_named(self) -> None:
-        self.assertIn("inherits that worktree's commits", self.protocol.lower())
-        self.assertIn("git diff origin/main...HEAD --stat", self.protocol)
-
-    def test_batched_deliveries_are_named(self) -> None:
-        self.assertIn("Batch the fleet's own deliveries", self.protocol)
-        self.assertIn("one commit per change", self.protocol)
-
-    def test_the_owners_checkout_is_checked_at_cold_start(self) -> None:
-        self.assertIn("orchestrator's own checkout", self.unattended.lower())
-        self.assertIn("rev-parse --abbrev-ref HEAD", self.unattended)
-
-
-
-
-
-"""Owner-ask and gh-fallback contract tests.
-
-Red before this change: the skill said "re-ask the owner per item" without
-saying what an ask contains or where the consent is recorded, and the gh
-fallbacks were left for each agent to rediscover.
-"""
-
-def _flat_ask(text: str) -> str:
-    """Collapse whitespace so an assertion survives a re-wrap."""
-    return " ".join(text.split())
-
-
-class OwnerAskContractTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.protocol = _flat_ask(
-            (SKILL_ROOT / "references" / "04-workflow-and-roles.md").read_text(
-                encoding="utf-8"
-            )
-        )
-        self.unattended = _flat_ask(
-            (SKILL_ROOT / "references" / "05-unattended-operation.md").read_text(
-                encoding="utf-8"
-            )
-        )
-
-    def test_the_ask_states_three_plain_things(self) -> None:
-        for phrase in (
-            "what changes",
-            "what it costs",
-            "what happens if the owner declines",
-        ):
-            self.assertIn(phrase, self.protocol.lower(), phrase)
-
-    def test_the_consent_record_has_its_four_fields(self) -> None:
-        for field in ("class", "authority", "date", "withdrawal path"):
-            self.assertIn(field, self.protocol.lower(), field)
-
-    def test_consent_is_per_item(self) -> None:
-        self.assertIn("consent is per item", self.protocol.lower())
-        self.assertIn("standing consent", self.protocol.lower())
-
-    def test_the_gh_fallbacks_are_documented(self) -> None:
-        self.assertIn("gh api --method POST", self.unattended)
-        self.assertIn("repos/<owner>/<repo>/issues/<n>/labels", self.unattended)
-
-    def test_the_repo_override_rule_is_stated(self) -> None:
-        self.assertIn("always pass", self.unattended.lower())
-        self.assertIn("-r <owner>/<repo>", self.unattended.lower())
-        self.assertIn("parent", self.unattended.lower())
-
-
-@unittest.skipUnless(
-    all(shutil.which(tool) for tool in ("bash", "flock", "timeout", "stat", "date")),
-    "watchdog shell dependencies are not installed",
-)
-
-
-@unittest.skipUnless(
-    all(shutil.which(tool) for tool in ("bash", "flock", "timeout", "stat", "date")),
-    "watchdog shell dependencies are not installed",
-)
-
-
-@unittest.skipUnless(
-    all(shutil.which(tool) for tool in ("bash", "flock", "timeout", "stat", "date")),
-    "watchdog shell dependencies are not installed",
-)
-
-
-@unittest.skipUnless(
-    all(shutil.which(tool) for tool in ("bash", "flock", "timeout", "stat", "date")),
-    "watchdog shell dependencies are not installed",
-)
 
 
 class MutationMeasurementContractTests(unittest.TestCase):
@@ -2041,8 +2021,210 @@ class MutationMeasurementContractTests(unittest.TestCase):
         self.assertIn("a second oracle may already kill it", self.protocol)
 
 
+class LandingSeveralOwnPRsTests(unittest.TestCase):
+    """The recipe for landing several of the orchestrator's own PRs that touch
+    the same file.
+
+    Red before this change: the recipe existed nowhere, and the session it
+    came from produced a conflict resolution that did not even parse.
+    """
+
+    def setUp(self) -> None:
+        self.protocol = _flat_landing(
+            (SKILL_ROOT / "references" / "04-workflow-and-roles.md").read_text(
+                encoding="utf-8"
+            )
+        )
+
+    def test_the_rule_is_stated_in_its_general_form(self) -> None:
+        self.assertIn("preserve the file's structure", self.protocol.lower())
+        self.assertIn("in any repo", self.protocol.lower())
+
+    def test_the_rebuild_rule_is_stated(self) -> None:
+        self.assertIn("by rebuilding the file", self.protocol.lower())
+        self.assertIn("rather than to keep both", self.protocol.lower())
+
+    def test_the_trailing_construct_rule_is_stated(self) -> None:
+        self.assertIn("single trailing construct exactly once", self.protocol.lower())
+
+    def test_the_line_oriented_exception_is_stated(self) -> None:
+        self.assertIn("concatenation is", self.protocol.lower())
+
+    def test_the_verification_step_is_stated(self) -> None:
+        self.assertIn("verify the merged tree before pushing", self.protocol.lower())
+
+    def test_the_conflict_marker_check_is_stated(self) -> None:
+        self.assertIn("git grep", self.protocol)
+        self.assertIn("conflict markers", self.protocol.lower())
+
+
+class EnvironmentIndependenceTests(unittest.TestCase):
+    """The suite must give the same result on every host.
+
+    Red before this change: the installer test inherited ORCH_STATE_DIR from
+    the runner's environment, wrote into the real state directory on a fleet
+    host, and failed there while passing in CI.
+    """
+
+    def setUp(self) -> None:
+        self.streams = _flat_landing(
+            (SKILL_ROOT / "references" / "03-streams-and-triage.md").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.unattended = _flat_landing(
+            (SKILL_ROOT / "references" / "05-unattended-operation.md").read_text(
+                encoding="utf-8"
+            )
+        )
+
+    def test_the_stream_b_question_exists(self) -> None:
+        self.assertIn("depend on the machine's environment", self.streams.lower())
+
+    def test_the_controlled_environment_rule_is_stated(self) -> None:
+        self.assertIn("controlled environment", self.streams.lower())
+        self.assertIn("cleared explicitly", self.streams.lower())
+
+    def test_the_host_evidence_rule_is_stated(self) -> None:
+        self.assertIn("evidence about the host", self.streams.lower())
+
+    def test_the_fleet_suite_rule_is_stated(self) -> None:
+        self.assertIn("same result everywhere", self.unattended.lower())
+        self.assertIn("temporary tree", self.unattended.lower())
+
+
+class SkillImprovementCadenceTests(unittest.TestCase):
+    """The cadence: idle capacity improves the skill, from the fleet's own
+    session history — and the method that turns a session's history into a
+    proposal.
+
+    Red before this change: nothing in the skill said when to look at the
+    fleet's own history, what a proposal has to carry, or what the cadence
+    does not authorise. The one session that produced a long list of rule
+    misfires found them by hand, at the end — and missed three it had
+    already written down and addressed to the skill.
+    """
+
+    def setUp(self) -> None:
+        self.unattended = _flat_landing(
+            (SKILL_ROOT / "references" / "05-unattended-operation.md").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.protocol = _flat_landing(
+            (SKILL_ROOT / "references" / "04-workflow-and-roles.md").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.review = _flat_landing(
+            (SKILL_ROOT / "references" / "09-session-history-review.md").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.skill = _flat_landing((SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8"))
+
+    def test_the_cadence_is_stated(self) -> None:
+        self.assertIn("spare capacity improves the skill", self.unattended.lower())
+        self.assertIn("10% of the remaining time", self.unattended)
+        self.assertIn("at least once a week", self.unattended)
+
+    def test_the_cadence_is_bound_to_an_empty_queue(self) -> None:
+        self.assertIn("nothing meaningful left", self.unattended)
+        self.assertIn("spare capacity", self.unattended.lower())
+
+    def test_the_cadence_authorises_no_merge(self) -> None:
+        # the rule must not be readable as permission to land something
+        self.assertIn("does not authorise a merge", self.unattended.lower())
+        self.assertIn("never produces a merge", self.protocol.lower())
+
+    def test_the_cadence_excludes_the_referee(self) -> None:
+        for surface in ("five laws", "stream contract", "eval sets", "tier floors"):
+            self.assertIn(surface, self.unattended.lower(), surface)
+        self.assertIn("merge policy", self.unattended.lower())
+
+    def test_the_cadence_is_not_the_skill_rounds_on_itself(self) -> None:
+        self.assertIn(
+            "running this skill's rounds against this skill's own code",
+            self.review.lower(),
+        )
+        self.assertIn("not a second stream l", self.review.lower())
+
+    def test_the_evidence_surface_is_named(self) -> None:
+        for source in (
+            "journal",
+            "compaction-proof state file",
+            "nudge transcripts",
+            "watchdog log",
+            "snapshot accumulator",
+            "ledger",
+            "pr and issue timeline",
+        ):
+            self.assertIn(source, self.review.lower(), source)
+
+    def test_a_proposal_carries_evidence_scope_and_the_rule(self) -> None:
+        self.assertIn("evidence", self.review.lower())
+        self.assertIn("scope", self.review.lower())
+        self.assertIn("the rule it would have prevented", self.review.lower())
+
+    def test_the_already_covered_case_is_required(self) -> None:
+        # "the rule existed and was not followed" is a different finding from
+        # "no rule existed", and the review has to be able to say which.
+        self.assertIn("already covered?", self.review.lower())
+        self.assertIn("the rule existed and was not followed", self.review.lower())
+
+    def test_a_referee_change_is_an_issue_not_a_pr(self) -> None:
+        self.assertIn("never a pr the fleet can merge", self.review.lower())
+
+    def test_the_orchestrator_duty_is_in_the_protocol(self) -> None:
+        self.assertIn("spends idle capacity on the skill itself", self.protocol.lower())
+        self.assertIn("references/09-session-history-review.md", self.protocol)
+
+    def test_the_summary_reaches_the_cadence(self) -> None:
+        # SKILL.md is the injected summary: a duty that lives only in a
+        # reference file is a duty that never fires.
+        self.assertIn(
+            "idle capacity turns the fleet's own history into skill proposals",
+            self.skill.lower(),
+        )
+
+
+class FleetStateDurabilityTests(unittest.TestCase):
+    """The disk, the journal write, and where the state directory lives.
+
+    Red before this change: the fleet's journal carried a lesson addressed
+    to the skill — a worktree is ~400 MB, twenty of them fill a disk, and
+    cleanup is part of the round — and it never reached the skill. The same
+    session lost two journal appends that reported success, and the skill's
+    rule covered only failed *reads*.
+    """
+
+    def setUp(self) -> None:
+        self.unattended = _flat_landing(
+            (SKILL_ROOT / "references" / "05-unattended-operation.md").read_text(
+                encoding="utf-8"
+            )
+        )
+
+    def test_the_disk_is_part_of_the_machine_budget(self) -> None:
+        self.assertIn("the disk is part of the machine budget", self.unattended.lower())
+        self.assertIn("budget the worktrees", self.unattended.lower())
+
+    def test_the_cleanup_is_part_of_the_round(self) -> None:
+        self.assertIn("clean up as part of the round", self.unattended.lower())
+
+    def test_the_journal_write_is_atomic_and_verified(self) -> None:
+        self.assertIn("write the entry to a temp file", self.unattended.lower())
+        self.assertIn("read the tail back", self.unattended.lower())
+
+    def test_the_state_dir_is_outside_the_harness_tree(self) -> None:
+        self.assertIn("outside any tree the harness manages", self.unattended.lower())
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+
 class VerdictReliabilityTests(RepoTestCase):
     """Issue #16: baseline-relative timeouts, survivor confirmation, verdict cache."""
 
@@ -3350,5 +3532,3 @@ class StatelessWakeTests(RepoTestCase):
         payload = json.loads(res.stdout)
         self.assertTrue(payload["needs_brain"])
         self.assertIn("queue-idle", payload["reasons"][0])
-
-

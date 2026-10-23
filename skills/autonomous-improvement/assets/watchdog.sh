@@ -34,6 +34,21 @@
 #                     (default 604800 = 7 days; keeps the file bounded)
 #   ORCH_NUDGE_MODELS  how many ladder models to try per tick (default 3)
 #   ORCH_MIN_INTERVAL  minimum seconds between nudge rounds (default 600)
+#   ORCH_AUTHORIZED_PROVIDERS  providers the owner authorises for the fleet
+#                     (default: opencode). A ladder entry outside this list is
+#                     refused and logged: rotation must never move the session
+#                     onto a provider the owner did not approve. (Verified
+#                     2026-10-23: an ad-hoc `-m` probe left the live session on
+#                     a non-authorised gateway; the owner noticed first.)
+#   ORCH_SWITCH_SESSION_MODEL  1 = once a ladder model carries a nudge, make it
+#                     the session's model too, so the next interactive turn
+#                     also runs on a live, authorised pool (default: 1)
+#   ORCH_ALERT_INTERVAL seconds between repeated exhaustion alerts (default 21600)
+#   ORCH_RETRY_AFTER_EXHAUSTION  seconds to wait after a tick exhausted every
+#                     model before nudging again (default 1800). Without it a
+#                     dead pool floods the session: each attempt delivers its
+#                     message BEFORE the model call fails, so a 4-model ladder
+#                     at a 20-minute timer is 4 stale messages per tick.
 #
 # Exit codes: 0 = tick done (nothing to do, or a model woke the session);
 #             3 = total failure (every attempted model failed — wire
@@ -70,6 +85,12 @@ LADDER="${ORCH_MODEL_LADDER:-}"
 COOLDOWN="${ORCH_MODEL_COOLDOWN:-3600}"
 MAX_MODELS="${ORCH_NUDGE_MODELS:-3}"
 MIN_INTERVAL="${ORCH_MIN_INTERVAL:-600}"
+AUTHORIZED="${ORCH_AUTHORIZED_PROVIDERS:-opencode}"
+SWITCH_MODEL="${ORCH_SWITCH_SESSION_MODEL:-1}"
+ALERT_FILE="$STATE_DIR/ALERT.md"
+ALERT_INTERVAL="${ORCH_ALERT_INTERVAL:-21600}"
+EXHAUSTED_FILE="$STATE_DIR/exhausted_at"
+RETRY_AFTER_EXHAUSTION="${ORCH_RETRY_AFTER_EXHAUSTION:-1800}"
 
 mkdir -p "$STATE_DIR"
 
@@ -129,6 +150,14 @@ prune_failures() {
 }
 prune_failures
 
+# A DEAD MODEL is neither a quota exhaustion nor an outage: the pool/model was
+# removed or disabled, and retrying it on this tick or the next changes
+# nothing. Rotate at once and park it in the cooldown list. (Verified
+# 2026-10-23: the installed watchdog had no such class, so `Model unavailable`
+# fell through to the success branch — seven hours of nudges answered
+# "Model unavailable" were logged as "done", and the ladder never ran.)
+DEAD_MODEL_RE='model unavailable|model is not available|no such model|model not found|unknown model|model disabled'
+
 failed_recently() { # $1: model id -> 0 when the model is in cooldown
   # `m` MUST be local: read into a global would clobber the caller's
   # ladder loop variable, and an EMPTY failure file (which the TTL prune
@@ -150,13 +179,71 @@ mark_failed() { # $1: model id
   printf '%s %s\n' "$model" "$now" >>"$FAIL_FILE"
 }
 
+authorized_model() { # $1: model id -> 0 when its provider is owner-authorised
+  local provider="${1%%/*}"
+  case " $AUTHORIZED " in
+    *" $provider "*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+switch_session_model() { # $1: model id that just carried a nudge
+  local provider id
+  [ -n "${1:-}" ] || return 0
+  [ "$SWITCH_MODEL" = "1" ] || return 0
+  provider="${1%%/*}"
+  id="${1#*/}"
+  # 204 No Content on success; the endpoint is documented as
+  # "Switch the model used by subsequent provider turns".
+  if opencode api post "/api/session/$SID/model" \
+      -d "{\"model\":{\"id\":\"$id\",\"providerID\":\"$provider\"}}" >/dev/null 2>&1; then
+    echo "$(date -Is) session model switched to '$1': the previous default failed this tick, so the next interactive turn runs on the live pool too" >>"$LOG"
+    printf '%s\n' "$1" >"$STATE_DIR/last_good_model"
+  else
+    echo "$(date -Is) could not switch the session model to '$1'; the ladder still carries the next nudge" >>"$LOG"
+  fi
+}
+
+alert_exhausted() { # no live model could revive the session this tick
+  local now
+  now=$(date +%s)
+  if [ -f "$ALERT_FILE" ] && [ $(( now - $(stat -c %Y "$ALERT_FILE") )) -lt "$ALERT_INTERVAL" ]; then
+    return 0
+  fi
+  {
+    echo "# Watchdog alert — $(date -Is)"
+    echo
+    echo "Session \`$SID\` did not wake: every model tried this tick failed."
+    echo
+    echo "Tried: $TRIED"
+    echo
+    echo "## Next actions (in order)"
+    echo
+    echo '1. Probe live models **in a throwaway session**, never with the live session id:'
+    echo '   `cd /tmp && opencode run -m provider/model "reply OK"` — and only provider models the owner authorises.'
+    echo '2. Put the live ones into `ORCH_MODEL_LADDER` in `watchdog.env`, then `systemctl --user restart <watchdog unit>`.'
+    echo '3. If the session default itself is dead, switch it:'
+    echo "   \`opencode api post /api/session/$SID/model -d '{\"model\":{\"id\":\"<id>\",\"providerID\":\"<provider>\"}}'\`"
+    echo
+    echo "Last attempt output (tail of nudge.out):"
+    echo '```'
+    tail -c 600 "$OUT" 2>/dev/null
+    echo '```'
+  } >"$ALERT_FILE"
+  echo "$(date -Is) ALERT: no model could wake the session; wrote $ALERT_FILE" >>"$LOG"
+}
+
 # Models to try this tick: the ladder minus models in cooldown. An empty
 # ladder means "use the session default" (no rotation is possible then).
 candidates=()
 if [ -n "$LADDER" ]; then
-  for model_id in $LADDER; do
-    failed_recently "$model_id" && continue
-    candidates+=("$model_id")
+  for m in $LADDER; do
+    if ! authorized_model "$m"; then
+      echo "$(date -Is) refusing ladder model '$m': provider '${m%%/*}' is not in ORCH_AUTHORIZED_PROVIDERS ('$AUTHORIZED')" >>"$LOG"
+      continue
+    fi
+    failed_recently "$m" && continue
+    candidates+=("$m")
     [ "${#candidates[@]}" -ge "$MAX_MODELS" ] && break
   done
   if [ "${#candidates[@]}" -eq 0 ]; then
@@ -186,16 +273,31 @@ if [ -f "$STATE_DIR/last_nudge" ]; then
     exit 0
   fi
 fi
+
+# The previous tick exhausted every model. Do not keep injecting messages into
+# a session that cannot run a turn: each attempt delivers its message before
+# the model call fails. Back off, keep the heartbeat stale (the state is still
+# broken), and let the alert carry the news.
+if [ -f "$EXHAUSTED_FILE" ]; then
+  SINCE_EXHAUSTED=$(( $(date +%s) - $(stat -c %Y "$EXHAUSTED_FILE") ))
+  if [ "$SINCE_EXHAUSTED" -lt "$RETRY_AFTER_EXHAUSTION" ]; then
+    echo "$(date -Is) previous tick exhausted every model ${SINCE_EXHAUSTED}s ago; backing off without nudging (see $ALERT_FILE)" >>"$LOG"
+    exit 0
+  fi
+fi
 touch "$STATE_DIR/last_nudge"
 
 # Mark the attempt before running so a crash does not cause a nudge storm.
 touch "$HB"
+ATTEMPT_TS=$(date +%s)
 
 OUT="$STATE_DIR/nudge.out"
 attempt=0
+TRIED=""
 for model in "${candidates[@]}"; do
   attempt=$(( attempt + 1 ))
   label="${model:-session-default}"
+  TRIED="${TRIED}${TRIED:+, }${label}"
   echo "$(date -Is) nudge attempt $attempt on model '$label'" >>"$LOG"
   timeout --signal=TERM --kill-after=60 "$NUDGE_TIMEOUT" \
     bash -c "$RESUME_CMD" _ "$SID" "$NUDGE_MSG" "$model" >"$OUT" 2>&1
@@ -207,23 +309,50 @@ for model in "${candidates[@]}"; do
   fi
   if quota_failure "$OUT"; then
     echo "$(date -Is) model '$label' answered with a quota/balance failure; rotating" >>"$LOG"
-    if [ -n "$model" ]; then
-      mark_failed "$model"
-    fi
+    [ -n "$model" ] && mark_failed "$model"
     continue
   fi
-  echo "$(date -Is) nudge on '$label' finished with exit $RC (124 = timed out); done" >>"$LOG"
+  if grep -Eiq "$DEAD_MODEL_RE" "$OUT"; then
+    echo "$(date -Is) model '$label' is dead (not quota, not outage); rotating and parking it" >>"$LOG"
+    [ -n "$model" ] && mark_failed "$model"
+    continue
+  fi
+  if [ "$RC" -eq 124 ]; then
+    # A timeout is ambiguous: the turn may have run for the full window, or
+    # the model may have been preempted before it ever woke. The heartbeat is
+    # the only trustworthy witness - the session touches it when it wakes.
+    if [ "$(stat -c %Y "$HB" 2>/dev/null || echo 0)" -gt "$ATTEMPT_TS" ]; then
+      echo "$(date -Is) nudge on '$label' timed out but the session woke (heartbeat moved); done" >>"$LOG"
+      rm -f "$EXHAUSTED_FILE"
+      exit 0
+    fi
+    echo "$(date -Is) nudge on '$label' timed out without the heartbeat moving; rotating" >>"$LOG"
+    continue
+  fi
+  if [ "$RC" -ne 0 ]; then
+    # An unclassified failure is still a failure. Treating it as success is
+    # how a dead pool stays silent for hours (verified 2026-10-23: seven hours
+    # of `Model unavailable` logged as "done", ladder never tried).
+    echo "$(date -Is) nudge on '$label' exited $RC without a known signature; rotating" >>"$LOG"
+    continue
+  fi
+  echo "$(date -Is) nudge on '$label' finished with exit 0; done" >>"$LOG"
+  [ -n "$model" ] && switch_session_model "$model"
+  rm -f "$EXHAUSTED_FILE"
   exit 0
 done
 
-# Every attempt failed on quota, so nobody actually woke up. Undo the
-# attempt-marker above: backdate the heartbeat past the staleness threshold
-# so the next timer tick (bounded by last_nudge/MIN_INTERVAL) retries at
-# once instead of waiting out a freshness the session never earned.
+# Every attempt failed, so nobody actually woke up. Undo the attempt-marker:
+# backdate the heartbeat past the staleness threshold so the next timer tick
+# (bounded by last_nudge/MIN_INTERVAL) retries at once instead of waiting out
+# a freshness the session never earned. Then leave evidence the owner can see
+# without reading this log.
 #
 # Exit 3 (distinct distress code, issue #19): the tick ended in total
 # failure. Wire systemd `OnFailure=` or the owner heartbeat to it —
 # otherwise a dead fleet is discovered by silence.
 touch -d "@$(( $(date +%s) - MAX_AGE - 1 ))" "$HB"
-echo "$(date -Is) every attempted model failed with a quota error; heartbeat left stale for the next tick; exiting 3 (total failure)" >>"$LOG"
+touch "$EXHAUSTED_FILE"
+alert_exhausted
+echo "$(date -Is) every attempted model failed; heartbeat left stale, an alert written, and exiting 3 (total failure)" >>"$LOG"
 exit 3
