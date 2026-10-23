@@ -283,8 +283,17 @@ model will not lift on its own.
 
 ```sh
 ./assets/install-watchdog.sh
+./assets/install-watchdog.sh --check      # is the installed copy current?
 ./assets/install-watchdog.sh --uninstall
 ```
+
+**Installing is a copy, not a link — verify it is current.** A fix in
+`assets/` does nothing to a running fleet until it is reinstalled. Verified
+2026-10-23: the fleet ran a copy one day older than the asset (it still
+poisoned the heartbeat and had no outage class) while the asset already fixed
+both — the log looked like the old bug for seven hours after the fix existed.
+`--check` exits non-zero when the installed scripts differ from the assets;
+run it at every cold start and after every skill update.
 
 The installer is idempotent: copies `watchdog.sh` to
 `~/.local/share/orchestrator/`, copies
@@ -410,13 +419,60 @@ fleet parks a healthy model or burns a ladder against a broken endpoint.
 |---|---|---|
 | **Quota** | `rate limit`, `429`, `insufficient balance`, `balance is at $0` | **Rotate** the model; record the pool as failed (cooldown). |
 | **Outage** | `Endpoint is unavailable`, `upstream request failed`, `503`, `connection reset`, `overloaded` | **Do not rotate, do not park a pool.** The model is not exhausted: every ladder entry would hit the same broken endpoint, and marking one dead parks a usable model for an hour. Log it and let the next tick retry. |
+| **Dead model** | `Model unavailable`, `no such model`, `unknown model`, `model disabled` | **Rotate** at once and park it: the pool was removed or disabled, so retrying it changes nothing. |
 | **Task failure** | the worker died with its work intact | Forensics, then re-dispatch (see *Failure anatomy*). |
 
-The watchdog's two signature lists keep the classes apart: `QUOTA_RE` marks a
-model failed, `OUTAGE_RE` ends the tick with the cooldown list untouched.
-"overloaded" belongs to the **outage** list — a gateway saying "overloaded" is
-usually sick, not out of quota. (Verified 2026-10-22: a fleet lost two tabs in
-one tick to `Endpoint is unavailable` while the pool was healthy.)
+The watchdog's signature lists only decide *how* to record a failure —
+`QUOTA_RE` and `DEAD_MODEL_RE` park the model, `OUTAGE_RE` ends the tick with
+the cooldown list untouched. "overloaded" belongs to the **outage** list — a
+gateway saying "overloaded" is usually sick, not out of quota. (Verified
+2026-10-22: a fleet lost two tabs in one tick to `Endpoint is unavailable`
+while the pool was healthy.)
+
+**Exit status is the contract; the signature is only a label.** A non-zero
+exit that matches no list still rotates. Verified 2026-10-23: the fleet's
+session default was a removed free pool, every nudge exited 1 with
+`Model unavailable`, no list matched, the tick was logged "done", and the
+ladder was never tried — seven hours of nudges delivered into a session that
+could not run a turn. The "done" line in the log is what hid it.
+
+**A timeout is judged by the heartbeat, not by the exit code.** After
+`ORCH_NUDGE_TIMEOUT` the attempt is ambiguous: a long turn and a preempted
+turn that never woke look identical in the output. The session touches
+`last_beat` when it wakes, so a heartbeat newer than the attempt start means
+the turn ran (do not inject a second nudge); an unchanged heartbeat means
+nothing woke (rotate).
+
+**Exhaustion leaves an out-of-band alert.** When every model fails there is
+nothing left to try in-process: write `ALERT.md` in the state directory
+(deduplicated by `ORCH_ALERT_INTERVAL`) with the models tried, the last output
+and the exact recovery commands. A watchdog that fails quietly is
+indistinguishable from an idle fleet.
+
+**A dead fleet must not flood the session.** Each nudge attempt delivers its
+message *before* the model call fails, so a tick that exhausts a four-model
+ladder leaves four questions in the conversation — and a 20-minute timer
+repeats that all day. After an exhausted tick the watchdog backs off for
+`ORCH_RETRY_AFTER_EXHAUSTION` (default 1800) and logs that it did; the alert
+already carries the news. Verified 2026-10-22: six stale nudges queued in a
+session that could not answer one.
+
+**The ladder is owner-scoped.** `ORCH_AUTHORIZED_PROVIDERS` (default
+`opencode`) is the owner's approved pool; a ladder entry from any other
+provider is refused and logged, never tried. The same rule governs ad-hoc
+probing: **a health check uses a throwaway session** (`cd /tmp && opencode run
+-m provider/model "reply OK"`), never `-s <live session>`. `run -s` *resumes*
+the session and persists the model, so a "probe" both injects a message into
+the real conversation and moves the fleet onto a model the owner did not
+authorise (verified 2026-10-23 — the owner noticed the switch before the agent
+did).
+
+**Rotation per turn is not a switch.** A ladder model that carries a nudge
+proves it is alive; make it the session's model too
+(`ORCH_SWITCH_SESSION_MODEL`, default on, via the documented
+`POST /api/session/<id>/model`) so the next interactive turn also runs on a
+live pool. Rotating only the headless nudge leaves the owner's own turns on
+the dead default — exactly the "the model did not get switched" failure.
 
 A quota error is a routing decision, not a retry decision. The orchestrator
 rotates the **model**, it never re-dispatches the one that just failed.
