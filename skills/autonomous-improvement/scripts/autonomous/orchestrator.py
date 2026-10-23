@@ -228,6 +228,45 @@ def _run_step(name: str, argv: Optional[List[str]], cwd: Path) -> None:
         )
 
 
+def _record_weakening_hits(root: Path, findings: List[Dict[str, Any]], mode: str) -> None:
+    """Persist the verify-gate's weakening signals into the evidence artifact.
+
+    The gate's verdict must outlive the gate (issue #14): the print evaporates
+    with the invocation, and the fail-mode exception is visible only to
+    whoever reruns it. The artifact is the durable place. No artifact, no
+    record — the warning says so instead of fabricating a schema-less file
+    that the evidence gate itself would then reject.
+    """
+    artifact_path = root / ".autonomous" / "evidence.json"
+    if not artifact_path.exists():
+        print("[warn] weakening hits not recorded: no evidence artifact yet")
+        return
+    try:
+        artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        print("[warn] weakening hits not recorded: artifact is not valid JSON")
+        return
+    if not isinstance(artifact, dict):
+        print("[warn] weakening hits not recorded: artifact is not an object")
+        return
+    gate = artifact.get("verify_gate")
+    if not isinstance(gate, dict):
+        gate = {}
+    gate["weakening_hits"] = [
+        {
+            "kind": finding.get("kind"),
+            "file": finding.get("file"),
+            "line": finding.get("line"),
+            "text": finding.get("text"),
+        }
+        for finding in findings
+    ]
+    gate["weakening_mode"] = mode
+    artifact["verify_gate"] = gate
+    write_json_atomic(artifact_path, artifact)
+    print(f"[*] weakening hits recorded into {artifact_path}")
+
+
 def cmd_verify_gate(args: argparse.Namespace) -> int:
     worktree = Path(args.worktree).resolve()
     if not worktree.exists():
@@ -276,6 +315,7 @@ def cmd_verify_gate(args: argparse.Namespace) -> int:
 
         findings = twc.check(root, base, twc._test_globs(cfg))
         if findings:
+            _record_weakening_hits(root, findings, weakening_mode)
             listing = "\n  ".join(
                 f"{f['kind']}: {f['file']}" + (f" — {f.get('text')}" if f.get("text") else "")
                 for f in findings

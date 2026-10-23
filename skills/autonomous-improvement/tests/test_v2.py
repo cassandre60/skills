@@ -1808,8 +1808,12 @@ class EvidenceTests(RepoTestCase):
     TEST_CMD = f'{PYTHON} -c "from src.app import f; assert f(1, 1) is True; assert f(1, 2) is False"'
 
     def _repo(self) -> Path:
-        repo, _ = python_repo(self.tmp)
+        # The evidence flow pins its origin; the fixture provides the
+        # production shape (a pushed origin/main) instead of degrading to
+        # HEAD silently (issue #14).
+        repo, _ = python_repo(self.tmp, with_origin=True)
         commit(repo, "base")
+        push(repo)
         return repo
 
     def _engine_report(self, repo: Path, mutated: str) -> Path:
@@ -1846,12 +1850,72 @@ class EvidenceTests(RepoTestCase):
         self.assertNotEqual(artifact["runs"]["red"]["exit"], 0)
         self.assertEqual(artifact["runs"]["green"]["exit"], 0)
         self.assertEqual(artifact["runs"]["pass_to_pass"]["exit"], 0)
+        # Issue #14: each run records what actually ran, not just what came out.
+        import shlex as _shlex
+
+        expected_argv = _shlex.split(self.TEST_CMD)
+        for run_name in ("red", "green", "pass_to_pass"):
+            self.assertEqual(artifact["runs"][run_name]["argv"], expected_argv)
+        # The fixture engine report carries no seed; the artifact mirrors it
+        # (a generated mutant's seed rides with the artifact instead).
+        self.assertNotIn("seed", artifact)
         self.assertEqual(artifact["mutant"]["mutated"], "    return a != b")
         # The mutant must never survive the evidence run itself.
         self.assertEqual(
             (repo / "src" / "app.py").read_text(), "def f(a, b):\n    return a == b\n"
         )
         self.assertFalse((repo / "src" / "app.py.mutbak").exists())
+
+    def test_engine_seed_is_pinned_into_the_artifact(self):
+        # A generated mutant is reproducible only through its seed; the
+        # artifact must carry the spec's seed verbatim (issue #14).
+        import hashlib as _hashlib
+
+        repo = self._repo()
+        report = {
+            "source": "src/app.py",
+            "seed": 424242,
+            "survived": [
+                {
+                    "file": "src/app.py",
+                    "line": 2,
+                    "column": 11,
+                    "original": "    return a == b",
+                    "mutated": "    return a != b",
+                    "description": "fixture mutant",
+                }
+            ],
+        }
+        path = repo / "engine.json"
+        path.write_text(json.dumps(report), encoding="utf-8")
+        result = script(
+            repo, "evidence.py", "mutant",
+            "--engine-json", str(path), "--index", "0",
+            "--test-cmd", self.TEST_CMD,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        artifact = json.loads((repo / ".autonomous" / "evidence.json").read_text())
+        self.assertEqual(artifact["seed"], 424242)
+        self.assertEqual(
+            artifact["mutant"]["source_sha256"],
+            _hashlib.sha256((repo / "src" / "app.py").read_bytes()).hexdigest(),
+        )
+
+    def test_base_sha_hard_fails_when_base_ref_does_not_resolve(self):
+        # Issue #14: a base ref that will not resolve used to fall back to
+        # HEAD, making the ancestor check trivially true. Hard-fail instead:
+        # evidence whose origin cannot be pinned must never be produced.
+        repo = self._repo()
+        report = self._engine_report(repo, "    return a != b")
+        result = script(
+            repo, "evidence.py", "mutant",
+            "--engine-json", str(report), "--index", "0",
+            "--test-cmd", self.TEST_CMD,
+            "--base", "refs/heads/no-such-base-ref",
+        )
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("cannot resolve", result.stderr)
+        self.assertFalse((repo / ".autonomous" / "evidence.json").exists())
 
     def test_mutant_not_killed_exits_nonzero(self):
         repo = self._repo()
@@ -1915,14 +1979,62 @@ class EvidenceTests(RepoTestCase):
         created = script(repo, "orchestrator.py", "create-worktree", "--slug", "weak")
         self.assertEqual(created.returncode, 0, created.stderr)
         worktree = repo.parent / f"{repo.name}-weak"
+        weakened = "from src.app import f\n\ndef test_f():\n    pass\n"
         write(
             worktree / "tests" / "test_app.py",
-            "from src.app import f\n\ndef test_f():\n    pass\n",
+            weakened,
         )
         commit(worktree, "weaken the test")
+        # A valid-looking artifact must pre-exist in the worktree so the gate
+        # can record the weakening hits it finds into it (issue #14): the
+        # print/raise path leaves no durable trace otherwise.
+        import hashlib as _hashlib
+
+        mutation_dir = worktree / ".autonomous"
+        mutation_dir.mkdir()
+        head_sha = run(["git", "rev-parse", "HEAD"], cwd=worktree).stdout.strip()
+        artifact = {
+            "schema": 1,
+            "kind": "mutant",
+            "generated_at": "2026-10-23T00:00:00+00:00",
+            "base_ref": "HEAD",
+            "base_sha": head_sha,
+            "head_sha": head_sha,
+            "test_cmd": "python3 -m test_of_nothing",
+            "pass_to_pass_cmd": "python3 -m test_of_nothing",
+            "mutant": {
+                "file": "tests/test_app.py",
+                "line": 3,
+                "original": "def test_f():\n    assert False\n",
+                "mutated": "def test_f():\n    pass\n",
+                "description": "fixture mutant",
+                "source_sha256": _hashlib.sha256(weakened.encode()).hexdigest(),
+            },
+            "runs": {
+                "red": {"exit": 1, "timed_out": False, "duration_s": 0.1, "summary": "red"},
+                "green": {"exit": 0, "timed_out": False, "duration_s": 0.1, "summary": "green"},
+                "pass_to_pass": {"exit": 0, "timed_out": False, "duration_s": 0.1, "summary": "p2p"},
+            },
+            "verdict": "killed",
+        }
+        artifact_path = mutation_dir / "evidence.json"
+        artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
+
         result = script(repo, "orchestrator.py", "verify-gate", "--worktree", str(worktree))
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("weakening", result.stdout + result.stderr)
+        # The hits must outlive the gate: recorded into the artifact, keyed by
+        # the gate, not just printed into a log nobody archives.
+        recorded = json.loads(artifact_path.read_text())
+        hits = recorded["verify_gate"]["weakening_hits"]
+        self.assertTrue(
+            any(h.get("file") == "tests/test_app.py" for h in hits), hits
+        )
+        self.assertTrue(
+            all("kind" in h for h in hits), hits
+        )
+        self.assertEqual(recorded["verify_gate"]["weakening_mode"], "fail")
+        self.assertIn("recorded", result.stdout + result.stderr)
         script(repo, "orchestrator.py", "cleanup-worktree", "--slug", "weak", "--force")
 
 

@@ -122,6 +122,8 @@ def _run(argv: List[str], cwd: Path, timeout: float) -> Dict[str, Any]:
         "timed_out": timed_out,
         "duration_s": round(time.time() - start, 3),
         "summary": (lines[-1][:200] if lines else ""),
+        # What actually ran, so the artifact outlives the invocation (issue #14).
+        "argv": list(argv),
     }
 
 
@@ -133,7 +135,12 @@ def _rev_parse(root: Path, ref: str) -> Optional[str]:
 
 
 def _base_sha(root: Path, base_ref: str) -> str:
-    return _rev_parse(root, base_ref) or _rev_parse(root, "HEAD") or "unknown"
+    """Resolve the base ref, or refuse: evidence without a pin-able origin
+    would make the ancestor check in ``validate_artifact`` trivially true."""
+    sha = _rev_parse(root, base_ref)
+    if not sha:
+        raise UsageError(f"cannot resolve base ref: {base_ref}")
+    return sha
 
 
 def _is_ancestor(root: Path, ancestor: str, descendant: str = "HEAD") -> bool:
@@ -248,6 +255,12 @@ def cmd_mutant(args: argparse.Namespace) -> int:
         "runs": runs,
         "verdict": verdict,
     }
+    # A *generated* mutant is reproducible only through its seed; a hand-named
+    # one has none, and the artifact then carries nothing (the spec's own rule:
+    # "seed/scope if generated").
+    seed = report.get("seed")
+    if seed is not None:
+        artifact["seed"] = seed
     path = _write_artifact(root, args, artifact)
     return _report(runs, verdict, path)
 
