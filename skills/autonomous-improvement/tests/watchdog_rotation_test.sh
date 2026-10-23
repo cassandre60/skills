@@ -121,6 +121,11 @@ run_watchdog() {
     bash "$ASSETS" >/dev/null 2>&1
 }
 
+run_watchdog_rc() { # same, but the exit code is kept for contract assertions
+  run_watchdog
+  LAST_RC=$?
+}
+
 # --- case 0: an infrastructure outage is NOT a quota failure -------------
 # The model is not exhausted. Rotating would burn every ladder entry against
 # the same broken endpoint, and marking one dead would park a usable model for
@@ -170,6 +175,12 @@ fi
 # --- case 2: every model fails -> both recorded -------------------------
 write_fake_opencode "free" "free"
 run_watchdog
+WD_RC=$?
+if [ "$WD_RC" -ne 0 ]; then
+  ok "total-failure tick exits nonzero so OnFailure can fire"
+else
+  fail "total-failure tick exited 0; systemd cannot signal distress"
+fi
 if grep -q '^opencode/alpha-free ' "$TMP/state/model_failures" 2>/dev/null &&
   grep -q '^opencode/beta-free ' "$TMP/state/model_failures" 2>/dev/null; then
   ok "both ladder models recorded when all fail"
@@ -201,10 +212,41 @@ else
   fail "cooldown was not respected"
 fi
 
-# --- case 4: a dead model is a failure, not a success ------------------
+# --- case 4: a SUCCESSFUL nudge that merely MENTIONS the limits ---------
+# Tightened signatures: a quota term counts only on an ERROR-shaped line, so
+# an agent summarizing the journal ("rate limit handled, quota notes filed")
+# does not park its model. Verified failure this replaces: the loose
+# substring match parked a healthy model whose summary discussed limits.
+write_fake_opencode_mention() {
+  cat >"$TMP/bin/opencode" <<'EOF'
+#!/bin/bash
+echo "wake: journal summary — rate limit hit twice yesterday; quota notes archived"
+echo "housekeeping done"
+EOF
+  chmod +x "$TMP/bin/opencode"
+}
+write_fake_opencode_mention
+run_watchdog_rc
+if [ -s "$TMP/state/model_failures" ]; then
+  fail "mention-only output parked a model (loose quota signatures)"
+else
+  ok "a success that mentions limits parks nobody"
+fi
+if grep -q "rotating" "$TMP/state/watchdog.log"; then
+  fail "rotation happened for a successful nudge"
+else
+  ok "no rotation for a successful nudge"
+fi
+if [ "$LAST_RC" -eq 0 ]; then
+  ok "successful tick exits 0"
+else
+  fail "successful tick exited $LAST_RC"
+fi
+
+# --- case 4b: a dead model is a failure, not a success -------------------
 # Verified production failure (2026-10-23): `Error: Model unavailable` matched
-# neither QUOTA_RE nor OUTAGE_RE, fell through to the success branch, and the
-# ladder was never tried for seven hours.
+# neither the quota nor outage signatures, fell through to the success branch,
+# and the ladder was never tried for seven hours.
 write_fake_dead "alpha-free"
 run_watchdog
 if grep -q -- '-m opencode/beta-free' "$TMP/state/watchdog.log"; then
@@ -223,7 +265,7 @@ else
   ok "the dead-model nudge was not logged as a success"
 fi
 
-# --- case 5: an unclassified non-zero exit still rotates ---------------
+# --- case 4c: an unclassified non-zero exit still rotates ----------------
 # The general form of the bug: the classifier only knows the errors it was
 # taught, so any new error string becomes a silent success. Exit status is
 # the contract; the signature only decides how to record it.
@@ -256,7 +298,7 @@ run_watchdog_timeout() {
     bash "$ASSETS" >/dev/null 2>&1
 }
 
-# --- case 6: a timeout that never moved the heartbeat rotates ----------
+# --- case 5: a timeout that never moved the heartbeat rotates ------------
 # A preempted model hangs until the nudge budget runs out. Nothing woke, so
 # the next model must be tried within the same tick.
 write_fake_timeout
@@ -267,7 +309,7 @@ else
   fail "a timeout without a heartbeat movement was treated as done"
 fi
 
-# --- case 7: a timeout that did move the heartbeat is a wake -----------
+# --- case 5b: a timeout that did move the heartbeat is a wake ------------
 # The turn may simply be long. The session's own heartbeat is the witness:
 # if it moved after the attempt started, do not inject a second nudge.
 write_fake_timeout wake
@@ -283,7 +325,7 @@ else
   fail "the woken timeout was not explained"
 fi
 
-# --- case 8: the ladder may only name owner-authorised providers -------
+# --- case 6: the ladder may only name owner-authorised providers ---------
 # An operator once left a live session on a gateway the owner had not
 # authorised; the watchdog must refuse such an entry outright.
 rm -f "$TMP/state/watchdog.log" "$TMP/state/model_failures" "$TMP/state/last_nudge" \
@@ -311,7 +353,7 @@ else
   fail "the authorised model did not run"
 fi
 
-# --- case 9: the model that carried the nudge becomes the session model -
+# --- case 7: the model that carried the nudge becomes the session model --
 # The owner's complaint on 2026-10-23 was "the model did not get switched":
 # rotating per turn is not enough if every interactive turn stays on the dead
 # default.
@@ -324,13 +366,75 @@ else
   fail "the session model was not switched after rotation"
 fi
 
-# --- case 10: an exhausted tick must not flood the session -------------
+# --- case 8: model_failures entries older than the TTL are pruned --------
+write_fake_opencode "nomatch" "alpha-free"
+rm -f "$TMP/state/watchdog.log" "$TMP/state/last_nudge"
+printf 'ses_TEST\n' >"$TMP/state/opencode_session_id"
+touch -d '3 hours ago' "$TMP/state/last_beat"
+printf 'opencode/gamma-free %s\nopencode/delta-free %s\n' \
+  "$(( $(date +%s) - 8 * 86400 ))" "$(date +%s)" >"$TMP/state/model_failures"
+PATH="$TMP/bin:$PATH" ORCH_STATE_DIR="$TMP/state" \
+  ORCH_MODEL_LADDER="opencode/alpha-free opencode/beta-free" \
+  ORCH_NUDGE_TIMEOUT=20 ORCH_MIN_INTERVAL=0 ORCH_HB_MAX_AGE=60 \
+  bash "$ASSETS" >/dev/null 2>&1
+if grep -q '^opencode/gamma-free ' "$TMP/state/model_failures" 2>/dev/null; then
+  fail "8-day-old model_failures entry was not pruned"
+else
+  ok "stale model_failures entry pruned"
+fi
+if grep -q '^opencode/delta-free ' "$TMP/state/model_failures" 2>/dev/null; then
+  ok "fresh cooldown entry survives the prune"
+else
+  fail "prune removed a still-valid cooldown entry"
+fi
+
+# --- case 8b: a tick that ends in total failure exits 3 ------------------
+# Exit 3 is the distress code: systemd `OnFailure=` or an owner hook fires
+# on it. A silent fleet is the failure mode the watchdog exists to prevent.
+write_fake_opencode "free" "free"
+run_watchdog_rc
+if [ "$LAST_RC" -eq 3 ]; then
+  ok "a tick that ends in total failure exits 3"
+else
+  fail "total-failure tick exited $LAST_RC (expected 3)"
+fi
+
+# --- case 8c: an EMPTY model_failures file must not break the ladder ------
+# Regression: failed_recently() read into a global 'm', clobbering the
+# caller's ladder loop variable. With the file present but empty, read's
+# EOF blanked the model and the ladder silently degraded to the session
+# default - the very failure the watchdog exists to prevent. The pruning
+# added in issue #19 can produce exactly this state.
+write_fake_opencode "alpha-free" "beta-free"
+# 8b left the exhaustion state behind (it ended in total failure by design);
+# an exhaustion back-off would skip this tick entirely and mask the ladder.
+rm -f "$TMP/state/watchdog.log" "$TMP/state/last_nudge" \
+      "$TMP/state/exhausted_at" "$TMP/state/ALERT.md"
+printf 'ses_TEST\n' >"$TMP/state/opencode_session_id"
+touch -d '3 hours ago' "$TMP/state/last_beat"
+: >"$TMP/state/model_failures"   # exists, but empty
+PATH="$TMP/bin:$PATH" ORCH_STATE_DIR="$TMP/state" \
+  ORCH_MODEL_LADDER="opencode/alpha-free opencode/beta-free" \
+  ORCH_NUDGE_TIMEOUT=20 ORCH_MIN_INTERVAL=0 ORCH_HB_MAX_AGE=60 \
+  bash "$ASSETS" >/dev/null 2>&1
+if grep -q -- '-m opencode/alpha-free' "$TMP/state/watchdog.log"; then
+  ok "empty model_failures still uses the ladder's first model"
+else
+  fail "empty model_failures broke the ladder (fell back to the session default)"
+fi
+
+# --- case 9: an exhausted tick must not flood the session ----------------
 # Each attempt delivers its message BEFORE the model call fails. With every
 # model dead, one tick per 20 minutes would pile messages into a session that
 # cannot run a turn (verified 2026-10-22: six stale nudges queued). The next
 # tick must back off and leave the alert to speak.
 write_fake_unknown_error
-run_watchdog
+run_watchdog_rc
+if [ "$LAST_RC" -eq 3 ]; then
+  ok "the unclassified total failure also exits 3"
+else
+  fail "unclassified total-failure tick exited $LAST_RC (expected 3)"
+fi
 : >"$TMP/state/watchdog.log"
 touch -d '3 hours ago' "$TMP/state/last_beat"
 rm -f "$TMP/state/last_nudge"
@@ -338,6 +442,12 @@ PATH="$TMP/bin:$PATH" ORCH_STATE_DIR="$TMP/state" \
   ORCH_MODEL_LADDER="opencode/alpha-free opencode/beta-free" \
   ORCH_NUDGE_TIMEOUT=20 ORCH_MIN_INTERVAL=0 ORCH_HB_MAX_AGE=60 \
   bash "$ASSETS" >/dev/null 2>&1
+BACKOFF_RC=$?
+if [ "$BACKOFF_RC" -eq 0 ]; then
+  ok "a backed-off tick exits 0 (the alert is the signal, not a crash)"
+else
+  fail "backed-off tick exited $BACKOFF_RC (expected 0)"
+fi
 if grep -q 'backing off without nudging' "$TMP/state/watchdog.log"; then
   ok "an exhausted tick backs off instead of flooding the session"
 else

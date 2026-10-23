@@ -1,0 +1,6 @@
+#!/bin/sh
+# Deterministic stub: one open PR, red in-diff (failure on the head's own sha,
+# not the referee's), so "red_kind" should classify as "in-diff".
+cat <<'JSON'
+[{"number": 42, "title": "Stream A: scheduler audit", "headRefName": "task/red-42", "headRefOid": "red42sha", "checks_sha": "red42sha", "statusCheckRollup": [{"name": "unit-tests", "status": "COMPLETED", "conclusion": "FAILURE"}], "labels": [], "createdAt": "2026-10-20T10:00:00Z"}]
+JSON

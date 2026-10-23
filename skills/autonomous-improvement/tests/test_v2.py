@@ -36,6 +36,7 @@ from support import (
 
 sys.path.insert(0, str(SCRIPTS))
 import common as common_module  # noqa: E402
+import hashlib  # noqa: E402
 import ledger as ledger_module  # noqa: E402
 import mutants as mutants_module  # noqa: E402
 import mutation_engine as engine_module  # noqa: E402
@@ -624,7 +625,8 @@ class LedgerTests(RepoTestCase):
         stream_a = script(repo, "ledger.py", "next", "--stream", "A", "--json")
         alias = script(repo, "ledger.py", "next", "--stream", "1", "--json")
         self.assertEqual(json.loads(stream_a.stdout)["candidates"], json.loads(alias.stdout)["candidates"])
-        planned = script(repo, "ledger.py", "next", "--stream", "C")
+        # C is available since issue #25; D is still a planned letter.
+        planned = script(repo, "ledger.py", "next", "--stream", "D")
         self.assertEqual(planned.returncode, 2)
         self.assertIn("planned, not implemented", planned.stderr)
 
@@ -1707,7 +1709,9 @@ class StreamRegistryTests(unittest.TestCase):
         # non-available letter must refuse with its full name, so a session
         # cannot drift into un-tooled work under a planned letter.
         for stream, info in common_module.STREAMS.items():
-            if info["status"] == "available":
+            # Gated letters (L) pass normalize on purpose: their caller-side
+            # kill switch owns the refusal.
+            if info["status"] != "planned":
                 continue
             with self.assertRaises(common_module.UsageError) as ctx:
                 common_module.normalize_stream(stream)
@@ -2354,3 +2358,1313 @@ class FleetStateDurabilityTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+
+class VerdictReliabilityTests(RepoTestCase):
+    """Issue #16: baseline-relative timeouts, survivor confirmation, verdict cache."""
+
+    def make_repo(self):
+        repo, _ = python_repo(self.tmp)
+        write(repo / "src" / "app.py", "def f(a, b):\n    return a == b\n")
+        commit(repo)
+        return repo
+
+    def test_baseline_relative_timeout_computation(self):
+        # Unit: max(5x baseline, 20s) when no explicit --timeout was given;
+        # an explicit flag is preserved verbatim ("flags preserved" in #16).
+        self.assertEqual(engine_module._effective_timeout(13.0, None), 65.0)
+        self.assertEqual(engine_module._effective_timeout(1.0, None), 20.0)
+        self.assertEqual(engine_module._effective_timeout(0.2, None), 20.0)
+        self.assertEqual(engine_module._effective_timeout(13.0, 0.3), 0.3)
+
+    def test_baseline_relative_timeout_recorded_in_json(self):
+        repo = self.make_repo()
+        output = self.tmp / "t.json"
+        result = script(
+            repo, "mutation_engine.py", "--source", "src/app.py",
+            "--test-cmd", f"{PYTHON} -c pass", "--max-mutants", "2",
+            "--output-json", str(output),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = json.loads(output.read_text())
+        self.assertEqual(data["timeout_mode"], "baseline-relative")
+        # Room: local baselines are seconds; the 20s floor is the effective default.
+        self.assertEqual(data["timeout_effective"], 20.0)
+        self.assertEqual(data["counts"]["timeout"], 0)
+
+    def test_flaky_suite_does_not_yield_confirmed_survivor(self):
+        # Deterministic stand-in for "passes/fails alternating" (#16 item 3):
+        # call 1 (baseline, clean) passes; later invocations on MUTATED source
+        # pass too (fabricating a survivor); later invocations on CLEAN source
+        # fail — the suite cannot be trusted on clean source, so the survivor
+        # verdict proves nothing and must not be reported as work.
+        repo = self.make_repo()
+        (repo / "orig.txt").write_text((repo / "src" / "app.py").read_text())
+        stub = write(
+            repo / "flake.py",
+            "import pathlib, sys\n"
+            "calls = pathlib.Path('calls.txt')\n"
+            "count = int(calls.read_text() or '0') + 1 if calls.exists() else 1\n"
+            "calls.write_text(str(count))\n"
+            "actual = pathlib.Path('src/app.py').read_text()\n"
+            "if count == 1:\n"
+            "    sys.exit(0)\n"
+            "if actual == pathlib.Path('orig.txt').read_text():\n"
+            "    sys.exit(1)\n"
+            "sys.exit(0)\n",
+        )
+        output = self.tmp / "flake.json"
+        result = script(
+            repo, "mutation_engine.py", "--source", "src/app.py",
+            "--test-cmd", f"{PYTHON} {stub}", "--max-mutants", "1",
+            "--output-json", str(output),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = json.loads(output.read_text())
+        self.assertEqual(data["counts"]["survived"], 0)
+        self.assertEqual(data["counts"]["unverified"], 1)
+        self.assertEqual(data["counts"]["killed"], 0)
+        self.assertEqual(len(data["unverified"]), 1)
+
+    def test_confirm_survivors_default_positive_path(self):
+        # Healthy suite: mutant run passes AND clean-source confirm passes ->
+        # the survivor is confirmed and reported as work. Default N=1.
+        repo = self.make_repo()
+        output = self.tmp / "confirm.json"
+        result = script(
+            repo, "mutation_engine.py", "--source", "src/app.py",
+            "--test-cmd", f"{PYTHON} -c pass", "--max-mutants", "2",
+            "--output-json", str(output),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = json.loads(output.read_text())
+        self.assertGreaterEqual(data["counts"]["survived"], 1)
+        self.assertEqual(data["counts"]["unverified"], 0)
+        self.assertEqual(data["confirm_survivors"], 1)
+
+    def test_confirm_survivors_zero_restores_legacy_behavior(self):
+        # --confirm-survivors 0: voided confirmation; a survivor stands on the
+        # first pass even when clean source cannot reproduce a pass (legacy).
+        repo = self.make_repo()
+        (repo / "orig.txt").write_text((repo / "src" / "app.py").read_text())
+        stub = write(
+            repo / "flake0.py",
+            "import pathlib, sys\n"
+            "calls = pathlib.Path('calls0.txt')\n"
+            "count = int(calls.read_text() or '0') + 1 if calls.exists() else 1\n"
+            "calls.write_text(str(count))\n"
+            "actual = pathlib.Path('src/app.py').read_text()\n"
+            "if count == 1:\n"
+            "    sys.exit(0)\n"
+            "if actual == pathlib.Path('orig.txt').read_text():\n"
+            "    sys.exit(1)\n"
+            "sys.exit(0)\n",
+        )
+        output = self.tmp / "confirm0.json"
+        result = script(
+            repo, "mutation_engine.py", "--source", "src/app.py",
+            "--test-cmd", f"{PYTHON} {stub}", "--max-mutants", "1",
+            "--confirm-survivors", "0",
+            "--output-json", str(output),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = json.loads(output.read_text())
+        self.assertEqual(data["counts"]["survived"], 1)
+
+    def test_verdict_cache_hits_and_bypass(self):
+        repo = self.make_repo()
+        output_a = self.tmp / "cache1.json"
+        output_b = self.tmp / "cache2.json"
+        output_c = self.tmp / "cache3.json"
+        argv = [
+            repo, "mutation_engine.py", "--source", "src/app.py",
+            "--test-cmd", f"{PYTHON} -c pass", "--max-mutants", "3",
+        ]
+        first = script(*argv, "--output-json", str(output_a))
+        self.assertEqual(first.returncode, 0, first.stderr)
+        data_a = json.loads(output_a.read_text())
+        self.assertEqual(data_a["cache_hits"], 0)
+        self.assertTrue((repo / ".autonomous" / "mutant-cache.json").exists())
+
+        second = script(*argv, "--output-json", str(output_b))
+        self.assertEqual(second.returncode, 0, second.stderr)
+        data_b = json.loads(output_b.read_text())
+        # Same repo state, same test command -> every verdict is a cache hit,
+        # and the reported verdict tables match the earlier run exactly
+        # ("assert on reported counts, not wall time" per #16).
+        self.assertEqual(data_b["cache_hits"], data_a["counts"]["total"])
+        self.assertEqual(data_b["counts"], data_a["counts"])
+
+        third = script(*argv, "--no-cache", "--output-json", str(output_c))
+        self.assertEqual(third.returncode, 0, third.stderr)
+        data_c = json.loads(output_c.read_text())
+        self.assertEqual(data_c["cache_hits"], 0)
+        self.assertEqual(data_c["counts"], data_a["counts"])
+
+    def test_backend_auto_notes_fallback(self):
+        repo = self.make_repo()
+        output = self.tmp / "backend.json"
+        auto = script(
+            repo, "mutation_engine.py", "--source", "src/app.py",
+            "--test-cmd", f"{PYTHON} -c pass", "--max-mutants", "2",
+            "--backend", "auto", "--output-json", str(output),
+        )
+        self.assertEqual(auto.returncode, 0, auto.stderr)
+        self.assertIn("sregex", auto.stdout)
+        data = json.loads(output.read_text())
+        self.assertEqual(data["backend"], "sregex")
+
+        explicit = script(
+            repo, "mutation_engine.py", "--source", "src/app.py",
+            "--test-cmd", f"{PYTHON} -c pass", "--max-mutants", "2",
+            "--backend", "sregex",
+        )
+        self.assertEqual(explicit.returncode, 0, explicit.stderr)
+
+        unknown = script(
+            repo, "mutation_engine.py", "--source", "src/app.py",
+            "--test-cmd", f"{PYTHON} -c pass", "--backend", "stryker",
+        )
+        self.assertEqual(unknown.returncode, 2)
+        self.assertIn("invalid choice: 'stryker'", unknown.stderr)
+
+
+@unittest.skipUnless(
+    all(shutil.which(tool) for tool in ("bash", "flock", "timeout", "stat", "date")),
+    "watchdog shell dependencies are not installed",
+)
+class EvalHarnessTests(unittest.TestCase):
+    """evals/run.py: deterministic halves plus the red-proof they can fail.
+
+    The harness checks this repo's fixtures in temp copies; these tests are
+    its own CI contract: green on the current fixture set, red under a
+    deliberately impossible expectation (a harness that cannot fail proves
+    nothing), and setup commands that actually run from a git clone (the
+    empty-dir `cp -r <skill>/scripts/autonomous ...` trap fixed in evals.json
+    v2's mkdir -p lines).
+    """
+
+    def _harness(self, *flags: str) -> subprocess.CompletedProcess:
+        import os
+        import tempfile as _tempfile
+
+        script_path = SKILL_ROOT / "evals" / "run.py"
+        with _tempfile.TemporaryDirectory() as tmp_cwd:
+            proc = subprocess.run(
+                [str(PYTHON), str(script_path), *flags],
+                capture_output=True,
+                text=True,
+                cwd=tmp_cwd,
+                env=dict(os.environ),
+            )
+        return proc
+
+    def test_deterministic_case_green_and_recorded(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            name = Path(tmp) / "results.json"
+            res = self._harness(
+                "--deterministic",
+                "--case", "E7-3-dedup-second-run",
+                "--record-file", str(name),
+            )
+            self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+            payload = json.loads(name.read_text())
+            case = next(c for c in payload["cases"] if c["id"] == "E7-3-dedup-second-run")
+            self.assertEqual(case["status"], "pass", case.get("failures"))
+            self.assertTrue(all(c["status"] == "pass" for c in case["checks"]))
+
+    def test_negative_control_is_red(self):
+        res = self._harness("--negative-control", "--case", "E7-8-protected-row")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertIn("RED-PROOF", res.stdout)
+
+    def test_agent_only_case_still_runs_setup(self):
+        res = self._harness("--deterministic", "--case", "E7-9-cold-start")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertIn("agent-only", res.stdout)
+
+    def test_deterministic_runs_without_git_identity(self):
+        # CI/containers may have no git identity at all; the harness pins a
+        # throwaway one for its throwaway fixture repos instead of failing
+        # every setup line with "Author identity unknown".
+        import os
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as bare_home:
+            env = dict(os.environ)
+            env["HOME"] = bare_home
+            env["GIT_CONFIG_GLOBAL"] = "/dev/null"
+            env["GIT_CONFIG_SYSTEM"] = "/dev/null"
+            proc = subprocess.run(
+                [
+                    str(PYTHON),
+                    str(SKILL_ROOT / "evals" / "run.py"),
+                    "--deterministic",
+                    "--case", "E7-3-dedup-second-run",
+                ],
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("1 passed", proc.stdout)
+
+
+class FlakeStreamTests(RepoTestCase):
+    """Stream F (issue #21): CI-history finder + N-run oracle + fixture.
+
+    The finder is 0-token math (static flake-idiom scan plus mixed-outcome
+    history mining) and can only EMIT candidates; the N-run oracle is the
+    verdict machine (0/N demanded after a fix; "passed twice" is not an
+    oracle). The fixture ships a deterministic pseudo-flake: a counter file
+    seeds the failure for exactly 3 of every 10 runs (~30%, no wall clock),
+    so CI itself stays stable.
+    """
+
+    FIXTURE = SKILL_ROOT / "evals" / "fixtures" / "flake-python"
+
+    def finder_run(self, *args: str) -> subprocess.CompletedProcess:
+        return script(SKILL_ROOT, "flakes.py", *args)
+
+    def oracle_run(self, test_script: Path, runs: int, *extra: str) -> subprocess.CompletedProcess:
+        return script(
+            SKILL_ROOT, "flakes.py", "oracle", "--test-script", str(test_script),
+            "--runs", str(runs), "--json", *extra,
+        )
+
+    def copy_fixture(self) -> Path:
+        repo = self.tmp / "repo"
+        shutil.copytree(self.FIXTURE, repo)
+        return repo
+
+    def test_finder_mines_mixed_outcome_history(self):
+        repo = self.copy_fixture()
+        res = self.finder_run("finder", "--history", str(repo / "history.json"), "--json")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        payload = json.loads(res.stdout)
+        candidates = {c["test"]: c for c in payload["candidates"] if c["kind"] == "history"}
+        self.assertIn("tests/test_counter_flake.py", candidates)
+        flaky = candidates["tests/test_counter_flake.py"]
+        self.assertEqual(set(flaky["outcomes"]), {"pass", "fail"})
+        self.assertIn("same_sha", flaky)
+        self.assertNotIn("tests/test_counter_fixed.py", candidates)
+
+    def test_finder_zero_false_positives_on_stable_history(self):
+        stable = self.tmp / "history-stable.json"
+        runs = {"schema": "stream-f/1", "runs": [
+            {"sha": f"v{i}", "job": "unit", "labels": {
+                "tests/test_counter_fixed.py": "pass"}} for i in range(6)
+        ]}
+        stable.write_text(json.dumps(runs))
+        res = self.finder_run("finder", "--history", str(stable), "--json")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(json.loads(res.stdout)["candidates"], [])
+
+    def test_finder_static_scan_flags_flake_idioms_only(self):
+        tests_dir = self.tmp / "tests"
+        tests_dir.mkdir()
+        (tests_dir / "test_waiter.py").write_text(
+            "import time\n\ndef test_waiter():\n    time.sleep(2)  # hope it loads\n"
+            "    assert True\n"
+        )
+        (tests_dir / "test_math.py").write_text(
+            "def test_math():\n    assert 1 + 1 == 2\n"
+        )
+        res = self.finder_run("finder", "--paths", str(tests_dir), "--json")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        candidates = json.loads(res.stdout)["candidates"]
+        flagged = {c["test"] for c in candidates if c["kind"] == "static"}
+        self.assertIn("tests/test_waiter.py", flagged)
+        self.assertNotIn("tests/test_math.py", flagged)
+        hit_exact = [
+            c for c in candidates
+            if c["kind"] == "static" and c["test"] == "tests/test_waiter.py"
+        ][0]
+        self.assertIn("time.sleep", hit_exact["evidence"]["hits"][0])
+
+    def test_oracle_reads_the_pseudo_flake(self):
+        repo = self.copy_fixture()
+        proc = self.oracle_run(repo / "tests" / "test_counter_flake.py", 10)
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        verdict = json.loads(proc.stdout)
+        self.assertEqual(verdict["verdict"], "flaky")
+        self.assertEqual(verdict["modes"]["isolated"]["counts"]["pass"], 7)
+        self.assertEqual(verdict["modes"]["isolated"]["counts"]["fail"], 3)
+        self.assertEqual(verdict["modes"]["isolated"]["flake_rate"], 0.3)
+
+    def test_oracle_demands_zero_after_fix(self):
+        repo = self.copy_fixture()
+        proc = self.oracle_run(repo / "tests" / "test_counter_fixed.py", 20)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        verdict = json.loads(proc.stdout)
+        self.assertEqual(verdict["verdict"], "stable")
+        self.assertEqual(verdict["modes"]["isolated"]["counts"]["fail"], 0)
+
+    def test_oracle_names_order_dependence(self):
+        work = self.tmp / "order"
+        (work / "state").mkdir(parents=True)
+        # Test fails only when peers ran first (marker file left behind);
+        # both the test and the peers command anchor on the oracle's cwd,
+        # so the matrix must be invoked with cwd=work (run() below, not
+        # support.script(), which pins cwd to the skill root).
+        (work / "test_order.py").write_text(
+            "import pathlib, sys\n"
+            "if pathlib.Path('state/peer-marker').exists():\n"
+            "    print('ran after peers'); sys.exit(1)\n"
+            "print('clean run')\n"
+        )
+        peers_cmd = (
+            f"{shutil.which('python3')} -c "
+            "\"import pathlib; pathlib.Path('state/peer-marker').write_text('x')\""
+        )
+        proc = run(
+            [PYTHON, str(SKILL_ROOT / "scripts" / "autonomous" / "flakes.py"),
+             "oracle", "--test-script", str(work / "test_order.py"),
+             "--runs", "5", "--json", "--peers-cmd", peers_cmd],
+            cwd=work,
+        )
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        verdict = json.loads(proc.stdout)
+        self.assertEqual(verdict["verdict"], "flaky")
+        self.assertEqual(verdict["cause_class"], "order-dependence")
+        self.assertEqual(verdict["modes"]["isolated"]["counts"]["fail"], 0)
+        self.assertGreater(verdict["modes"]["after_peers"]["counts"]["fail"], 0)
+
+    def test_stream_f_unlocked(self):
+        res = script(SKILL_ROOT, "ledger.py", "next", "--stream", "F")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("F", common_module.STREAMS)
+        self.assertEqual(common_module.STREAMS["F"]["status"], "available")
+
+
+class DocsTruthStreamTests(unittest.TestCase):
+    """Stream I (issue #24): docs & spec truthfulness finder.
+
+    The finder is deterministic and can only EMIT candidates (never edit —
+    zero-diff is asserted); the direction call (fix docs vs file a defect
+    issue) stays with the owner/agent via git history, and --scaffold-issue
+    prints the artifact that carries both side's evidence. The oracle is the
+    rerun: findings must flip to a clean pass after a docs-only fix.
+    """
+
+    FIXTURE = SKILL_ROOT / "evals" / "fixtures" / "docs-drift-python"
+
+    def setUp(self) -> None:
+        import tempfile
+
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+
+    def check(self, cwd: Path, *args: str) -> subprocess.CompletedProcess:
+        return run(
+            [PYTHON, str(SKILL_ROOT / "scripts" / "autonomous" / "docs_truth.py"), "check", *args],
+            cwd=cwd,
+        )
+
+    def copy_fixture(self) -> Path:
+        repo = self.tmp / "repo"
+        shutil.copytree(self.FIXTURE, repo)
+        return repo
+
+    def tree_digest(self, root: Path) -> str:
+        import hashlib
+
+        parts = []
+        for path in sorted(root.rglob("*")):
+            rel = str(path.relative_to(root))
+            if ".git/" in rel:
+                continue
+            data = path.read_bytes() if path.is_file() else b"<dir>"
+            parts.append(f"{rel}:{hashlib.sha256(data).hexdigest()}")
+        return hashlib.sha256("\n".join(parts).encode()).hexdigest()
+
+    def test_symbol_drift_flagged_with_file_and_line(self):
+        repo = self.copy_fixture()
+        res = self.check(repo, "--json")
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        payload = json.loads(res.stdout)
+        drift = [c for c in payload["candidates"] if c["kind"] == "symbol-drift"]
+        self.assertEqual(len(drift), 1, json.dumps(payload["candidates"])[:400])
+        self.assertEqual(drift[0]["file"], "README.md")
+        self.assertEqual(drift[0]["name"], "load_table")
+        self.assertIn("src/config.py", drift[0]["evidence"]["module_file"])
+
+    def test_fixed_docs_pass_clean(self):
+        repo = self.copy_fixture()
+        readme = repo / "README.md"
+        readme.write_text(readme.read_text().replace("load_table", "load_config"))
+        res = self.check(repo, "--json")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(json.loads(res.stdout)["candidates"], [])
+
+    def test_scaffold_issue_artifact_and_zero_diff(self):
+        repo = self.copy_fixture()
+        before = self.tree_digest(repo)
+        res = self.check(repo, "--json", "--scaffold-issue")
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        body = res.stderr
+        self.assertIn("Stream I candidate issue", body)
+        self.assertIn("do not silently", body)
+        self.assertIn("README.md", body)
+        self.assertEqual(self.tree_digest(repo), before, "the finder must never edit the repo")
+
+    def test_missing_link_flagged_only_when_target_missing(self):
+        work = self.tmp / "links"
+        (work / "docs").mkdir(parents=True)
+        (work / "src").mkdir()
+        (work / "src" / "app.py").write_text("def run():\n    return 1\n")
+        (work / "docs" / "guide.md").write_text(
+            "See [the spec](/SPEC.md) or [deep](../missing/deep.md).\n"  # noqa
+        )
+        (work / "docs" / "other.md").write_text("")
+        # one good one bad, resolved against the doc's own directory
+        (work / "README.md").write_text(
+            "good: [other](docs/other.md)\nbad: [ghost](docs/ghost.md)\n"
+        )
+        res = self.check(work, "--json")
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        payload = json.loads(res.stdout)
+        links = {c["evidence"]["target"]: c for c in payload["candidates"] if c["kind"] == "missing-link"}
+        self.assertIn("docs/ghost.md", links)
+        self.assertNotIn("docs/other.md", links)
+        self.assertNotIn("../missing/deep.md", links or {})
+
+    def test_spec_trace_runs_both_directions_when_spec_present(self):
+        work = self.tmp / "spec"
+        work.mkdir()
+        (work / "SPEC.md").write_text(
+            "# SPEC trace\n\n- G05 the referee rule\n- G06 the ledger append rule\n"
+        )
+        tests_dir = work / "tests"
+        tests_dir.mkdir()
+        (tests_dir / "test_referee.py").write_text(
+            "# covers G05 only\n"
+            "def test_referee():\n"
+            "    # G05 citation\n"
+            "    assert True\n\n"
+            "def test_orphan():\n"
+            "    # cites Z99 which no spec line defines\n"
+            "    assert True\n"
+        )
+        res = self.check(work, "--spec", str(work / "SPEC.md"),
+                         "--paths", str(tests_dir),
+                         "--source", str(work / "src"),
+                         "--json")
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        payload = json.loads(res.stdout)
+        spec_findings = {c["name"]: c for c in payload["candidates"] if c["kind"].startswith("spec-")}
+        self.assertIn("G06", spec_findings)  # defined in spec, cited by no test
+        self.assertIn("Z99", spec_findings)  # cited in tests, defined no spec id
+        self.assertNotIn("G05", spec_findings)
+
+    def test_runnable_example_failure_flagged(self):
+        work = self.tmp / "runnable"
+        (work / "src").mkdir(parents=True)
+        (work / "src" / "app.py").write_text("def add(a, b):\n    return a + b\n")
+        (work / "README.md").write_text(
+            "# Example\n\n"
+            "```python  # runnable\n"
+            "from src.app import add\n"
+            "assert add(1, 2) == 4\n"
+            "```\n"
+        )
+        res = self.check(work, "--json")
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        payload = json.loads(res.stdout)
+        kinds = {c["kind"] for c in payload["candidates"]}
+        self.assertIn("example-failure", kinds)
+
+    def test_dogfood_clean_on_this_repo(self):
+        repo_root = SKILL_ROOT.parent.parent
+        res = self.check(
+            repo_root,
+            "--json",
+            "--paths", "README.md", "docs",
+            "--source", "skills/autonomous-improvement/scripts/autonomous",
+        )
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(json.loads(res.stdout)["candidates"], [])
+
+
+@unittest.skipUnless(
+    all(shutil.which(tool) for tool in ("bash", "flock", "timeout", "stat", "date")),
+    "watchdog shell dependencies are not installed",
+)
+class RepairStreamTests(RepoTestCase):
+    """Stream E (issue #22): defect-repair intake + red/green oracle.
+
+    The intake is 0-token: bug report files must NAME expected vs actual
+    behavior; a report that cannot become a failing test is bounced back
+    with the missing facts and the tool leaves the repo untouched.
+    verify-red is the un-fakeable anchor: the repro test must be red with
+    NOTHING outside tests/ changed vs the base ref; verify-green demands
+    the repro green plus at least one minimal fix file, optionally running
+    the mutation engine's --diff-base spot-check on the touched lines.
+    """
+
+    FIXTURE = SKILL_ROOT / "evals" / "fixtures" / "defect-python"
+
+    REPRO_TEST = [
+        "import sys\n",
+        "sys.path.insert(0, '')\n",
+        "from src.calculator import median\n",
+        "assert median([1, 2, 3, 4]) == 2.5, median([1, 2, 3, 4])\n",
+        "assert median([7]) == 7\n",
+        "print('ok')\n",
+    ]
+
+    def repair_run(self, repo: Path, *args: str) -> subprocess.CompletedProcess:
+        return run(
+            [PYTHON, str(SKILL_ROOT / "scripts" / "autonomous" / "repair.py"), *args],
+            cwd=repo,
+        )
+
+    def copy_fixture(self) -> Path:
+        repo = self.tmp / "repo"
+        shutil.copytree(self.FIXTURE, repo)
+        return repo
+
+    def seeded_repo(self) -> Path:
+        repo = self.copy_fixture()
+        git(repo, "init", "-q", "-b", "main")
+        git(repo, "config", "user.email", "test@example.com")
+        git(repo, "config", "user.name", "Test User")
+        git(repo, "add", "-A")
+        git(repo, "commit", "-qm", "base: seeded median bug + bug reports")
+        # The repro test is written AFTER the base commit so verify-red's
+        # tests-only diff actually has the test file in it.
+        (repo / "tests").mkdir(exist_ok=True)
+        (repo / "tests" / "test_repro_median.py").write_text("".join(self.REPRO_TEST))
+        return repo
+
+    def tree_digest(self, repo: Path) -> str:
+        import hashlib
+
+        parts = []
+        for path in sorted(repo.rglob("*")):
+            rel = str(path.relative_to(repo))
+            if ".git/" in rel or ".git" == rel:
+                continue
+            data = path.read_bytes() if path.is_file() else b"<dir>"
+            parts.append(f"{rel}:{hashlib.sha256(data).hexdigest()}")
+        return hashlib.sha256("\n".join(parts).encode()).hexdigest()
+
+    def test_intake_names_expected_and_actual(self):
+        repo = self.copy_fixture()
+        res = self.repair_run(repo, "intake", "--reports", "docs/bugreports", "--json")
+        # rc 1 is fine here: the fixture also carries the unreproducible
+        # report (tested separately); parsing is what this test asserts.
+        self.assertIn(res.returncode, (0, 1), res.stdout + res.stderr)
+        payload = json.loads(res.stdout)
+        kinded = {c["kind"]: c for c in payload["candidates"]}
+        self.assertIn("candidate", kinded)
+        self.assertEqual(kinded["candidate"]["expected"], "median([1, 2, 3, 4]) == 2.5")
+        self.assertIn("median([1, 2, 3, 4]) == 3", kinded["candidate"]["actual"])
+
+    def test_intake_bounces_missing_facts_zero_diff(self):
+        repo = self.copy_fixture()
+        before = self.tree_digest(repo)
+        res = self.repair_run(repo, "intake", "--reports", "docs/bugreports", "--json")
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        payload = json.loads(res.stdout)
+        bounce = next(c for c in payload["candidates"] if c["kind"] == "bounce")
+        self.assertEqual(set(bounce["missing"]), {"expected", "actual"})
+        self.assertIn("zero code changes were made", res.stderr.replace("\n", " "))
+        self.assertEqual(self.tree_digest(repo), before, "intake must not write anything")
+
+    def test_verify_red_refuses_non_test_changes(self):
+        repo = self.seeded_repo()
+        (repo / "src" / "calculator.py").write_text("def median(values):\n    raise SystemExit\n")
+        res = self.repair_run(
+            repo, "verify-red", "--test-script", "tests/test_repro_median.py",
+            "--evidence", "evidence.json", "--base-ref", "HEAD",
+        )
+        self.assertNotEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertIn("non-test", res.stderr)
+        self.assertFalse((repo / "evidence.json").exists())
+
+    def test_verify_red_records_base_and_red(self):
+        repo = self.seeded_repo()
+        res = self.repair_run(
+            repo, "verify-red", "--test-script", "tests/test_repro_median.py",
+            "--evidence", "evidence.json", "--base-ref", "HEAD",
+        )
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        evidence = json.loads((repo / "evidence.json").read_text())
+        self.assertEqual(evidence["red"]["verified"], True)
+        self.assertNotEqual(evidence["base"]["sha"], "")
+        self.assertEqual(evidence["changed_files"], ["tests/test_repro_median.py"])
+
+    def test_verify_green_requires_fix_and_records_spot_check(self):
+        repo = self.seeded_repo()
+        # Real Breaker→Builder flow: red recorded with the test as the ONLY
+        # change, then the minimal fix lands, then green verifies.
+        res = self.repair_run(
+            repo, "verify-red", "--test-script", "tests/test_repro_median.py",
+            "--evidence", "evidence.json", "--base-ref", "HEAD",
+        )
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        (repo / "src" / "calculator.py").write_text(
+            "def median(values):\n"
+            "    values = sorted(values)\n"
+            "    n = len(values)\n"
+            "    middle = values[n // 2]\n"
+            "    if n % 2:\n"
+            "        return middle\n"
+            "    return (values[n // 2 - 1] + middle) / 2\n"
+        )
+        git(repo, "add", "-A")
+        git(repo, "commit", "-qm", "fix: median averages the middle pair for even n")
+        res = self.repair_run(
+            repo, "verify-green", "--test-script", "tests/test_repro_median.py",
+            "--evidence", "evidence.json", "--spot-check", "2",
+        )
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        evidence = json.loads((repo / "evidence.json").read_text())
+        self.assertEqual(evidence["green"]["verified"], True)
+        self.assertIn("src/calculator.py", evidence["fix_files"])
+        self.assertEqual(evidence["spot_check"]["survivors"], 0)
+        self.assertEqual(evidence["spot_check"]["file"], "src/calculator.py")
+
+    def test_verify_green_refuses_fixless_or_tampered_base(self):
+        # A green repro with zero source diff is only possible if the evidence
+        # base is missing/tampered (e.g. repointed at a commit that already
+        # contained the fix) — the tool must refuse, not wave it through.
+        repo = self.seeded_repo()
+        res = self.repair_run(
+            repo, "verify-red", "--test-script", "tests/test_repro_median.py",
+            "--evidence", "evidence.json", "--base-ref", "HEAD",
+        )
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        evidence = json.loads((repo / "evidence.json").read_text())
+        evidence.pop("base")
+        (repo / "evidence.json").write_text(json.dumps(evidence, indent=2))
+        res = self.repair_run(
+            repo, "verify-green", "--test-script", "tests/test_repro_median.py",
+            "--evidence", "evidence.json",
+        )
+        self.assertNotEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertIn("no base.sha", res.stderr)
+
+    def test_stream_e_unlocked(self):
+        repo = self.copy_fixture()
+        git(repo, "init", "-q", "-b", "main")
+        git(repo, "config", "user.email", "test@example.com")
+        git(repo, "config", "user.name", "Test User")
+        install_scripts(repo)
+        write_config(repo, {"candidates": {"E": {"include": ["src/**/*.py"]}}})
+        res = script(repo, "ledger.py", "next", "--stream", "E", "--json")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(common_module.STREAMS["E"]["status"], "available")
+
+
+class SecurityStreamTests(RepoTestCase):
+    """Streams H+K (issue #23): advisory finders + oracle-first bumps.
+
+    The secret scan must redact by construction: the raw secret string may
+    not appear in ANY emitted artifact (stdout/stderr/evidence). The dep
+    audit reads a stub advisory JSON; the bump is oracle-first - a green
+    bump yields evidence on a SCRATCH copy of the tree, a red bump yields
+    an issue artifact and no PR. Identical candidates dedup through a
+    state file under .autonomous/ so the second run is a no-op.
+    """
+
+    FIXTURE = SKILL_ROOT / "evals" / "fixtures" / "security-python"
+
+    def adv_run(self, repo: Path, *args: str) -> subprocess.CompletedProcess:
+        return run(
+            [PYTHON, str(SKILL_ROOT / "scripts" / "autonomous" / "advisory.py"), *args],
+            cwd=repo,
+        )
+
+    def copy_fixture(self) -> Path:
+        repo = self.tmp / "repo"
+        shutil.copytree(self.FIXTURE, repo)
+        return repo
+
+    def all_output(self, res: subprocess.CompletedProcess) -> str:
+        return res.stdout + res.stderr
+
+    def test_secret_scan_flags_and_never_prints_the_secret(self):
+        repo = self.copy_fixture()
+        before = {
+            p: p.read_bytes()
+            for p in repo.rglob("*") if p.is_file()
+        }
+        res = self.adv_run(repo, "secrets", "--json")
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        payload = json.loads(res.stdout)
+        secrets = [c for c in payload["candidates"] if c["kind"] == "secret"]
+        self.assertTrue(secrets, payload["candidates"])
+        flagged = secrets[0]
+        self.assertEqual(flagged["file"], "config/settings.py")
+        # Redaction is by construction: the raw scalar is never an artifact.
+        blob = self.all_output(res)
+        self.assertNotIn("sk-live-d16b60f5", blob)
+        self.assertNotIn("sk-live-", blob)
+        self.assertIn("[redacted", json.dumps(payload))
+        for path, data in before.items():
+            self.assertEqual(path.read_bytes(), data, f"{path} was edited")
+
+    def test_dep_audit_flags_only_vulnerable_stubs(self):
+        repo = self.copy_fixture()
+        res = self.adv_run(
+            repo, "deps", "--advisory", "docs/advisory-stub.json",
+            "--manifest", "requirements.txt", "--json",
+        )
+        self.assertEqual(res.returncode, 1, self.all_output(res))
+        payload = json.loads(res.stdout)
+        flagged = [c for c in payload["candidates"] if c["kind"] == "dep-vuln"]
+        names = {c["name"] for c in flagged}
+        self.assertIn("vulnerable-lib", names)
+        self.assertNotIn("stable-lib", names)
+        vuln = next(c for c in flagged if c["name"] == "vulnerable-lib")
+        self.assertEqual(vuln["evidence"]["advisory_id"], "FAKE-2026-1")
+        self.assertEqual(vuln["evidence"]["version"], "2.1.1")
+
+    def test_dep_run_twice_dedups_to_noop(self):
+        repo = self.copy_fixture()
+        first = self.adv_run(
+            repo, "deps", "--advisory", "docs/advisory-stub.json",
+            "--manifest", "requirements.txt", "--json",
+            "--state", ".autonomous/advisory-seen.json",
+        )
+        self.assertEqual(first.returncode, 1, self.all_output(first))
+        seen = repo / ".autonomous" / "advisory-seen.json"
+        self.assertTrue(seen.is_file())
+        hashes_first = set(json.loads(seen.read_text())["seen"])
+        self.assertGreaterEqual(len(hashes_first), 1)
+        second = self.adv_run(
+            repo, "deps", "--advisory", "docs/advisory-stub.json",
+            "--manifest", "requirements.txt", "--json",
+            "--state", ".autonomous/advisory-seen.json",
+        )
+        self.assertEqual(second.returncode, 0, self.all_output(second))
+        self.assertEqual(json.loads(second.stdout)["candidates"], [])
+        self.assertIn("deduped", self.all_output(second))
+
+    def test_bump_green_records_evidence_and_does_not_edit_repo(self):
+        repo = self.copy_fixture()
+        original = (repo / "requirements.txt").read_text()
+        res = self.adv_run(
+            repo, "bump", "--json",
+            "--dep", "vulnerable-lib", "--to", "2.2.0",
+            "--manifest", "requirements.txt",
+            "--test-cmd", f"{PYTHON} tests/test_pin.py --expect 2.2.0",
+            "--changelog", "CHANGELOG.md",
+        )
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        payload = json.loads(res.stdout)
+        self.assertEqual(payload["status"], "green")
+        self.assertEqual(payload["from"], "2.1.1")
+        self.assertEqual(payload["to"], "2.2.0")
+        self.assertIn("risk note", payload["evidence"]["changelog"])
+        self.assertEqual((repo / "requirements.txt").read_text(), original,
+                         "the real tree must stay untouched; the bump ran on a copy")
+
+    def test_bump_red_becomes_issue_artifact_without_pr(self):
+        repo = self.copy_fixture()
+        original = (repo / "requirements.txt").read_text()
+        res = self.adv_run(
+            repo, "bump", "--json",
+            "--dep", "vulnerable-lib", "--to", "3.0.0",
+            "--manifest", "requirements.txt",
+            "--test-cmd", f"{PYTHON} tests/test_pin.py --expect 2.2.0",
+            "--changelog", "CHANGELOG.md",
+        )
+        self.assertNotEqual(res.returncode, 0, res.stdout + res.stderr)
+        blob = res.stdout + res.stderr
+        self.assertIn("## Breakage", blob, "red bumps must produce the issue draft")
+        self.assertIn("pip install", blob)  # the suggested repro for the owner
+        self.assertIn("3.0.0", blob)
+        self.assertEqual((repo / "requirements.txt").read_text(), original)
+        self.assertEqual(json.loads(res.stdout)["status"], "red")
+
+    def test_streams_h_and_k_available(self):
+        repo = self.copy_fixture()
+        git(repo, "init", "-q", "-b", "main")
+        git(repo, "config", "user.email", "test@example.com")
+        git(repo, "config", "user.name", "Test User")
+        self.assertEqual(common_module.STREAMS["H"]["status"], "available")
+        self.assertEqual(common_module.STREAMS["K"]["status"], "available")
+        install_scripts(repo)
+        write_config(repo, {"candidates": {"H": {"include": ["src/**/*.py"]}, "K": {"include": ["src/**/*.py"]}}})
+        for stream in ("H", "K"):
+            res = script(repo, "ledger.py", "next", "--stream", stream, "--json")
+            self.assertEqual(res.returncode, 0, res.stderr)
+
+
+@unittest.skipUnless(
+    all(shutil.which(tool) for tool in ("bash", "flock", "timeout", "stat", "date")),
+    "watchdog shell dependencies are not installed",
+)
+class FuzzSeedTests(RepoTestCase):
+    """Stream C (issue #25): recorded-seed fuzz + deterministic shrink.
+
+    The harness (repo-supplied) checks a property; the tool runs it over
+    the recorded corpus seeds, shrinks a failing input deterministically,
+    and writes the counterexample to the retained corpus. Replay is the
+    red->green oracle: the shrunk counterexample must fail before the fix
+    and pass after.
+    """
+
+    FIXTURE = SKILL_ROOT / "evals" / "fixtures" / "fuzz-python"
+
+    def fuzz_run(self, repo: Path, *args: str) -> subprocess.CompletedProcess:
+        return run(
+            [PYTHON, str(SKILL_ROOT / "scripts" / "autonomous" / "fuzz_shrink.py"), *args],
+            cwd=repo,
+        )
+
+    def copy_fixture(self) -> Path:
+        repo = self.tmp / "repo"
+        shutil.copytree(self.FIXTURE, repo)
+        return repo
+
+    def test_run_finds_and_shrinks_to_same_counterexample(self):
+        repo = self.copy_fixture()
+        first = self.fuzz_run(
+            repo, "run", "--harness", "tests/property.py",
+            "--corpus", "corpus/seeds.txt", "--json",
+        )
+        self.assertEqual(first.returncode, 1, first.stdout + first.stderr)
+        payload = json.loads(first.stdout)
+        ce = payload["counterexample"]
+        # The retention name is content-addressed: CE-<sha8 of the input>.
+        sha8 = hashlib.sha256(ce["input"].encode()).hexdigest()[:8]
+        self.assertEqual(ce["file"], f"corpus/regressions/CE-{sha8}.txt")
+        self.assertLessEqual(len(ce["input"]), 12, ce)
+        regression = repo / ce["file"]
+        self.assertEqual(regression.read_text().strip(), ce["input"])
+        # determinism: same corpus, same harness, same seed record → the
+        # same shrunk counterexample, byte for byte.
+        second = self.fuzz_run(
+            repo, "run", "--harness", "tests/property.py",
+            "--corpus", "corpus/seeds.txt", "--json",
+        )
+        second_payload = json.loads(second.stdout)
+        self.assertEqual(second_payload["counterexample"]["input"], ce["input"])
+
+    def test_replay_is_red_before_fix_and_green_after(self):
+        repo = self.copy_fixture()
+        discovered = self.fuzz_run(
+            repo, "run", "--harness", "tests/property.py",
+            "--corpus", "corpus/seeds.txt", "--json",
+        )
+        ce_file = json.loads(discovered.stdout)["counterexample"]["file"]
+        red = self.fuzz_run(
+            repo, "replay", "--harness", "tests/property.py",
+            "--counterexample", ce_file, "--json",
+        )
+        self.assertEqual(red.returncode, 1, red.stdout + red.stderr)
+        self.assertEqual(json.loads(red.stdout)["status"], "red")
+        # The Builder fix: lowercase every character (plain str.lower()).
+        (repo / "src" / "text_ops.py").write_text(
+            "def normalize(text):\n"
+            "    return text.lower()\n"
+        )
+        green = self.fuzz_run(
+            repo, "replay", "--harness", "tests/property.py",
+            "--counterexample", ce_file, "--json",
+        )
+        self.assertEqual(green.returncode, 0, green.stdout + green.stderr)
+        self.assertEqual(json.loads(green.stdout)["status"], "green")
+
+
+class PerfGateTests(RepoTestCase):
+    """Stream G (issue #25): pinned-bench delta + differential equivalence.
+
+    Both halves are mandatory: a faster-implementation candidate only
+    becomes keepable when it is (a) beyond the configured speedup band on
+    the pinned bench and (b) output-equivalent on the generated inputs.
+    'Faster because it does less' is rejected by (b).
+    """
+
+    FIXTURE = SKILL_ROOT / "evals" / "fixtures" / "perf-python"
+
+    def gate(self, repo: Path, *args: str) -> subprocess.CompletedProcess:
+        return run(
+            [PYTHON, str(SKILL_ROOT / "scripts" / "autonomous" / "perf_gate.py"), *args],
+            cwd=repo,
+        )
+
+    def copy_fixture(self) -> Path:
+        repo = self.tmp / "repo"
+        shutil.copytree(self.FIXTURE, repo)
+        return repo
+
+    def test_real_optimization_passes_both_halves(self):
+        repo = self.copy_fixture()
+        res = self.gate(
+            repo, "gate",
+            "--old", "src/hot.py", "--new", "src/optimized.py",
+            "--fn-name", "dedup", "--min-speedup", "2.0",
+            "--samples", "3", "--differential-count", "40", "--json",
+        )
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        payload = json.loads(res.stdout)
+        self.assertEqual(payload["bench"]["verdict"], "beyond-band")
+        self.assertGreaterEqual(payload["bench"]["speedup"], 2.0)
+        self.assertEqual(payload["differential"]["verdict"], "equivalent")
+
+    def test_does_less_is_rejected_by_differential_half(self):
+        repo = self.copy_fixture()
+        res = self.gate(
+            repo, "gate",
+            "--old", "src/hot.py", "--new", "src/cheat.py",
+            "--fn-name", "dedup", "--min-speedup", "2.0",
+            "--samples", "3", "--differential-count", "40", "--json",
+        )
+        self.assertNotEqual(res.returncode, 0, res.stdout + res.stderr)
+        blob = res.stdout + res.stderr
+        self.assertIn("differential", blob)
+        self.assertIn("rejected", blob)
+
+    def test_streams_c_and_g_available(self):
+        repo = self.copy_fixture()
+        self.assertEqual(common_module.STREAMS["C"]["status"], "available")
+        self.assertEqual(common_module.STREAMS["G"]["status"], "available")
+        git(repo, "init", "-q", "-b", "main")
+        git(repo, "config", "user.email", "test@example.com")
+        git(repo, "config", "user.name", "Test User")
+        install_scripts(repo)
+        write_config(repo, {"candidates": {"C": {"include": ["src/**/*.py"]}, "G": {"include": ["src/**/*.py"]}}})
+        for stream in ("C", "G"):
+            res = script(repo, "ledger.py", "next", "--stream", stream, "--json")
+            self.assertEqual(res.returncode, 0, res.stderr)
+
+
+@unittest.skipUnless(
+    all(shutil.which(tool) for tool in ("bash", "flock", "timeout", "stat", "date")),
+    "watchdog shell dependencies are not installed",
+)
+class StreamLTests(RepoTestCase):
+    """Stream L (issue #26): meta self-improvement, capped and kill-switched.
+
+    Replay = every claim in an L3 proposal is recomputed from the
+    recorded fleet history (rows, not folklore). L4-touching proposals
+    (eval gates, weakening tripwire, tier floors...) are issue-only EVEN
+    IF their numbers would pass. Stream L has its own kill switch,
+    independent of the fleet switch. Lessons carry evidence + scope +
+    re-validate-by and expired ones are demoted.
+    """
+
+    FIXTURE = SKILL_ROOT / "evals" / "fixtures" / "meta-fleet"
+
+    def meta_run(self, repo: Path, *args: str) -> subprocess.CompletedProcess:
+        return run(
+            [PYTHON, str(SKILL_ROOT / "scripts" / "autonomous" / "meta.py"), *args],
+            cwd=repo,
+        )
+
+    def copy_fixture(self) -> Path:
+        repo = self.tmp / "repo"
+        repo.mkdir()
+        shutil.copytree(self.FIXTURE, repo / "meta-fleet")
+        return repo
+
+    def write_fleet_config(self, repo: Path, fleet: dict) -> None:
+        cfg_dir = repo / "scripts" / "autonomous"
+        cfg_dir.mkdir(parents=True, exist_ok=True)
+        (cfg_dir / "config.json").write_text(json.dumps({"fleet": fleet}))
+
+    def test_kill_switch_is_independent_of_the_fleet_switch(self):
+        repo = self.copy_fixture()
+        self.write_fleet_config(repo, {"stream_l_enabled": False})
+        res = self.meta_run(
+            repo, "replay", "--fixture-dir", "meta-fleet",
+            "--proposal", "meta-fleet/proposals/good-diff-budget.json", "--json",
+        )
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("kill switch", res.stdout + res.stderr)
+        # Even with the fleet switch on, L needs its own flag AND no
+        # stream-L stop file.
+        self.write_fleet_config(repo, {"enabled": True, "stream_l_enabled": False})
+        res = self.meta_run(
+            repo, "replay", "--fixture-dir", "meta-fleet",
+            "--proposal", "meta-fleet/proposals/good-diff-budget.json", "--json",
+        )
+        self.assertNotEqual(res.returncode, 0)
+        self.write_fleet_config(repo, {"enabled": True, "stream_l_enabled": True})
+        (repo / ".autonomous").mkdir()
+        (repo / ".autonomous" / "STOP-STREAM-L").write_text("")
+        res = self.meta_run(
+            repo, "replay", "--fixture-dir", "meta-fleet",
+            "--proposal", "meta-fleet/proposals/good-diff-budget.json", "--json",
+        )
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("STOP-STREAM-L", res.stdout + res.stderr)
+
+    def test_l4_touching_proposal_is_issue_only_even_if_numbers_pass(self):
+        repo = self.copy_fixture()
+        self.write_fleet_config(repo, {"stream_l_enabled": True})
+        res = self.meta_run(
+            repo, "replay", "--fixture-dir", "meta-fleet",
+            "--proposal", "meta-fleet/proposals/bad-weakening.json", "--json",
+        )
+        self.assertNotEqual(res.returncode, 0, res.stdout + res.stderr)
+        blob = res.stdout + res.stderr
+        self.assertIn("L4", blob)
+        self.assertIn("issue-only", blob)
+        self.assertNotIn("draft_pr", blob)
+        # recorded as rejected, not silently dropped
+        journal = json.loads((repo / ".autonomous" / "l-journal.json").read_text())
+        self.assertEqual(journal["proposals"][0]["verdict"], "rejected")
+
+    def test_good_proposal_passes_replay_with_before_after_draft(self):
+        repo = self.copy_fixture()
+        self.write_fleet_config(repo, {"stream_l_enabled": True})
+        res = self.meta_run(
+            repo, "replay", "--fixture-dir", "meta-fleet",
+            "--proposal", "meta-fleet/proposals/good-diff-budget.json", "--json",
+        )
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        payload = json.loads(res.stdout)
+        self.assertEqual(payload["verdict"], "pass")
+        claims = payload["claims_replay"]
+        before = claims["median_owner_minutes"]["before_recorded"]
+        after = claims["median_owner_minutes"]["after_claimed"]
+        self.assertLess(after, before)
+        self.assertEqual(before, 40.0)  # recomputed from the recorded rows
+        self.assertEqual(payload["multi_objective"]["passes_floors"], True)
+        self.assertIn("draft", payload["draft_pr"]["title"].lower())
+        self.assertIn("40.0", payload["draft_pr"]["body"])
+        self.assertIn(str(after), payload["draft_pr"]["body"])
+
+    def test_groundless_claim_is_rejected_by_replay(self):
+        repo = self.copy_fixture()
+        self.write_fleet_config(repo, {"stream_l_enabled": True})
+        (repo / "meta-fleet" / "proposals" / "groundless.json").write_text(json.dumps({
+            "schema": "stream-l-proposal/1",
+            "kind": "param-tune",
+            "touches": [],
+            "basis": "6 of 12 rejections cite oversized diffs",
+            "claims": {"median_owner_minutes": {"after": 2, "before": 99}},
+        }))
+        res = self.meta_run(
+            repo, "replay", "--fixture-dir", "meta-fleet",
+            "--proposal", "meta-fleet/proposals/groundless.json", "--json",
+        )
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("recorded", res.stdout + res.stderr)
+        self.assertIn("before", res.stdout + res.stderr)
+
+    def test_expired_lessons_are_demoted(self):
+        repo = self.copy_fixture()
+        self.write_fleet_config(repo, {"stream_l_enabled": True})
+        res = self.meta_run(
+            repo, "lessons", "--fixture-dir", "meta-fleet", "--json",
+        )
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        payload = json.loads(res.stdout)
+        demoted = [entry["id"] for entry in payload["demoted"]]
+        kept = [entry["id"] for entry in payload["kept"]]
+        self.assertEqual(demoted, ["lsn-2025-keep-sse", "lsn-no-evidence"])
+        self.assertEqual(kept, ["lsn-fresh-budget"])
+        digest = res.stdout
+        self.assertIn("re-validate", digest)
+
+    def test_ledger_refuses_stream_l_without_its_switch(self):
+        repo = self.copy_fixture()
+        git(repo, "init", "-q", "-b", "main")
+        git(repo, "config", "user.email", "test@example.com")
+        git(repo, "config", "user.name", "Test User")
+        install_scripts(repo)
+        write_config(repo, {"fleet": {"enabled": True, "stream_l_enabled": False}})
+        res = script(repo, "ledger.py", "next", "--stream", "L")
+        self.assertEqual(res.returncode, 2, res.stdout + res.stderr)
+        self.assertIn("kill switch", res.stderr)
+        self.assertEqual(common_module.STREAMS["L"]["status"], "gated")
+
+
+class DoctorTests(RepoTestCase):
+    """Issue #19: fleet doctor preflight — advice becomes checks.
+
+    Stubbed gh/loginctl/systemctl on PATH plus a temp state dir. Hard
+    failures (linger off, over-scoped token, orphan worktrees) are named
+    and exit != 0; the all-good staging exits 0. The Orchestrator cold
+    start consults the doctor and reports instead of dispatching.
+    """
+
+    FIXTURE = SKILL_ROOT / "evals" / "fixtures" / "doctor-vm"
+
+    def stage(self, **env_extra: str) -> Path:
+        repo = self.tmp / "repo"
+        repo.mkdir(exist_ok=True)
+        shutil.copytree(self.FIXTURE, repo / "doctor-vm")
+        install_scripts(repo)
+        write_config(repo, {"fleet": {"merge_policy": "never"}})
+        git(repo, "init", "-q", "-b", "main")
+        git(repo, "config", "user.email", "test@example.com")
+        git(repo, "config", "user.name", "Test User")
+        git(repo, "remote", "add", "origin", "https://github.com/cassandre60/skills.git")
+        commit(repo, "base")
+        state = repo / ".autonomous" / "state"
+        state.mkdir(parents=True, exist_ok=True)
+        (state / "clock_reference").write_text(str(int(time.time())))
+        (state / "opencode_session_id").write_text("ses_TEST\n")
+        self.env_extra = env_extra
+        return repo
+
+    def doctor(self, repo: Path, *args: str) -> subprocess.CompletedProcess:
+        stub_bin = repo / "doctor-vm" / "bin"
+        env = dict(os.environ)
+        env["PATH"] = f"{stub_bin}:{os.environ['PATH']}"
+        env.update(self.env_extra)
+        return script(repo, "fleet.py", "doctor", "--json", *args, env=env)
+
+    def test_all_good_staging_exits_zero(self):
+        repo = self.stage()
+        res = self.doctor(repo)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        payload = json.loads(res.stdout)
+        self.assertTrue(payload["dispatch_ok"])
+        self.assertEqual(payload["hard_failures"], [])
+        names = {check["name"] for check in payload["checks"]}
+        for expected in ("gh-auth", "token-scopes", "branch-protection",
+                         "linger", "watchdog-timer", "worktree-registry",
+                         "disk-headroom", "model-ladder"):
+            self.assertIn(expected, names)
+        linger = next(c for c in payload["checks"] if c["name"] == "linger")
+        self.assertTrue(linger["ok"])
+
+    def test_missing_linger_is_a_named_hard_failure(self):
+        repo = self.stage(DOCTOR_STUB_LINGER="no")
+        res = self.doctor(repo)
+        self.assertNotEqual(res.returncode, 0, res.stdout + res.stderr)
+        payload = json.loads(res.stdout)
+        self.assertFalse(payload["dispatch_ok"])
+        self.assertIn("linger", payload["hard_failures"])
+        linger = next(c for c in payload["checks"] if c["name"] == "linger")
+        self.assertEqual(linger["severity"], "hard")
+        self.assertFalse(linger["ok"])
+
+    def test_overscoped_token_is_a_hard_failure(self):
+        repo = self.stage()
+        scopes = repo / "doctor-vm" / "scopes-overbroad.txt"
+        scopes.write_text("'repo', 'admin:org'")
+        self.env_extra = {"DOCTOR_STUB_SCOPES_FILE": str(scopes)}
+        res = self.doctor(repo)
+        payload = json.loads(res.stdout)
+        self.assertNotEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertIn("token-scopes", payload["hard_failures"])
+
+    def test_orphan_worktree_registry_is_a_hard_failure(self):
+        repo = self.stage()
+        wtree = self.tmp / "orphan"
+        git(repo, "worktree", "add", "-q", str(wtree), "-b", "orphan-branch")
+        shutil.rmtree(wtree)
+        res = self.doctor(repo)
+        payload = json.loads(res.stdout)
+        self.assertNotEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertIn("worktree-registry", payload["hard_failures"])
+
+    def test_govern_refuses_to_dispatch_when_doctor_is_enforced(self):
+        repo = self.stage(DOCTOR_STUB_LINGER="no")
+        write_config(repo, {"fleet": {"merge_policy": "never", "doctor": {"enforce": True}}})
+        stub_bin = repo / "doctor-vm" / "bin"
+        env = dict(os.environ)
+        env["PATH"] = f"{stub_bin}:{os.environ['PATH']}"
+        env.update(self.env_extra)
+        res = script(repo, "fleet.py", "govern", "--json", env=env)
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        payload = json.loads(res.stdout)
+        self.assertFalse(payload["dispatch"])
+        self.assertIn("doctor", payload["reason"].lower())
+
+
+class StatelessWakeTests(RepoTestCase):
+    """Issue #18 (state half): a fresh wake reads only files and leaves
+    state a SECOND fresh wake can continue from — no session id involved.
+
+    `fleet.py needs-brain` is the 0-token quiet-hours predicate: it
+    derives reasons from the snapshot + stub-gh PR state, records the
+    decision digest in state/wake.json, and reports "quiet" when nothing
+    changed since the last wake.
+    """
+
+    def stage(self, prs):
+        repo, origin = init_repo(self.tmp, name="wake-repo", with_origin=True)
+        install_scripts(repo)
+        write_config(repo)
+        json_path = self.tmp / "wake-prs.json"
+        json_path.write_text(json.dumps(prs) + "\n")
+        bin_dir = path_with_only(self.tmp, ("git",))
+        gh = write(
+            bin_dir / "gh",
+            "#!/bin/sh\nwhile IFS= read -r line; do printf '%s\\n' \"$line\"; done < \"$GH_JSON\"\n",
+        )
+        gh.chmod(0o755)
+        env = env_with_path(bin_dir, GH_JSON=str(json_path), ORCH_STATE_DIR=str(repo / ".autonomous" / "state"))
+        return repo, env, json_path
+
+    def red_pr(self, number=7):
+        return {
+            "number": number,
+            "title": f"Stream A: PR {number}",
+            "headRefName": f"task/pr-{number}",
+            "headRefOid": f"sha-{number}",
+            "statusCheckRollup": [
+                {"name": "unit-tests", "status": "COMPLETED", "conclusion": "FAILURE"}
+            ],
+        }
+
+    def test_first_wake_needs_brain_and_records_state(self):
+        repo, env, _ = self.stage([self.red_pr()])
+        res = script(repo, "fleet.py", "needs-brain", "--json", env=env)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        payload = json.loads(res.stdout)
+        self.assertTrue(payload["needs_brain"])
+        self.assertIn("red-pr #7", payload["reasons"][0])
+        wake = repo / ".autonomous" / "state" / "wake.json"
+        self.assertTrue(wake.is_file(), "the wake decision must be recorded")
+        self.assertEqual(json.loads(wake.read_text())["digest"], payload["digest"])
+        # stateless by construction: no session id is read or written
+        self.assertFalse((repo / ".autonomous" / "state" / "opencode_session_id").exists())
+
+    def test_second_wake_on_unchanged_snapshot_is_quiet(self):
+        repo, env, _ = self.stage([self.red_pr()])
+        first = script(repo, "fleet.py", "needs-brain", "--json", env=env)
+        self.assertTrue(json.loads(first.stdout)["needs_brain"])
+        second = script(repo, "fleet.py", "needs-brain", "--json", env=env)
+        self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
+        payload = json.loads(second.stdout)
+        self.assertFalse(payload["needs_brain"])
+        self.assertIn("unchanged", payload["reason"])
+
+    def test_changed_snapshot_reopens_the_wake(self):
+        repo, env, json_path = self.stage([self.red_pr()])
+        script(repo, "fleet.py", "needs-brain", "--json", env=env)
+        # The PR went green and unmerged: a fresh wake must pick it up.
+        green = self.red_pr()
+        green["statusCheckRollup"] = [
+            {"name": "unit-tests", "status": "COMPLETED", "conclusion": "SUCCESS"}
+        ]
+        json_path.write_text(json.dumps([green]) + "\n")
+        res = script(repo, "fleet.py", "needs-brain", "--json", env=env)
+        payload = json.loads(res.stdout)
+        self.assertTrue(payload["needs_brain"])
+        self.assertIn("green-unmerged-pr #7", payload["reasons"][0])
+
+    def test_kill_switch_is_a_tend_only_reason(self):
+        repo, env, _ = self.stage([self.red_pr()])
+        (repo / ".autonomous").mkdir(exist_ok=True)
+        (repo / ".autonomous" / "STOP").write_text("")
+        res = script(repo, "fleet.py", "needs-brain", "--json", env=env)
+        payload = json.loads(res.stdout)
+        self.assertTrue(payload["needs_brain"])
+        self.assertTrue(
+            any("kill-switch-present" in reason for reason in payload["reasons"]),
+            payload["reasons"],
+        )
+
+    def test_idle_queue_is_a_reason_to_generate(self):
+        repo, env, _ = self.stage([])
+        res = script(repo, "fleet.py", "needs-brain", "--json", env=env)
+        payload = json.loads(res.stdout)
+        self.assertTrue(payload["needs_brain"])
+        self.assertIn("queue-idle", payload["reasons"][0])

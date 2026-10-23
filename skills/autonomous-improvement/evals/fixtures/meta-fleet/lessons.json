@@ -1,0 +1,29 @@
+{
+  "schema": "fleet-lessons/1",
+  "lessons": [
+    {
+      "id": "lsn-2025-keep-sse",
+      "lesson": "keep Server-Sent Events alive with a 25s ping",
+      "scope": "scripts/autonomous/fleet.py",
+      "evidence": "older snapshot only",
+      "recorded": "2024-09-02",
+      "re_validate_by": "2025-01-31"
+    },
+    {
+      "id": "lsn-no-evidence",
+      "lesson": "always prefer functional rewrites",
+      "scope": "*",
+      "evidence": "",
+      "recorded": "2026-10-01",
+      "re_validate_by": "2999-01-01"
+    },
+    {
+      "id": "lsn-fresh-budget",
+      "lesson": "budget-tightening on stream A saves mutation-rework minutes",
+      "scope": "stream A mutation PRs",
+      "evidence": "history.json rows RW-711..RW-713",
+      "recorded": "2026-10-01",
+      "re_validate_by": "2999-01-01"
+    }
+  ]
+}

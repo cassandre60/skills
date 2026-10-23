@@ -1,0 +1,9 @@
+{
+  "vulnerable-lib": [
+    {
+      "id": "FAKE-2026-1",
+      "vulnerable": "<2.2.0",
+      "fix_hint": "bump to >=2.2.0"
+    }
+  ]
+}

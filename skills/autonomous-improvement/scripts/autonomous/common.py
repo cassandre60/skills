@@ -43,9 +43,19 @@ DEFAULT_CONFIG = {
     "test_for_source": [],
     "candidates": {
         "A": {"include": [], "exclude": [], "require_test": True, "priority_paths": []},
-        "B": {"include": [], "exclude": [], "priority_paths": []},
+        "B": {"include": [], "exclude": [], "require_test": False, "priority_paths": []},
+        # The shipped streams carry their own default candidate scope: since
+        # an empty include list means "not configured" (not "nothing to do"),
+        # a stream without one would refuse to run at all.
+        "C": {"include": ["src/**/*.py", "lib/**/*.py", "tests/**/*.py"], "exclude": [], "require_test": False, "priority_paths": []},
+        "E": {"include": ["src/**/*.py", "lib/**/*.py"], "exclude": [], "require_test": False, "priority_paths": []},
+        "F": {"include": ["tests/**/*.py", "test/**/*.py"], "exclude": [], "require_test": False, "priority_paths": []},
+        "G": {"include": ["src/**/*.py", "lib/**/*.py"], "exclude": [], "require_test": False, "priority_paths": []},
+        "H": {"include": ["**/*"], "exclude": ["**/.git/**", "**/node_modules/**"], "require_test": False, "priority_paths": []},
+        "I": {"include": ["**/*.md", "src/**/*.py"], "exclude": [], "require_test": False, "priority_paths": []},
+        "K": {"include": ["**/*"], "exclude": ["**/.git/**"], "require_test": False, "priority_paths": []},
+        "L": {"include": ["**/*"], "exclude": ["**/.git/**"], "require_test": False, "priority_paths": []},
     },
-    "machine_budget": {"max_concurrent_tests": 1},
     "pr_required": {"COMPLETED": True, "SOUND": False},
     "fleet": {
         "max_open_prs": 5,
@@ -54,6 +64,19 @@ DEFAULT_CONFIG = {
         "kill_switch_file": ".autonomous/STOP",
         "merge_policy": "never",
         "ledger_mode": "batched",
+        "doctor": {
+            "enforce": False,
+            "require_branch_protection": True,
+            "require_timer": False,
+            "forbidden_token_scopes": [
+                "admin:org",
+                "delete_repo",
+                "admin:public_key",
+                "admin:repo_hook",
+            ],
+            "min_free_gb": 5,
+            "max_clock_skew_seconds": 300,
+        },
     },
 }
 
@@ -449,16 +472,16 @@ def test_for_source(root: Path, cfg: Dict[str, Any], source: str) -> Optional[st
 STREAMS: Dict[str, Dict[str, Any]] = {
     "A": {"label": "A (Mutation)", "status": "available"},
     "B": {"label": "B (Test Audit)", "status": "available"},
-    "C": {"label": "C (Property / Fuzz)", "status": "planned"},
+    "C": {"label": "C (Property / Fuzz)", "status": "available"},
     "D": {"label": "D (Data / Migration)", "status": "planned"},
-    "E": {"label": "E (Defect Repair)", "status": "planned"},
-    "F": {"label": "F (Flake & Determinism)", "status": "planned"},
-    "G": {"label": "G (Performance)", "status": "planned"},
-    "H": {"label": "H (Security & Supply Chain)", "status": "planned"},
-    "I": {"label": "I (Docs & Spec Truthfulness)", "status": "planned"},
+    "E": {"label": "E (Defect Repair)", "status": "available"},
+    "F": {"label": "F (Flake & Determinism)", "status": "available"},
+    "G": {"label": "G (Performance)", "status": "available"},
+    "H": {"label": "H (Security & Supply Chain)", "status": "available"},
+    "I": {"label": "I (Docs & Spec Truthfulness)", "status": "available"},
     "J": {"label": "J (Simplification / Dead Code)", "status": "planned"},
-    "K": {"label": "K (Dependency Evolution)", "status": "planned"},
-    "L": {"label": "L (Meta: Fleet Self-Improvement)", "status": "planned"},
+    "K": {"label": "K (Dependency Evolution)", "status": "available"},
+    "L": {"label": "L (Meta: Fleet Self-Improvement)", "status": "gated"},
 }
 _STREAM_ALIASES: Dict[str, str] = {"1": "A", "2": "B"}
 for _sid, _info in STREAMS.items():
@@ -477,12 +500,37 @@ def normalize_stream(value: str) -> str:
             f"unknown stream {value!r}; known streams: {known} (1/2 alias A/B)"
         )
     info = STREAMS[stream]
-    if info["status"] != "available":
+    if info["status"] not in ("available", "gated"):
         raise UsageError(
             f"stream {info['label']} is planned, not implemented "
-            "(use A or B; see references/08-recursive-self-improvement.md)"
+            "(use A, B, or F; see references/08-recursive-self-improvement.md)"
         )
     return stream
+
+
+def stream_l_switch_problem(root: Path, cfg: Dict[str, Any]) -> Optional[str]:
+    """Stream L's own kill switch; independent of the fleet switch.
+
+    L runs only when ``fleet.stream_l_enabled`` is true AND no
+    ``.autonomous/STOP-STREAM-L`` file is present. Flowing through the
+    fleet master switch is deliberately impossible: a loop that can not
+    be turned off per-stream when it touches its own evaluator is the
+    documented objective-hacking incident.
+    """
+    fleet = cfg.get("fleet", {}) or {}
+    if not bool(fleet.get("stream_l_enabled")):
+        return (
+            "stream L is gated behind its kill switch (independent of the "
+            "fleet switch): set fleet.stream_l_enabled=true in "
+            "scripts/autonomous/config.json to request it"
+        )
+    for candidate in (root / ".autonomous" / "STOP-STREAM-L", Path.cwd() / ".autonomous" / "STOP-STREAM-L"):
+        if candidate.exists():
+            return (
+                "stream L kill switch present (.autonomous/STOP-STREAM-L); "
+                "L stays off while the file exists"
+            )
+    return None
 
 
 def stream_label(stream: str) -> str:

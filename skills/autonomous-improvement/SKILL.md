@@ -6,14 +6,19 @@ description: Run falsifiable, high-signal improvement cycles on a codebase inste
 # Autonomous Improvement
 
 Spend tokens on work that can be **mechanically falsified**, not on renames,
-prose, or checkbox tests. Two streams are active:
+prose, or checkbox tests. Ten streams are active:
 
-- **A — mutation testing:** find behavior the suite does not protect.
-- **B — adversarial test audit:** find tests that cannot fail, assert mocks,
-  sleep instead of synchronizing, or measure in a harness unlike production.
+- **A — mutation testing:** behavior the suite does not protect.
+- **B — adversarial test audit:** tests that cannot fail, assert mocks, or sleep instead of syncing.
+- **C — property / fuzz:** recorded seeds, shrunk counterexamples retained (`fuzz_shrink.py`).
+- **E — defect repair:** issue intake, a repro that must be red on main (`repair.py`).
+- **F — flake & determinism:** CI-history finder plus an N-run oracle.
+- **G — performance:** bench delta **and** output equivalence, both mandatory (`perf_gate.py`).
+- **H+K — security & dependency:** stub-advisory audits, redacting secret scan, oracle-first bumps (`advisory.py`).
+- **I — docs & spec truth:** runnable examples, symbol/spec drift (`docs_truth.py`).
+- **L — meta (gated):** own kill switch, replay-gated claims, L4 issue-only (`meta.py`).
 
-Each round produces at most one small, evidence-backed PR. If there is no
-falsifiable gap, stop; that is a valid result.
+Each round produces at most one small, evidence-backed PR; no gap is a valid result.
 
 ## Who runs the round
 
@@ -48,7 +53,7 @@ the session's own, dispatched unpinned, first — and when the tracked targets
 run out, the next candidates are the files with no ledger row yet.
 
 Tending the queue is work; generating into a full queue is the new parking:
-`scripts/autonomous/fleet.py govern` checks open-PR caps and kill-switches.
+`scripts/autonomous/fleet.py govern` checks open-PR caps, kill-switches, and the `fleet.py doctor` preflight (report, don't dispatch).
 Idle capacity turns the fleet's own history into skill proposals — never a merge (`05`).
 
 ## The five laws
@@ -60,10 +65,6 @@ Idle capacity turns the fleet's own history into skill proposals — never a mer
 | **3. Worktree isolation** | Every task runs in an isolated worktree branched from the configured base (`origin/main` by default). Stage by name; never run destructive git commands outside your own worktree. |
 | **4. Machine budget** | One targeted test per mutant, one full-file run at the end of the task. Never run the whole suite locally — that is CI's job. One analyze/lint pass per task, on touched files, after the last edit. |
 | **5. Pool rotation** | A quota error changes the model; it is never retried on the model that just failed. The dead model is recorded, the next live model takes the task, and the wake that revives a frozen session names a live model. A gateway reporting "$0 balance" is a paid pool with no credit, not a free fallback. |
-
-The engine runs tests serially. `machine_budget.max_concurrent_tests` in config
-records the owner's cap for parallel shards/agents; it is not a per-run fan-out
-knob.
 
 ## Install into a repo
 
@@ -94,9 +95,9 @@ Full commands, worktree cleanup, and the evidence contract: `references/04-workf
 
 ## Stream A — mutation testing
 
-The engine is regex-based, with per-language rule packs under
-`scripts/autonomous/mutation_rules/`. It mutates one line at a time and runs
-your targeted test command once per mutant.
+The engine is regex-based (`scripts/autonomous/mutation_rules/`): it mutates one
+line at a time and runs your targeted test command once per mutant; the timeout
+scales off the measured baseline, and survivors need a clean-source confirm pass.
 
 - `KILLED`: the suite noticed. No work.
 - `SURVIVED`: a candidate gap. **Triage first** — equivalent mutants, string or
@@ -146,17 +147,16 @@ The ledger is a git-tracked markdown table:
   appends merge without conflicts, and the Status cell must be the bare token.
 - The hash is the blob at HEAD; `record` warns if the target is dirty.
 
-## Beyond testing (planned streams C–L)
+## Beyond testing (planned streams D, J)
 
-Testing is the bootstrap, not the ceiling: streams C–L generalize the same
-five laws to fuzzing, defect repair, flakiness, performance, security, docs
-truthfulness, simplification, dependency evolution, and — capped and
-eval-gated — the fleet improving itself. Each must pass the stream contract
-in `references/08-recursive-self-improvement.md` (deterministic finder,
-mechanical oracle, content-addressed memory, bounded blast radius, referee
-isolation) before its letter unlocks; `ledger.py` rejects C–L until then.
-Do not start work under a locked letter or promise it in a PR; offer A/B, or
-file the finding as an evidence-backed issue.
+Testing is the bootstrap, not the ceiling. The remaining streams generalize
+the same five laws to migration safety and simplification. Each must pass
+the stream contract in `references/08-recursive-self-improvement.md`
+(deterministic finder, mechanical oracle, content-addressed memory, bounded
+blast radius, referee isolation) before its letter unlocks; `ledger.py`
+rejects them until then. Do not start work under a locked letter or promise
+it in a PR; offer an unlocked stream, or file the finding as an
+evidence-backed issue.
 
 ## Unattended operation (advanced)
 

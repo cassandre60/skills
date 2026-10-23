@@ -1,0 +1,20 @@
+{
+  "schema": "stream-l-proposal/1",
+  "kind": "cadence-tune",
+  "touches": ["weakening_tripwire"],
+  "basis": "green rate would rise if the mutation engine stopped bouncing relaxations of its referee checks",
+  "claims": {
+    "stream": "A",
+    "metric": "median_owner_minutes",
+    "filter": {"kind": "mutation-rework", "outcome": "rework"},
+    "before": 40.0,
+    "after": 5.0
+  },
+  "multi_objective": {
+    "owner_minutes_delta": -35.0,
+    "ci_minutes_delta": 0.0,
+    "tokens_delta": 0.0,
+    "accepted_value_delta": 0.0,
+    "acceptance_rate_estimate_14d": 0.9
+  }
+}

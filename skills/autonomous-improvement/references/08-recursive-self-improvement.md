@@ -39,7 +39,28 @@ at T2, and at T1 for anything referee-adjacent.
 
 ## The catalog
 
-Available now: **A** mutation, **B** adversarial test audit (`03`).
+Available now: **A** mutation, **B** adversarial test audit (`03`),
+**C** property/fuzz (`fuzz_shrink.py`), **E** defect repair (`repair.py`),
+**G** performance (`perf_gate.py`: pinned bench delta AND differential
+equivalence — both halves mandatory), **H+K** security & dependency
+(`advisory.py`: stub-advisory pin audits, a secret scan that redacts by
+construction, oracle-first bumps), **I** docs & spec truth
+(`docs_truth.py`), and **L** meta — gated behind its own kill switch
+(`meta.py`: claims replayed from recorded fleet history, L4 surfaces
+issue-only, lessons expire). **D** (migration safety) and **J**
+(simplification) remain planned; J ships inside PR #28.
+**F** flake & determinism (`flakes.py`: finder + N-run oracle), the first
+expansion stream. The oracle demands ZERO failing runs after a fix —
+"passed twice in a row" is not evidence — and names a cause class
+(timing / order-dependence / shared state / external resource). Allowed fix
+shapes: poll-with-deadline, virtual clock, isolation or seed pinning,
+deterministic ordering. Banned: longer sleeps, blanket retries, and
+quarantine or `@skip` without a root-cause issue plus expiry. The finder can
+only EMIT candidates (static flake idioms + mixed-outcome CI history); never
+quarantine on a finder hit alone. Memory: ledger stream `F`, dedup key is the
+test-content hash; when a "flake" candidate turns out to be a real product
+bug, hand the finding to the defect-repair stream's intake instead of
+recording a negative row here.
 
 | Stream | Oracle in one line | Starts |
 |---|---|---|
@@ -54,11 +75,11 @@ Available now: **A** mutation, **B** adversarial test audit (`03`).
 | **K** Dependency evolution | build + targeted suite green on the bump; majors one per PR | T2 |
 | **L** Meta (fleet self-improvement) | proposal beats incumbent on history replay; eval set does not regress | T1/T2 capped |
 
-`ledger.py` rejects C–L with "planned, not implemented" until a stream ships
-its finder + oracle + eval fixture. A stream that exists only as an
-encouraging paragraph produces cosmetic churn with a fancy name — do not
-start work under these letters before their tooling lands; offer A/B, or
-file the finding as an issue (that *is* T1 behavior).
+`ledger.py` rejects the unshipped letters with "planned, not implemented"
+until a stream ships its finder + oracle + eval fixture. A stream that exists
+only as an encouraging paragraph produces cosmetic churn with a fancy name —
+do not start work under these letters before their tooling lands; offer A/B/F,
+or file the finding as an issue (that *is* T1 behavior).
 
 Sequencing rationale in brief: **F** repairs the oracle A/B/E trust; **E**
 is the largest value unlock (pre-justified defects via issue/CI intake);

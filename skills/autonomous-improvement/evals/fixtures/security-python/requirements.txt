@@ -1,0 +1,2 @@
+vulnerable-lib==2.1.1
+stable-lib==1.3.3

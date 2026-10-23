@@ -100,7 +100,20 @@ The Orchestrator:
   present, or open fleet PRs have reached `fleet.max_open_prs` (default 5), or the
   14-day acceptance rate is below floor, **do not dispatch new workers** — spend
   the wake tending existing PRs (fixes or owner asks in the `tend` queue).
-  Tending the queue is work; generating into a full queue is the new parking;
+  Tending the queue is work; generating into a full queue is the new parking.
+  On deployments that set `fleet.doctor.enforce: true`, `govern` also refuses
+  when the `fleet.py doctor` preflight hits a hard failure;
+- **runs the blast-radius preflight on unattended hosts**: `fleet.py doctor
+  --json` (read-only) checks token scopes vs `merge_policy`, branch protection,
+  linger, watchdog timer, state-dir consistency, disk headroom, clock skew and
+  orphan worktrees. Hard failures are named; **do not dispatch — report
+  instead** (`05-unattended-operation.md` §Preflight);
+- **spends a model turn only when state changed** (stateless shape): runs
+  `python3 scripts/autonomous/fleet.py needs-brain --json` first. It derives
+  reasons from PR/snapshot state without a model (`red-pr`, `green-unmerged-pr`,
+  `owner-ask`, `queue-idle`) and records the decision digest in
+  `state/wake.json`; a wake on unchanged state is quiet at 0 tokens — see
+  `05-unattended-operation.md` §Stateless wake;
 - derives the queue from `ledger.py next` plus the open-PR list, and
   re-checks both immediately before each dispatch (main moves; see `07`);
 - dispatches at most 3 worker subagents at a time (tune to capacity), each

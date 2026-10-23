@@ -1,0 +1,4 @@
+hello world
+stream-C seed: ABABAA pocket
+xBxABAy tail
+plain B tokens
