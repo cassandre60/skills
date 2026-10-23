@@ -625,7 +625,8 @@ class LedgerTests(RepoTestCase):
         stream_a = script(repo, "ledger.py", "next", "--stream", "A", "--json")
         alias = script(repo, "ledger.py", "next", "--stream", "1", "--json")
         self.assertEqual(json.loads(stream_a.stdout)["candidates"], json.loads(alias.stdout)["candidates"])
-        planned = script(repo, "ledger.py", "next", "--stream", "C")
+        # C is available since issue #25; D is still a planned letter.
+        planned = script(repo, "ledger.py", "next", "--stream", "D")
         self.assertEqual(planned.returncode, 2)
         self.assertIn("planned, not implemented", planned.stderr)
 
@@ -1708,7 +1709,9 @@ class StreamRegistryTests(unittest.TestCase):
         # non-available letter must refuse with its full name, so a session
         # cannot drift into un-tooled work under a planned letter.
         for stream, info in common_module.STREAMS.items():
-            if info["status"] == "available":
+            # Gated letters (L) pass normalize on purpose: their caller-side
+            # kill switch owns the refusal.
+            if info["status"] != "planned":
                 continue
             with self.assertRaises(common_module.UsageError) as ctx:
                 common_module.normalize_stream(stream)

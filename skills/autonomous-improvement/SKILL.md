@@ -53,8 +53,7 @@ the session's own, dispatched unpinned, first — and when the tracked targets
 run out, the next candidates are the files with no ledger row yet.
 
 Tending the queue is work; generating into a full queue is the new parking:
-`scripts/autonomous/fleet.py govern` checks open-PR caps and kill-switches;
-`fleet.py doctor` preflights scopes/protection/linger (report, don't dispatch).
+`scripts/autonomous/fleet.py govern` checks open-PR caps, kill-switches, and the `fleet.py doctor` preflight (report, don't dispatch).
 Idle capacity turns the fleet's own history into skill proposals — never a merge (`05`).
 
 ## The five laws
