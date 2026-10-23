@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import datetime
 import json
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,12 +35,14 @@ from common import (
     Fatal,
     SEPARATOR_RE,
     STATUSES,
+    STREAMS,
     UsageError,
     candidate_paths,
     config_path,
     escape_cell as esc,
     format_exit,
     git,
+    glob_match,
     hash_at_head,
     insert_table_rows,
     is_dirty,
@@ -361,6 +364,205 @@ def _candidate_records(
     return records
 
 
+# --- Risk-ranked discovery (issue #15) -------------------------------------
+# Scoring is a documented heuristic, not a measurement: every factor is
+# derived from git + config in one pass, the weights are fixed below, and
+# the window is a commit count (not wall-clock) so output is deterministic
+# for a fixed repo state. ``priority_paths`` stays a hard tier above the
+# score: owner intent beats heuristics. Candidates named by an open issue
+# (the intake lane: a human is already asking) outrank any score in-tier.
+
+_BRANCH_RE = re.compile(r"\b(?:if|for|while|case|catch|when|guard)\b|&&|\|\|")
+_FAN_IN_CANDIDATE_CAP = 100
+
+
+def _churn_index(root: Path, window: int) -> Dict[str, Tuple[int, int]]:
+    """One git-log pass: {path: (commits touching it, lines changed)}."""
+    proc = git(
+        ["log", "-n", str(window), "--numstat", "--format=commit:%H"],
+        cwd=root,
+        quiet=True,
+    )
+    index: Dict[str, Tuple[int, int]] = {}
+    if proc.returncode != 0:
+        return index
+    in_commit = False
+    for line in proc.stdout.splitlines():
+        if line.startswith("commit:"):
+            in_commit = True
+            continue
+        if not in_commit or "\t" not in line:
+            continue
+        parts = line.split("\t")
+        if len(parts) < 3:
+            continue
+        added = int(parts[0]) if parts[0].isdigit() else 0
+        deleted = int(parts[1]) if parts[1].isdigit() else 0
+        path = parts[2]
+        touches, lines = index.get(path, (0, 0))
+        index[path] = (touches + 1, lines + added + deleted)
+    return index
+
+
+def _fan_in(root: Path, target: str) -> int:
+    """Reference-count proxy: files mentioning the module stem (heuristic)."""
+    stem = Path(target).stem
+    if not stem:
+        return 0
+    proc = git(["grep", "-l", "-w", "-F", "--", stem], cwd=root, quiet=True)
+    if proc.returncode != 0:
+        return 0
+    return sum(1 for path in proc.stdout.splitlines() if path and path != target)
+
+
+def _coverage_index(root: Path, cfg: Dict[str, Any]) -> Dict[str, float]:
+    """Optional {path: percent_covered} from a coverage.py JSON or lcov file."""
+    report = cfg.get("coverage_report")
+    if not report:
+        return {}
+    path = Path(str(report))
+    if not path.is_absolute():
+        path = root / path
+    if not path.exists():
+        return {}
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    index: Dict[str, float] = {}
+    try:
+        data = json.loads(text)
+        files = data.get("files") if isinstance(data, dict) else None
+        if isinstance(files, dict):
+            for name, entry in files.items():
+                summary = (entry or {}).get("summary") or {}
+                if isinstance(summary.get("percent_covered"), (int, float)):
+                    index[rel_path(root, str(name))] = float(summary["percent_covered"])
+            return index
+    except json.JSONDecodeError:
+        pass
+    current: Optional[str] = None
+    found = hit = 0
+    for line in text.splitlines():
+        if line.startswith("SF:"):
+            current, found, hit = line[3:].strip(), 0, 0
+        elif line.startswith("LF:"):
+            found = int(line[3:]) if line[3:].strip().isdigit() else 0
+        elif line.startswith("LH:"):
+            hit = int(line[3:]) if line[3:].strip().isdigit() else 0
+        elif line.startswith("end_of_record") and current and found:
+            index[rel_path(root, current)] = 100.0 * hit / found
+            current = None
+    return index
+
+
+def _issue_intake(
+    root: Path, targets: List[str], require_gh: bool
+) -> Tuple[Dict[str, int], Optional[str]]:
+    """{target: issue number} for candidates named by an open issue's text."""
+    try:
+        proc = run(
+            ["gh", "issue", "list", "--state", "open", "--json",
+             "number,title,body", "--limit", "100"],
+            cwd=root,
+            quiet=True,
+        )
+    except Exception as exc:  # missing tool or timeout
+        if require_gh:
+            raise
+        return {}, f"gh not available ({exc}); skipping issue intake lane"
+    if proc.returncode != 0:
+        detail_lines = (proc.stderr or proc.stdout).strip().splitlines()
+        detail = detail_lines[0] if detail_lines else f"exit {proc.returncode}"
+        if require_gh:
+            raise EnvError(f"gh issue list failed: {detail}")
+        return {}, f"gh unavailable ({detail}); skipping issue intake lane"
+    try:
+        data = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        if require_gh:
+            raise EnvError("gh issue list returned invalid JSON")
+        return {}, "gh returned invalid JSON; skipping issue intake lane"
+    if not isinstance(data, list):
+        if require_gh:
+            raise EnvError("gh issue list returned an unexpected payload")
+        return {}, "gh returned an unexpected payload; skipping issue intake lane"
+    intake: Dict[str, int] = {}
+    for item in data:
+        if not isinstance(item, dict) or not isinstance(item.get("number"), int):
+            continue
+        text = f"{item.get('title') or ''}\n{item.get('body') or ''}"
+        for target in targets:
+            if target in text and target not in intake:
+                intake[target] = item["number"]
+    return intake, None
+
+
+def _priority_rank(target: str, priorities: List[str]) -> int:
+    for rank, priority in enumerate(priorities):
+        prefix = str(priority).rstrip("/")
+        if target == prefix or target.startswith(prefix + "/") or glob_match(target, str(priority)):
+            return rank
+    return len(priorities)
+
+
+def _risk_rank(
+    root: Path,
+    cfg: Dict[str, Any],
+    stream: str,
+    eligible: List[Dict[str, Any]],
+    window: int,
+    require_gh: bool,
+) -> None:
+    """Annotate each record with rank={score,why[,issue]} and sort in place."""
+    churn = _churn_index(root, window)
+    coverage = _coverage_index(root, cfg)
+    targets = [record["target"] for record in eligible]
+    intake, warning = _issue_intake(root, targets, require_gh)
+    if warning:
+        print(f"[warning] {warning}", file=sys.stderr)
+    priorities = list((cfg.get("candidates", {}).get(stream, {}) or {}).get("priority_paths") or [])
+    fan_in_on = len(eligible) <= _FAN_IN_CANDIDATE_CAP
+
+    for record in eligible:
+        target = record["target"]
+        touches, lines = churn.get(target, (0, 0))
+        text = ""
+        path = root / target
+        if path.exists():
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        loc = sum(1 for line in text.splitlines() if line.strip())
+        branches = len(_BRANCH_RE.findall(text))
+        fan_in = _fan_in(root, target) if fan_in_on else 0
+        why: List[str] = []
+        score = 3.0 * touches + min(lines, 1000) / 100.0
+        if touches:
+            why.append(f"touched-in-{touches}-of-last-{window}-commits")
+        if lines:
+            why.append(f"churn-{lines}-lines-in-window")
+        score += 1.5 * fan_in + min(loc, 2000) / 200.0 + min(branches, 100) / 10.0
+        if fan_in:
+            why.append(f"referenced-by-{fan_in}-files")
+        if loc:
+            why.append(f"size-{loc}-loc")
+        pct = coverage.get(target)
+        if pct is not None:
+            score += (100.0 - pct) / 20.0
+            why.append(f"coverage-{pct:.0f}%")
+        rank: Dict[str, Any] = {"score": round(score, 3), "why": why}
+        issue = intake.get(target)
+        if issue is not None:
+            rank["issue"] = issue
+            why.insert(0, f"mentioned-in-issue-#{issue}")
+        record["rank"] = rank
+
+    eligible.sort(
+        key=lambda record: (
+            _priority_rank(record["target"], priorities),
+            0 if "issue" in record["rank"] else 1,
+            -record["rank"]["score"],
+            record["target"],
+        )
+    )
+
+
 def cmd_next(args: argparse.Namespace) -> int:
     root = repo_root()
     cfg = load_config(root, args.config)
@@ -415,6 +617,9 @@ def cmd_next(args: argparse.Namespace) -> int:
             continue
         eligible.append(record)
 
+    if getattr(args, "rank", "lexicographic") == "risk":
+        _risk_rank(root, cfg, stream, eligible, args.rank_window, args.require_gh)
+
     selected = eligible[: max(0, args.limit)]
     for record in selected:
         record["recommended_test_cmd"] = None
@@ -443,6 +648,9 @@ def cmd_next(args: argparse.Namespace) -> int:
         print(f"Mapped test:         {record.get('test') or '—'}")
         print(f"Composite hash:      {record['composite_hash']}")
         print(f"Last audited hash:   {record.get('audited_hash') or 'NEVER'}")
+        if record.get("rank"):
+            why = ", ".join(record["rank"].get("why") or [])
+            print(f"Risk score:          {record['rank']['score']} ({why})")
         if record.get("open_mutants"):
             print(
                 f"Open mutants:        {record['open_mutants']} "
@@ -639,7 +847,9 @@ def cmd_check(args: argparse.Namespace) -> int:
 
 def _stream_for_target(cfg: Dict[str, Any], target: str) -> Optional[str]:
     """Which configured stream owns this path, if any."""
-    for stream in ("A", "B"):
+    for stream, info in STREAMS.items():
+        if info.get("status") != "available":
+            continue
         section = cfg.get("candidates", {}).get(stream, {})
         include = section.get("include") or []
         exclude = section.get("exclude") or []
@@ -840,17 +1050,33 @@ def build_parser() -> argparse.ArgumentParser:
     next_parser = subparsers.add_parser(
         "next", parents=[common_parent], help="find the next unaudited target"
     )
-    next_parser.add_argument("--stream", required=True, help="A/B (1/2 accepted as aliases)")
+    next_parser.add_argument(
+        "--stream", required=True, help="available stream letter (1/2 alias A/B)"
+    )
     next_parser.add_argument("--limit", type=int, default=1, help="number of candidates to print")
     next_parser.add_argument("--json", action="store_true", help="machine-readable output")
     next_parser.add_argument("--require-gh", action="store_true", help="fail if gh is unavailable")
+    next_parser.add_argument(
+        "--rank",
+        choices=("lexicographic", "risk"),
+        default="lexicographic",
+        help="candidate order: config/alphabet (default) or git risk score + issue intake",
+    )
+    next_parser.add_argument(
+        "--rank-window",
+        type=int,
+        default=200,
+        help="risk ranking: commits of history to score churn over (default: 200)",
+    )
     next_parser.add_argument("--verbose", action="store_true", help="print skip reasons")
     next_parser.set_defaults(func=cmd_next)
 
     record_parser = subparsers.add_parser(
         "record", parents=[common_parent], help="append an audit row"
     )
-    record_parser.add_argument("--stream", required=True, help="A/B (1/2 accepted as aliases)")
+    record_parser.add_argument(
+        "--stream", required=True, help="available stream letter (1/2 alias A/B)"
+    )
     record_parser.add_argument("--target", required=True, help="repo-relative target path")
     record_parser.add_argument("--status", required=True, help="COMPLETED or SOUND")
     record_parser.add_argument("--pr", help="PR/issue ref (required for COMPLETED by default)")
@@ -865,7 +1091,9 @@ def build_parser() -> argparse.ArgumentParser:
         "check", parents=[common_parent], help="exit 0 iff audited at the current hash"
     )
     check_parser.add_argument("--target", required=True, help="repo-relative target path")
-    check_parser.add_argument("--stream", default="A", help="A/B (default A)")
+    check_parser.add_argument(
+        "--stream", default="A", help="available stream letter (default A)"
+    )
     check_parser.set_defaults(func=cmd_check)
 
     validate_parser = subparsers.add_parser(

@@ -73,9 +73,33 @@ adapter ships without a fixture.
 | `TIMEOUT` | Test command exceeded the effective timeout. | configurable |
 | `UNVERIFIED` | A survivor whose clean-source confirmation run failed: the suite is unreliable on clean source, so the pass proves nothing. Not work. | no |
 
-`--timeout-counts-as {killed,survived,excluded}` (default `killed`) controls
-timeouts. A missing test executable aborts the run as an environment failure; it
-is not a kill. A failing baseline aborts before any mutant is applied.
+Timeouts are **baseline-relative** by default: per-mutant timeout =
+`max(--timeout-factor (5) × baseline, --timeout-floor (20s))`, because a fixed
+timeout on a loaded box manufactures kill rate; `--timeout <s>` still forces a
+fixed value. `--timeout-counts-as {killed,survived,excluded}` (default
+`killed`) controls how timeouts count. A missing test executable aborts the
+run as an environment failure; it is not a kill. A failing baseline aborts
+before any mutant is applied.
+
+A survivor is only reported after **confirmation** (`--confirm-survivors 1`
+by default): the clean suite must stay green across extra runs and the mutant
+must still pass when re-applied, otherwise it lands in `UNCONFIRMED` — one
+pass on a flaky suite is a coin flip, not a gap. Verdicts are cached in
+`.autonomous/mutant-cache.json`, keyed by the exact source bytes + test
+command, so unchanged pairs reuse verdicts (`--no-cache` bypasses; only
+killed and confirmed-survived verdicts are stored).
+
+## Backends
+
+| Backend | How | Notes |
+|---|---|---|
+| `sregex` | built-in rule packs | guaranteed available, zero-dependency |
+| `stryker` | `--backend stryker` or config `mutation_backend: stryker` + `mutation_backends.stryker.{cmd,report}` | normalizes the Stryker mutation-report JSON (mutated lines reconstructed from locations) into the same schema |
+| `auto` (default) | configured external when its binary is found | otherwise falls back to `sregex` with a printed note |
+
+`--backend-cmd`/`--backend-report` override config for one run. mutmut /
+cargo-mutants / gremlins / PIT adapters are not wired yet; their reports need
+the same normalization treatment before they can feed triage honestly.
 
 Compile classification is anchored per language (for example
 `^\S+\.dart:\d+:\d+: Error: ` and `^\s*(SyntaxError|IndentationError|TabError):`),
@@ -225,3 +249,8 @@ A regex engine should not block PRs until it has two green runs with zero false
 positives on that repo and a triage log. Prefer an AST-based mutator for a
 blocking gate. If this engine is promoted, run it diff-scoped and record the seed
 and shard in CI logs.
+
+`--output-issue` is **deprecated**: it wrote one survivor to a local markdown
+file nothing consumed. File survivors as real, deduped GitHub issues with
+`fleet.py publish --issues-from <engine.json>` instead (or ingest them into
+the mutant ledger with `mutants.py ingest`).

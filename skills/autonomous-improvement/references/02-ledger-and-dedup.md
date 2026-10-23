@@ -177,6 +177,18 @@ python3 scripts/autonomous/ledger.py validate --json
 - `check` exits 0 when the current composite hash is audited, 1 otherwise. When a
   disposition matches the current hash it says so on the next line, so a "no" is
   never mistaken for "never looked at".
+- **Risk-ranked discovery** (`next --rank risk`, default `lexicographic`
+  unchanged): eligible candidates are scored from git in one pass — commits
+  touching the file and lines changed over the last `--rank-window` commits
+  (commit-count window, so output is deterministic for a fixed repo state),
+  a word-match reference count as a fan-in proxy, LOC/branch-keyword size
+  proxies, and an uncovered-lines factor when config names `coverage_report`
+  (coverage.py JSON or lcov; absent → neutral). A candidate whose path is
+  named in an open issue enters the **intake lane** and outranks any score
+  in its tier. `priority_paths` remains a hard tier above the score — owner
+  intent beats heuristics. `--json` attaches `rank: {score, why: [...]}` to
+  every candidate so the Orchestrator can justify the pick without
+  re-deriving it. The score is a documented heuristic, not a measurement.
 - `validate` reports what the parser **cannot see** — rows whose Status cell is
   not a bare token, rows naming several targets or several hashes — and, per
   target, whether the authoritative row's composite hash still matches HEAD.
@@ -204,9 +216,16 @@ continues. `--require-gh` makes it fatal.
 
 The ledger is a git-tracked file: a row written in one agent's worktree is
 invisible to other agents until merged, so an in-progress row cannot
-deduplicate parallel work. Instead, **open a draft PR early** (an empty or WIP
-commit is enough). The file-overlap check above then protects the target. This is
-why the in-progress status was removed from the schema.
+deduplicate parallel work. Instead, **claim with a draft PR at minute 1**:
+`fleet.py claim --target <path> --stream A` refuses targets already in an
+open PR's files, creates the registered worktree, pushes a WIP commit, and
+opens the draft with a stub naming target + composite hash. The file-overlap
+check above then protects the target. This is why the in-progress status was
+removed from the schema. When the work is done, `fleet.py publish --pr <n>`
+renders the final body from `.autonomous/evidence.json` and flips the draft
+ready — and refuses, leaving it draft, when the artifact is incomplete or
+stale. Breaker output rides the same transport: `fleet.py publish
+--issues-from <engine.json>` files one deduped issue per surviving mutant.
 
 ## Parallel appends: merge=union
 

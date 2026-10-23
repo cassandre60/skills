@@ -902,6 +902,73 @@ class LedgerTests(RepoTestCase):
         self.assertEqual(result.returncode, 1)
 
 
+class RiskRankingTests(RepoTestCase):
+    """Issue #15: discovery order is risk, not alphabet."""
+
+    def _repo(self) -> Path:
+        repo, _ = python_repo(self.tmp)
+        write(repo / "src" / "a_stable.py", "def a(x):\n    return x\n")
+        write(repo / "src" / "z_hot.py", "def z(x):\n    return x\n")
+        write(repo / "tests" / "test_a_stable.py", "def test_a():\n    assert True\n")
+        write(repo / "tests" / "test_z_hot.py", "def test_z():\n    assert True\n")
+        commit(repo, "base")
+        for i in range(5):
+            write(
+                repo / "src" / "z_hot.py",
+                "def z(x):\n    return x\n" + "# touch\n" * (i + 1),
+            )
+            commit(repo, f"churn z_hot {i}")
+        return repo
+
+    def _next(self, repo: Path, *extra: str, env=None):
+        result = script(
+            repo, "ledger.py", "next", "--stream", "A", "--json", "--limit", "5",
+            *extra, env=env,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        return json.loads(result.stdout), result
+
+    def test_risk_rank_prefers_hot_file_over_alphabet(self):
+        repo = self._repo()
+        bin_dir = path_with_only(self.tmp, ("git",))
+        env = env_with_path(bin_dir)
+        lex, _ = self._next(repo, env=env)
+        self.assertEqual(lex["candidates"][0]["target"], "src/a_stable.py")
+        risk, first = self._next(repo, "--rank", "risk", env=env)
+        top = risk["candidates"][0]
+        self.assertEqual(top["target"], "src/z_hot.py")
+        self.assertTrue(
+            any("touched-in-" in why for why in top["rank"]["why"]), top["rank"]
+        )
+        # Deterministic for a fixed repo state.
+        _, second = self._next(repo, "--rank", "risk", env=env)
+        self.assertEqual(first.stdout, second.stdout)
+
+    def test_issue_intake_outranks_higher_score(self):
+        repo = self._repo()
+        prs = self.tmp / "prs.json"
+        prs.write_text("[]\n")
+        issues = self.tmp / "issues.json"
+        issues.write_text(json.dumps([
+            {"number": 88, "title": "crash in src/a_stable.py on startup", "body": ""}
+        ]) + "\n")
+        bin_dir = path_with_only(self.tmp, ("git",))
+        gh = write(
+            bin_dir / "gh",
+            "#!/bin/sh\n"
+            'case "$1 $2" in\n'
+            f'  "pr list") while IFS= read -r l; do printf \'%s\\n\' "$l"; done < {prs} ;;\n'
+            f'  "issue list") while IFS= read -r l; do printf \'%s\\n\' "$l"; done < {issues} ;;\n'
+            "  *) echo unexpected gh args >&2; exit 1 ;;\n"
+            "esac\n",
+        )
+        gh.chmod(0o755)
+        data, _ = self._next(repo, "--rank", "risk", env=env_with_path(bin_dir))
+        top = data["candidates"][0]
+        self.assertEqual(top["target"], "src/a_stable.py")
+        self.assertIn("mentioned-in-issue-#88", top["rank"]["why"])
+
+
 class MutantLedgerTests(RepoTestCase):
     """Per-mutant memory: survivors stay visible until killed or triaged."""
 
@@ -1576,6 +1643,188 @@ class MutationEngineTests(RepoTestCase):
         self.assertEqual(allowed.returncode, 0, allowed.stderr)
 
 
+    def test_same_size_mutant_not_masked_by_bytecode_cache(self):
+        # Regression: `==` -> `!=` keeps size and, within one second, the
+        # mtime a .pyc validates against; the engine must not execute stale
+        # bytecode and report the mutant as a false survivor.
+        repo, _ = python_repo(self.tmp)
+        commit(repo)
+        output = self.tmp / "pycache.json"
+        result = script(
+            repo, "mutation_engine.py", "--source", "src/app.py",
+            "--test-cmd",
+            f'{PYTHON} -c "from src.app import f; assert f(1, 1) is True; assert f(1, 2) is False"',
+            "--max-mutants", "10", "--output-json", str(output),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = json.loads(output.read_text())
+        self.assertGreaterEqual(data["counts"]["killed"], 1)
+        self.assertFalse(
+            any("!=" in item["mutated"] for item in data["survived"]),
+            data["survived"],
+        )
+
+    def test_baseline_relative_timeout_beats_fixed(self):
+        repo, _ = python_repo(self.tmp)
+        commit(repo)
+        (repo / "orig.txt").write_text((repo / "src" / "app.py").read_text())
+        stub = write(
+            repo / "slowkill.py",
+            "import pathlib, sys, time\n"
+            "if pathlib.Path('src/app.py').read_text() != pathlib.Path('orig.txt').read_text():\n"
+            "    time.sleep(1.0)\n"
+            "    sys.exit(1)\n"
+            "sys.exit(0)\n",
+        )
+        fixed_out = self.tmp / "fixed.json"
+        fixed = script(
+            repo, "mutation_engine.py", "--source", "src/app.py",
+            "--test-cmd", f"{PYTHON} {stub}", "--max-mutants", "1",
+            "--timeout", "0.3", "--confirm-survivors", "0", "--no-cache",
+            "--output-json", str(fixed_out),
+        )
+        self.assertEqual(fixed.returncode, 0, fixed.stderr)
+        self.assertEqual(json.loads(fixed_out.read_text())["counts"]["timeout"], 1)
+
+        rel_out = self.tmp / "relative.json"
+        relative = script(
+            repo, "mutation_engine.py", "--source", "src/app.py",
+            "--test-cmd", f"{PYTHON} {stub}", "--max-mutants", "1",
+            "--timeout-floor", "2", "--confirm-survivors", "0", "--no-cache",
+            "--output-json", str(rel_out),
+        )
+        self.assertEqual(relative.returncode, 0, relative.stderr)
+        data = json.loads(rel_out.read_text())
+        self.assertEqual(data["counts"]["timeout"], 0)
+        self.assertEqual(data["counts"]["killed"], 1)
+        self.assertGreaterEqual(data["timeout_effective"], 2)
+
+    def test_flaky_survivor_is_not_confirmed(self):
+        repo, _ = python_repo(self.tmp)
+        commit(repo)
+        counter = repo / "counter.txt"
+        stub = write(
+            repo / "flake.py",
+            "import pathlib, sys\n"
+            f"path = pathlib.Path({str(counter)!r})\n"
+            "n = int(path.read_text()) if path.exists() else 0\n"
+            "path.write_text(str(n + 1))\n"
+            "sys.exit(1 if n % 3 == 2 else 0)\n",
+        )
+        out = self.tmp / "flake.json"
+        result = script(
+            repo, "mutation_engine.py", "--source", "src/app.py",
+            "--test-cmd", f"{PYTHON} {stub}", "--max-mutants", "1",
+            "--no-cache", "--output-json", str(out),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = json.loads(out.read_text())
+        self.assertEqual(data["counts"]["survived"], 0)
+        self.assertEqual(data["counts"]["unverified"], 1)
+
+        counter.write_text("0")
+        out0 = self.tmp / "flake0.json"
+        result0 = script(
+            repo, "mutation_engine.py", "--source", "src/app.py",
+            "--test-cmd", f"{PYTHON} {stub}", "--max-mutants", "1",
+            "--confirm-survivors", "0", "--no-cache",
+            "--output-json", str(out0),
+        )
+        self.assertEqual(result0.returncode, 0, result0.stderr)
+        self.assertEqual(json.loads(out0.read_text())["counts"]["survived"], 1)
+
+    def test_verdict_cache_reuses_second_run(self):
+        repo, _ = python_repo(self.tmp)
+        commit(repo)
+        (repo / "orig.txt").write_text((repo / "src" / "app.py").read_text())
+        calls = repo / "calls.txt"
+        stub = write(
+            repo / "counting.py",
+            "import pathlib, sys\n"
+            f"path = pathlib.Path({str(calls)!r})\n"
+            "path.write_text((path.read_text() if path.exists() else '') + 'x\\n')\n"
+            "sys.exit(1 if pathlib.Path('src/app.py').read_text() != pathlib.Path('orig.txt').read_text() else 0)\n",
+        )
+        args = (
+            "mutation_engine.py", "--source", "src/app.py",
+            "--test-cmd", f"{PYTHON} {stub}", "--max-mutants", "3",
+            "--confirm-survivors", "0",
+        )
+        out1 = self.tmp / "cache1.json"
+        first = script(repo, *args, "--output-json", str(out1))
+        self.assertEqual(first.returncode, 0, first.stderr)
+        data1 = json.loads(out1.read_text())
+        self.assertEqual(data1["cache_hits"], 0)
+        self.assertGreater(data1["counts"]["killed"], 0)
+        calls1 = len(calls.read_text().splitlines())
+
+        out2 = self.tmp / "cache2.json"
+        second = script(repo, *args, "--output-json", str(out2))
+        self.assertEqual(second.returncode, 0, second.stderr)
+        data2 = json.loads(out2.read_text())
+        self.assertEqual(data2["cache_hits"], data1["counts"]["total"])
+        self.assertEqual(data2["counts"]["killed"], data1["counts"]["killed"])
+        # Only the baseline ran again; every verdict came from the cache.
+        self.assertEqual(len(calls.read_text().splitlines()), calls1 + 1)
+
+    def test_backend_auto_falls_back_to_regex(self):
+        repo, _ = python_repo(self.tmp)
+        commit(repo)
+        out = self.tmp / "auto.json"
+        result = script(
+            repo, "mutation_engine.py", "--source", "src/app.py",
+            "--test-cmd", f"{PYTHON} -c pass", "--max-mutants", "1",
+            "--backend", "auto", "--confirm-survivors", "0", "--no-cache",
+            "--output-json", str(out),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("sregex", result.stdout)
+        self.assertEqual(json.loads(out.read_text())["backend"], "sregex")
+
+    def test_stryker_backend_normalizes_report(self):
+        repo, _ = python_repo(self.tmp)
+        write(repo / "src" / "app.ts", "function eq(a, b) {\n  return a === b;\n}\n")
+        commit(repo)
+        report = {
+            "files": {
+                "src/app.ts": {
+                    "language": "typescript",
+                    "mutants": [
+                        {
+                            "id": "0", "mutatorName": "EqualityOperator",
+                            "replacement": "!==",
+                            "location": {"start": {"line": 2, "column": 12},
+                                         "end": {"line": 2, "column": 15}},
+                            "status": "Survived",
+                        },
+                        {
+                            "id": "1", "mutatorName": "BooleanLiteral",
+                            "replacement": "false",
+                            "location": {"start": {"line": 2, "column": 3},
+                                         "end": {"line": 2, "column": 18}},
+                            "status": "Killed",
+                        },
+                    ],
+                }
+            }
+        }
+        report_path = repo / "mutation.json"
+        report_path.write_text(json.dumps(report))
+        out = self.tmp / "stryker.json"
+        result = script(
+            repo, "mutation_engine.py", "--source", "src/app.ts",
+            "--test-cmd", f"{PYTHON} -c pass",
+            "--backend", "stryker", "--backend-report", str(report_path),
+            "--output-json", str(out),
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        data = json.loads(out.read_text())
+        self.assertEqual(data["backend"], "stryker")
+        self.assertEqual(data["counts"]["killed"], 1)
+        self.assertEqual(data["counts"]["survived"], 1)
+        self.assertEqual(data["survived"][0]["mutated"], "  return a !== b;")
+        self.assertEqual(data["survived"][0]["line"], 2)
+
 class TestWeakeningTests(RepoTestCase):
     def test_removed_assertion_and_added_skip(self):
         repo, _ = init_repo(self.tmp)
@@ -1609,6 +1858,248 @@ class TestWeakeningTests(RepoTestCase):
         commit(repo, "stronger")
         result = script(repo, "test_weakening_check.py", "--base", "main")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
+@unittest.skipUnless(
+    all(shutil.which(tool) for tool in ("bash", "flock", "timeout", "stat", "date")),
+    "watchdog shell dependencies are not installed",
+)
+
+
+class EvidenceTests(RepoTestCase):
+    """Issue #14: the verify-before/after contract as an artifact, not prose."""
+
+    TEST_CMD = f'{PYTHON} -c "from src.app import f; assert f(1, 1) is True; assert f(1, 2) is False"'
+
+    def _repo(self) -> Path:
+        # The evidence flow pins its origin; the fixture provides the
+        # production shape (a pushed origin/main) instead of degrading to
+        # HEAD silently (issue #14).
+        repo, _ = python_repo(self.tmp, with_origin=True)
+        commit(repo, "base")
+        push(repo)
+        return repo
+
+    def _engine_report(self, repo: Path, mutated: str) -> Path:
+        report = {
+            "source": "src/app.py",
+            "survived": [
+                {
+                    "file": "src/app.py",
+                    "line": 2,
+                    "column": 11,
+                    "original": "    return a == b",
+                    "mutated": mutated,
+                    "description": "fixture mutant",
+                }
+            ],
+        }
+        path = repo / "engine.json"
+        path.write_text(json.dumps(report), encoding="utf-8")
+        return path
+
+    def test_mutant_evidence_artifact_records_three_runs(self):
+        repo = self._repo()
+        report = self._engine_report(repo, "    return a != b")
+        result = script(
+            repo, "evidence.py", "mutant",
+            "--engine-json", str(report), "--index", "0",
+            "--test-cmd", self.TEST_CMD,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        artifact = json.loads((repo / ".autonomous" / "evidence.json").read_text())
+        self.assertEqual(artifact["schema"], 1)
+        self.assertEqual(artifact["kind"], "mutant")
+        self.assertEqual(artifact["verdict"], "killed")
+        self.assertNotEqual(artifact["runs"]["red"]["exit"], 0)
+        self.assertEqual(artifact["runs"]["green"]["exit"], 0)
+        self.assertEqual(artifact["runs"]["pass_to_pass"]["exit"], 0)
+        # Issue #14: each run records what actually ran, not just what came out.
+        import shlex as _shlex
+
+        expected_argv = _shlex.split(self.TEST_CMD)
+        for run_name in ("red", "green", "pass_to_pass"):
+            self.assertEqual(artifact["runs"][run_name]["argv"], expected_argv)
+        # The fixture engine report carries no seed; the artifact mirrors it
+        # (a generated mutant's seed rides with the artifact instead).
+        self.assertNotIn("seed", artifact)
+        self.assertEqual(artifact["mutant"]["mutated"], "    return a != b")
+        # The mutant must never survive the evidence run itself.
+        self.assertEqual(
+            (repo / "src" / "app.py").read_text(), "def f(a, b):\n    return a == b\n"
+        )
+        self.assertFalse((repo / "src" / "app.py.mutbak").exists())
+
+    def test_engine_seed_is_pinned_into_the_artifact(self):
+        # A generated mutant is reproducible only through its seed; the
+        # artifact must carry the spec's seed verbatim (issue #14).
+        import hashlib as _hashlib
+
+        repo = self._repo()
+        report = {
+            "source": "src/app.py",
+            "seed": 424242,
+            "survived": [
+                {
+                    "file": "src/app.py",
+                    "line": 2,
+                    "column": 11,
+                    "original": "    return a == b",
+                    "mutated": "    return a != b",
+                    "description": "fixture mutant",
+                }
+            ],
+        }
+        path = repo / "engine.json"
+        path.write_text(json.dumps(report), encoding="utf-8")
+        result = script(
+            repo, "evidence.py", "mutant",
+            "--engine-json", str(path), "--index", "0",
+            "--test-cmd", self.TEST_CMD,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        artifact = json.loads((repo / ".autonomous" / "evidence.json").read_text())
+        self.assertEqual(artifact["seed"], 424242)
+        self.assertEqual(
+            artifact["mutant"]["source_sha256"],
+            _hashlib.sha256((repo / "src" / "app.py").read_bytes()).hexdigest(),
+        )
+
+    def test_base_sha_hard_fails_when_base_ref_does_not_resolve(self):
+        # Issue #14: a base ref that will not resolve used to fall back to
+        # HEAD, making the ancestor check trivially true. Hard-fail instead:
+        # evidence whose origin cannot be pinned must never be produced.
+        repo = self._repo()
+        report = self._engine_report(repo, "    return a != b")
+        result = script(
+            repo, "evidence.py", "mutant",
+            "--engine-json", str(report), "--index", "0",
+            "--test-cmd", self.TEST_CMD,
+            "--base", "refs/heads/no-such-base-ref",
+        )
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("cannot resolve", result.stderr)
+        self.assertFalse((repo / ".autonomous" / "evidence.json").exists())
+
+    def test_mutant_not_killed_exits_nonzero(self):
+        repo = self._repo()
+        report = self._engine_report(repo, "    return not (a != b)")
+        result = script(
+            repo, "evidence.py", "mutant",
+            "--engine-json", str(report), "--index", "0",
+            "--test-cmd", self.TEST_CMD,
+        )
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        artifact = json.loads((repo / ".autonomous" / "evidence.json").read_text())
+        self.assertEqual(artifact["verdict"], "not-killed")
+        self.assertEqual(artifact["runs"]["red"]["exit"], 0)
+
+    def test_check_rejects_artifact_after_source_changes(self):
+        repo = self._repo()
+        report = self._engine_report(repo, "    return a != b")
+        made = script(
+            repo, "evidence.py", "mutant",
+            "--engine-json", str(report), "--index", "0",
+            "--test-cmd", self.TEST_CMD,
+        )
+        self.assertEqual(made.returncode, 0, made.stdout + made.stderr)
+        ok = script(repo, "evidence.py", "check")
+        self.assertEqual(ok.returncode, 0, ok.stdout + ok.stderr)
+        write(repo / "src" / "app.py", "def f(a, b):\n    return bool(a == b)\n")
+        stale = script(repo, "evidence.py", "check")
+        self.assertNotEqual(stale.returncode, 0)
+        self.assertIn("source changed", stale.stdout + stale.stderr)
+
+    def test_defect_evidence_requires_red_on_base(self):
+        repo, _ = python_repo(self.tmp)
+        write(repo / "src" / "app.py", "def f(a, b):\n    return False\n")
+        commit(repo, "buggy base")
+        write(repo / "src" / "app.py", "def f(a, b):\n    return a == b\n")
+        result = script(
+            repo, "evidence.py", "defect",
+            "--base", "HEAD",
+            "--test-file", "tests/test_app.py",
+            "--test-cmd", self.TEST_CMD,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        artifact = json.loads((repo / ".autonomous" / "evidence.json").read_text())
+        self.assertEqual(artifact["kind"], "defect")
+        self.assertEqual(artifact["verdict"], "reproduced-and-fixed")
+        self.assertNotEqual(artifact["runs"]["red"]["exit"], 0)
+        self.assertEqual(artifact["runs"]["green"]["exit"], 0)
+        # The throwaway base worktree must be gone afterwards.
+        listed = git(repo, "worktree", "list", "--porcelain")
+        self.assertEqual(listed.stdout.count("worktree "), 1)
+
+    def test_verify_gate_fails_on_weakening_edit(self):
+        repo, _ = python_repo(self.tmp, with_origin=True)
+        cfg = load_example()
+        cfg["format_check_cmd"] = None
+        cfg["analyze_cmd"] = None
+        cfg["gate_cmd"] = None
+        write_config(repo, cfg)
+        commit(repo)
+        push(repo)
+        created = script(repo, "orchestrator.py", "create-worktree", "--slug", "weak")
+        self.assertEqual(created.returncode, 0, created.stderr)
+        worktree = repo.parent / f"{repo.name}-weak"
+        weakened = "from src.app import f\n\ndef test_f():\n    pass\n"
+        write(
+            worktree / "tests" / "test_app.py",
+            weakened,
+        )
+        commit(worktree, "weaken the test")
+        # A valid-looking artifact must pre-exist in the worktree so the gate
+        # can record the weakening hits it finds into it (issue #14): the
+        # print/raise path leaves no durable trace otherwise.
+        import hashlib as _hashlib
+
+        mutation_dir = worktree / ".autonomous"
+        mutation_dir.mkdir()
+        head_sha = run(["git", "rev-parse", "HEAD"], cwd=worktree).stdout.strip()
+        artifact = {
+            "schema": 1,
+            "kind": "mutant",
+            "generated_at": "2026-10-23T00:00:00+00:00",
+            "base_ref": "HEAD",
+            "base_sha": head_sha,
+            "head_sha": head_sha,
+            "test_cmd": "python3 -m test_of_nothing",
+            "pass_to_pass_cmd": "python3 -m test_of_nothing",
+            "mutant": {
+                "file": "tests/test_app.py",
+                "line": 3,
+                "original": "def test_f():\n    assert False\n",
+                "mutated": "def test_f():\n    pass\n",
+                "description": "fixture mutant",
+                "source_sha256": _hashlib.sha256(weakened.encode()).hexdigest(),
+            },
+            "runs": {
+                "red": {"exit": 1, "timed_out": False, "duration_s": 0.1, "summary": "red"},
+                "green": {"exit": 0, "timed_out": False, "duration_s": 0.1, "summary": "green"},
+                "pass_to_pass": {"exit": 0, "timed_out": False, "duration_s": 0.1, "summary": "p2p"},
+            },
+            "verdict": "killed",
+        }
+        artifact_path = mutation_dir / "evidence.json"
+        artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
+
+        result = script(repo, "orchestrator.py", "verify-gate", "--worktree", str(worktree))
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("weakening", result.stdout + result.stderr)
+        # The hits must outlive the gate: recorded into the artifact, keyed by
+        # the gate, not just printed into a log nobody archives.
+        recorded = json.loads(artifact_path.read_text())
+        hits = recorded["verify_gate"]["weakening_hits"]
+        self.assertTrue(
+            any(h.get("file") == "tests/test_app.py" for h in hits), hits
+        )
+        self.assertTrue(
+            all("kind" in h for h in hits), hits
+        )
+        self.assertEqual(recorded["verify_gate"]["weakening_mode"], "fail")
+        self.assertIn("recorded", result.stdout + result.stderr)
+        script(repo, "orchestrator.py", "cleanup-worktree", "--slug", "weak", "--force")
 
 
 @unittest.skipUnless(
@@ -1682,6 +2173,10 @@ class WatchdogTests(RepoTestCase):
         snap_unit = home / ".config/systemd/user/orchestrator-snapshot.service"
         self.assertTrue(snap_unit.exists())
         self.assertTrue((home / ".local/share/orchestrator/snapshot.sh").exists())
+        wake_unit = home / ".config/systemd/user/orchestrator-wake.service"
+        self.assertTrue(wake_unit.exists())
+        self.assertIn("wake.sh", wake_unit.read_text())
+        self.assertTrue((home / ".local/share/orchestrator/wake.sh").exists())
 
     def test_no_session_id_is_a_noop(self):
         state = self.tmp / "state"
@@ -2032,6 +2527,218 @@ class FleetTests(RepoTestCase):
         self.assertIn("TestModel-A", stats["by_model"])
 
 
+class FleetClaimPublishTests(RepoTestCase):
+    """Issue #17: the claim and the transport are code, not prose."""
+
+    def _gh_stub(self, state: Path) -> Dict[str, str]:
+        bin_dir = path_with_only(self.tmp, ("git",))
+        stub = write(
+            bin_dir / "gh",
+            f"#!{PYTHON}\n"
+            "import json, os, sys\n"
+            "state_path = os.environ['GH_STATE']\n"
+            "state = json.loads(open(state_path).read()) if os.path.exists(state_path) else {'prs': [], 'issues': [], 'calls': []}\n"
+            "args = sys.argv[1:]\n"
+            "state['calls'].append(args)\n"
+            "def save():\n"
+            "    open(state_path, 'w').write(json.dumps(state))\n"
+            "def opt(name):\n"
+            "    return args[args.index(name) + 1] if name in args else None\n"
+            "def body_of():\n"
+            "    f = opt('--body-file')\n"
+            "    return open(f).read() if f else (opt('--body') or '')\n"
+            "cmd = tuple(args[:2])\n"
+            "if cmd == ('label', 'create'):\n"
+            "    save()\n"
+            "elif cmd == ('pr', 'list'):\n"
+            "    want = opt('--state') or 'open'\n"
+            "    print(json.dumps([p for p in state['prs'] if want == 'all' or p.get('state', 'OPEN').lower() == want]))\n"
+            "    save()\n"
+            "elif cmd == ('pr', 'create'):\n"
+            "    n = 100 + len(state['prs'])\n"
+            "    state['prs'].append({'number': n, 'title': opt('--title') or '', 'body': body_of(), 'headRefName': opt('--head') or '', 'files': [], 'state': 'OPEN', 'draft': '--draft' in args})\n"
+            "    save()\n"
+            "    print(f'https://example.test/pull/{n}')\n"
+            "elif cmd == ('pr', 'edit'):\n"
+            "    n = int(args[2])\n"
+            "    pr = next(p for p in state['prs'] if p['number'] == n)\n"
+            "    pr['body'] = body_of()\n"
+            "    if opt('--title'): pr['title'] = opt('--title')\n"
+            "    save()\n"
+            "elif cmd == ('pr', 'ready'):\n"
+            "    n = int(args[2])\n"
+            "    next(p for p in state['prs'] if p['number'] == n)['draft'] = False\n"
+            "    save()\n"
+            "elif cmd == ('issue', 'list'):\n"
+            "    print(json.dumps(state['issues']))\n"
+            "    save()\n"
+            "elif cmd == ('issue', 'create'):\n"
+            "    n = 200 + len(state['issues'])\n"
+            "    state['issues'].append({'number': n, 'title': opt('--title') or '', 'body': body_of()})\n"
+            "    save()\n"
+            "    print(f'https://example.test/issues/{n}')\n"
+            "else:\n"
+            "    print(f'unexpected gh args: {args}', file=sys.stderr)\n"
+            "    save()\n"
+            "    sys.exit(1)\n",
+        )
+        stub.chmod(0o755)
+        state.write_text(json.dumps({"prs": [], "issues": [], "calls": []}))
+        return env_with_path(bin_dir, GH_STATE=str(state))
+
+    def _repo(self) -> Path:
+        repo, _ = python_repo(self.tmp, with_origin=True)
+        commit(repo)
+        push(repo)
+        return repo
+
+    def _state(self, path: Path) -> Dict[str, Any]:
+        return json.loads(path.read_text())
+
+    def test_claim_opens_one_draft_pr_and_refuses_claimed_target(self):
+        repo = self._repo()
+        state = self.tmp / "gh-state.json"
+        env = self._gh_stub(state)
+        result = script(
+            repo, "fleet.py", "claim", "--target", "src/app.py",
+            "--stream", "A", "--json", env=env,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        data = json.loads(result.stdout.strip().splitlines()[-1])
+        self.assertEqual(data["target"], "src/app.py")
+        current = self._state(state)
+        creates = [c for c in current["calls"] if c[:2] == ["pr", "create"]]
+        self.assertEqual(len(creates), 1)
+        self.assertIn("--draft", creates[0])
+        pr = current["prs"][0]
+        self.assertTrue(pr["draft"])
+        self.assertIn("src/app.py", pr["body"])
+        self.assertIn(data["composite"], pr["body"])
+        self.assertTrue(Path(data["worktree"]).exists())
+        remote = git(repo, "ls-remote", "origin", f"refs/heads/{data['branch']}")
+        self.assertIn(data["branch"], remote.stdout)
+
+        # A target already in an open PR's files is refused, no new draft.
+        seeded = self._state(state)
+        seeded["prs"].append({
+            "number": 7, "title": "other", "headRefName": "test/other",
+            "files": [{"path": "src/app.py"}], "state": "OPEN", "draft": True,
+            "body": "",
+        })
+        state.write_text(json.dumps(seeded))
+        refused = script(
+            repo, "fleet.py", "claim", "--target", "src/app.py",
+            "--stream", "A", "--slug", "second", env=env,
+        )
+        self.assertNotEqual(refused.returncode, 0)
+        creates = [c for c in self._state(state)["calls"] if c[:2] == ["pr", "create"]]
+        self.assertEqual(len(creates), 1)
+        script(repo, "orchestrator.py", "cleanup-worktree", "--slug", data["slug"], "--force")
+
+    def test_publish_issue_mode_is_idempotent(self):
+        repo = self._repo()
+        state = self.tmp / "gh-state.json"
+        env = self._gh_stub(state)
+        report = repo / "engine.json"
+        report.write_text(json.dumps({
+            "source": "src/app.py",
+            "survived": [{
+                "file": "src/app.py", "line": 2, "column": 11,
+                "original": "    return a == b", "mutated": "    return a != b",
+                "description": "equality flip",
+            }],
+        }))
+        args = ("fleet.py", "publish", "--issues-from", str(report), "--json")
+        first = script(repo, *args, env=env)
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        second = script(repo, *args, env=env)
+        self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
+        current = self._state(state)
+        self.assertEqual(len(current["issues"]), 1)
+        self.assertIn("Mutant-Key:", current["issues"][0]["body"])
+        outcomes = json.loads(second.stdout.strip().splitlines()[-1])
+        self.assertEqual(outcomes[0]["action"], "existing")
+        self.assertEqual(outcomes[0]["number"], current["issues"][0]["number"])
+
+    def test_publish_pr_mode_renders_evidence_and_flips_ready(self):
+        repo = self._repo()
+        state = self.tmp / "gh-state.json"
+        env = self._gh_stub(state)
+        seeded = self._state(state)
+        seeded["prs"].append({
+            "number": 7, "title": "WIP", "headRefName": "test/a-app",
+            "files": [], "state": "OPEN", "draft": True, "body": "stub",
+        })
+        state.write_text(json.dumps(seeded))
+        import hashlib
+
+        artifact = {
+            "schema": 1, "kind": "mutant", "verdict": "killed",
+            "base_ref": "origin/main",
+            "base_sha": git(repo, "rev-parse", "HEAD").stdout.strip(),
+            "test_cmd": "pytest -q", "pass_to_pass_cmd": "pytest -q",
+            "mutant": {
+                "file": "src/app.py", "line": 2,
+                "original": "    return a == b", "mutated": "    return a != b",
+                "description": "equality flip",
+                "source_sha256": hashlib.sha256(
+                    (repo / "src" / "app.py").read_bytes()
+                ).hexdigest(),
+            },
+            "runs": {
+                "red": {"exit": 1, "summary": "1 failed"},
+                "green": {"exit": 0, "summary": "1 passed"},
+                "pass_to_pass": {"exit": 0, "summary": "1 passed"},
+            },
+        }
+        write(repo / ".autonomous" / "evidence.json", json.dumps(artifact))
+        result = script(
+            repo, "fleet.py", "publish", "--pr", "7",
+            "--title", "test: kill equality mutant in app.py", env=env,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        pr = self._state(state)["prs"][0]
+        self.assertFalse(pr["draft"])
+        self.assertEqual(pr["title"], "test: kill equality mutant in app.py")
+        self.assertIn("killed", pr["body"])
+        self.assertIn(artifact["base_sha"], pr["body"])
+
+        # Stale evidence must never flip a draft ready.
+        seeded = self._state(state)
+        seeded["prs"][0]["draft"] = True
+        state.write_text(json.dumps(seeded))
+        write(repo / "src" / "app.py", "def f(a, b):\n    return bool(a == b)\n")
+        refused = script(repo, "fleet.py", "publish", "--pr", "7", env=env)
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertTrue(self._state(state)["prs"][0]["draft"])
+
+
+class StreamBScanTests(RepoTestCase):
+    """Issue #17: Stream B gets a 0-token shortlist, not a full file read."""
+
+    def test_finds_seeded_smells_in_fixture(self):
+        repo, _ = python_repo(self.tmp)
+        fixture = SKILL_ROOT / "evals" / "fixtures" / "vacuous-tests" / "tests" / "test_import.py"
+        result = script(repo, "stream_b_scan.py", str(fixture), "--json")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        findings = json.loads(result.stdout)
+        by_kind = {(f["kind"], f["line"]) for f in findings}
+        self.assertIn(("no-assertion", 6), by_kind)
+        self.assertIn(("sleeps", 14), by_kind)
+        self.assertIn(("vacuous-assert", 15), by_kind)
+
+    def test_clean_test_file_has_no_findings(self):
+        repo, _ = python_repo(self.tmp)
+        clean = write(
+            repo / "tests" / "test_clean.py",
+            "from src.app import f\n\n\ndef test_f():\n"
+            "    assert f(1, 1) is True\n    assert f(1, 2) is False\n",
+        )
+        result = script(repo, "stream_b_scan.py", str(clean), "--json")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(json.loads(result.stdout), [])
+
+
 class CandidateOrderingTests(unittest.TestCase):
     def test_priority_paths_rank_in_config_order(self):
         # Later priority_paths entries are lower priority than earlier ones:
@@ -2103,6 +2810,9 @@ class DocumentationInvariantTests(unittest.TestCase):
             "assets/orchestrator-watchdog.timer",
             "assets/orchestrator-snapshot.service",
             "assets/orchestrator-snapshot.timer",
+            "assets/wake.sh",
+            "assets/orchestrator-wake.service",
+            "assets/orchestrator-wake.timer",
             "assets/install-watchdog.sh",
             "assets/gitattributes.fragment.txt",
             "assets/gitignore.fragment.txt",
@@ -2355,6 +3065,236 @@ class FleetStateDurabilityTests(unittest.TestCase):
     def test_the_state_dir_is_outside_the_harness_tree(self) -> None:
         self.assertIn("outside any tree the harness manages", self.unattended.lower())
 
+class StreamSimplifyTests(RepoTestCase):
+    """Stream J (#25): finder candidates only; mutation-score oracle decides."""
+
+    def fixture(self) -> Path:
+        return SKILL_ROOT / "evals" / "fixtures" / "dead-code-python"
+
+    def test_finder_flags_unreachable_and_zero_fanin(self):
+        repo, _ = python_repo(self.tmp)
+        fixture = self.fixture()
+        result = script(
+            repo,
+            "simplify_gate.py",
+            "finder",
+            str(fixture / "src" / "dead.py"),
+            "--scan-root",
+            str(fixture),
+            "--json",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        findings = json.loads(result.stdout)
+        by_kind = {(item["kind"], item["line"]) for item in findings}
+        self.assertIn(("unreachable", 5), by_kind)
+        self.assertIn(("zero-fanin-private", 8), by_kind)
+
+    def test_finder_clean_and_dynamic_files_have_no_candidates(self):
+        repo, _ = python_repo(self.tmp)
+        fixture = self.fixture()
+        for filename in ("live.py", "registry.py"):
+            result = script(
+                repo,
+                "simplify_gate.py",
+                "finder",
+                str(fixture / "src" / filename),
+                "--scan-root",
+                str(fixture),
+                "--json",
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(json.loads(result.stdout), [], filename)
+
+    def _report(self, killed: int, survived: int) -> dict:
+        killed_entries = [
+            {
+                "line": 2,
+                "original": "    return a == b",
+                "mutated": "    return a != b",
+                "description": "invert equality",
+            }
+        ] * killed
+        survived_entries = [
+            {
+                "line": 5,
+                "original": "    return value + 1",
+                "mutated": "    return value - 1",
+                "description": "invert addition",
+            }
+        ] * survived
+        total = killed + survived
+        return {
+            "source": "src/app.py",
+            "test_cmd": "python -m unittest tests.test_app",
+            "counts": {
+                "total": total,
+                "killed": killed,
+                "survived": survived,
+                "timeout": 0,
+                "uncompilable": 0,
+            },
+            "kill_rate": round(killed / total, 4) if total else 0.0,
+            "timeout_counts_as": "survived",
+            "mutants": {"killed": killed_entries, "survived": survived_entries},
+        }
+
+    def test_compare_refuses_lower_mutation_score(self):
+        repo, _ = python_repo(self.tmp)
+        before = write(
+            repo / "before.json", json.dumps(self._report(killed=4, survived=1))
+        )
+        after = write(repo / "after.json", json.dumps(self._report(killed=2, survived=3)))
+        result = script(
+            repo,
+            "simplify_gate.py",
+            "compare",
+            "--before-json",
+            str(before),
+            "--after-json",
+            str(after),
+            "--json",
+        )
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["verdict"], "refused")
+        self.assertTrue(any("score" in reason for reason in payload["reasons"]))
+
+    def test_finder_coverage_marks_missing_and_suppresses_executed_body(self):
+        repo, _ = python_repo(self.tmp)
+        fixture = self.fixture()
+        target = fixture / "src" / "dead.py"
+
+        def run_with_coverage(executed: list[int], missing: list[int]):
+            coverage = write(
+                repo / "coverage.json",
+                json.dumps(
+                    {
+                        "files": {
+                            str(target): {
+                                "executed_lines": executed,
+                                "missing_lines": missing,
+                            }
+                        }
+                    }
+                ),
+            )
+            result = script(
+                repo,
+                "simplify_gate.py",
+                "finder",
+                str(target),
+                "--scan-root",
+                str(fixture),
+                "--coverage-json",
+                str(coverage),
+                "--json",
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            return json.loads(result.stdout)
+
+        missing = run_with_coverage(executed=[1, 2, 3, 4, 8], missing=[5, 9])
+        helper = next(item for item in missing if item["kind"] == "zero-fanin-private")
+        self.assertIs(helper["zero_coverage"], True)
+
+        executed = run_with_coverage(executed=[1, 2, 3, 4, 8, 9], missing=[5])
+        self.assertNotIn(
+            "zero-fanin-private", {item["kind"] for item in executed}
+        )
+
+    def test_ledger_stream_j_selects_configured_source(self):
+        repo, _ = python_repo(self.tmp)
+        commit(repo)
+        result = script(repo, "ledger.py", "next", "--stream", "J", "--json")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(
+            "src/app.py",
+            [item["target"] for item in json.loads(result.stdout)["candidates"]],
+        )
+
+    def test_stream_for_target_recognizes_j_only_config(self):
+        cfg = {
+            "candidates": {
+                "A": {"include": [], "exclude": []},
+                "B": {"include": [], "exclude": []},
+                "J": {"include": ["src/**/*.py"], "exclude": []},
+            }
+        }
+        self.assertEqual(ledger_module._stream_for_target(cfg, "src/app.py"), "J")
+
+    def test_oracle_accepts_clean_dead_deletion(self):
+        repo, _ = python_repo(self.tmp)
+        write(
+            repo / "src" / "app.py",
+            "def f(a, b):\n"
+            "    return a == b\n"
+            "    return False\n"
+            "\n\n"
+            "def _unused_helper(value):\n"
+            "    return value + 1\n",
+        )
+        commit(repo, "seed dead code")
+        write(repo / "src" / "app.py", "def f(a, b):\n    return a == b\n")
+        test_cmd = (
+            f'{PYTHON} -c "from src.app import f; '
+            'assert f(1, 1) is True and f(1, 2) is False"'
+        )
+        result = script(
+            repo,
+            "simplify_gate.py",
+            "oracle",
+            "--source",
+            "src/app.py",
+            "--base",
+            "HEAD",
+            "--test-cmd",
+            test_cmd,
+            "--max-mutants",
+            "50",
+            "--json",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["verdict"], "accepted")
+        self.assertGreaterEqual(
+            payload["after"]["kill_rate"], payload["before"]["kill_rate"]
+        )
+        self.assertEqual(payload["deleted_test_files"], [])
+
+    def test_oracle_refuses_deleting_the_only_test_file(self):
+        repo, _ = python_repo(self.tmp)
+        write(
+            repo / "src" / "app.py",
+            "def f(a, b):\n"
+            "    return a == b\n"
+            "    return False\n",
+        )
+        commit(repo, "seed dead code with test")
+
+        write(repo / "src" / "app.py", "def f(a, b):\n    return a == b\n")
+        (repo / "tests" / "test_app.py").unlink()
+        test_cmd = (
+            f'{PYTHON} -c "from src.app import f; '
+            'assert f(1, 1) is True and f(1, 2) is False"'
+        )
+        result = script(
+            repo,
+            "simplify_gate.py",
+            "oracle",
+            "--source",
+            "src/app.py",
+            "--base",
+            "HEAD",
+            "--test-cmd",
+            test_cmd,
+            "--max-mutants",
+            "50",
+            "--json",
+        )
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["verdict"], "refused")
+        self.assertEqual(payload["deleted_test_files"], ["tests/test_app.py"])
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -2522,12 +3462,17 @@ class VerdictReliabilityTests(RepoTestCase):
         )
         self.assertEqual(explicit.returncode, 0, explicit.stderr)
 
-        unknown = script(
+        # The stryker adapter ships in the merged tree, so selecting it is no
+        # longer a usage error; an unconfigured run fails on its missing
+        # report instead (env error, exit 3).
+        unconfigured = script(
             repo, "mutation_engine.py", "--source", "src/app.py",
             "--test-cmd", f"{PYTHON} -c pass", "--backend", "stryker",
         )
-        self.assertEqual(unknown.returncode, 2)
-        self.assertIn("invalid choice: 'stryker'", unknown.stderr)
+        self.assertEqual(unconfigured.returncode, 3, unconfigured.stderr)
+        self.assertIn(
+            "stryker report not found", unconfigured.stderr + unconfigured.stdout
+        )
 
 
 @unittest.skipUnless(
@@ -3668,3 +4613,6 @@ class StatelessWakeTests(RepoTestCase):
         payload = json.loads(res.stdout)
         self.assertTrue(payload["needs_brain"])
         self.assertIn("queue-idle", payload["reasons"][0])
+
+if __name__ == "__main__":
+    unittest.main()

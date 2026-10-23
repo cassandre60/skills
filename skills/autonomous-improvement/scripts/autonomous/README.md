@@ -17,7 +17,10 @@ Files:
 
 | File | Purpose |
 |---|---|
-| `fleet.py` | `snapshot` / `pr-state` / `govern` / `stats`; state spine and governor |
+| `evidence.py` | `mutant` / `defect` / `check`; fail-to-pass evidence artifact (`.autonomous/evidence.json`) |
+| `fleet.py` | `snapshot` / `pr-state` / `govern` / `stats` / `claim` / `publish`; state spine, governor, PR transport |
+| `stream_b_scan.py` | Stream B mechanical pre-filter (vacuous/sleep/mock smells) |
+| `simplify_gate.py` | Stream J dead-code `finder`, mutation-report `compare`, and full base-vs-current `oracle` |
 | `ledger.py` | `next` / `record` / `check` / `sync-rejections`; content-hash dedup |
 | `mutants.py` | Per-mutant triage ledger: `ingest` / `record` / `open` / `check` |
 | `mutation_engine.py` | Per-line mutation runner with language rule packs |

@@ -9,6 +9,9 @@
   "analyze_extensions": [".py"],
   "gate_cmd": null,
   "test_cmd": ["python3", "-m", "pytest", "-x", "-q"],
+  "mutation_backend": null,
+  "mutation_backends": {},
+  "coverage_report": null,
   "test_for_source": [
     {
       "src": "^src/(?:.*/)?([^/]+)\\.py$",
@@ -30,17 +33,28 @@
       "include": ["tests/**/*.py", "test/**/*.py"],
       "exclude": ["**/conftest.py"],
       "priority_paths": []
+    },
+    "J": {
+      "include": ["src/**/*.py", "lib/**/*.py"],
+      "exclude": ["**/__init__.py", "**/conftest.py", "**/migrations/**"],
+      "priority_paths": []
     }
   },
   "pr_required": {
     "COMPLETED": true,
     "SOUND": false
   },
+  "verify_gate": {
+    "weakening": "fail",
+    "evidence": "warn"
+  },
   "fleet": {
     "max_open_prs": 5,
     "max_new_prs_per_day": 6,
-    "min_acceptance_rate_14d": 0.5,
     "kill_switch_file": ".autonomous/STOP",
+    "harness_cmd": null,
+    "model_ladder": [],
+    "doctor_min_free_gb": 2,
     "merge_policy": "never",
     "ledger_mode": "batched"
   }

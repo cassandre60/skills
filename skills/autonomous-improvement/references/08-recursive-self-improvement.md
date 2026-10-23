@@ -45,10 +45,12 @@ Available now: **A** mutation, **B** adversarial test audit (`03`),
 equivalence — both halves mandatory), **H+K** security & dependency
 (`advisory.py`: stub-advisory pin audits, a secret scan that redacts by
 construction, oracle-first bumps), **I** docs & spec truth
-(`docs_truth.py`), and **L** meta — gated behind its own kill switch
-(`meta.py`: claims replayed from recorded fleet history, L4 surfaces
-issue-only, lessons expire). **D** (migration safety) and **J**
-(simplification) remain planned; J ships inside PR #28.
+(`docs_truth.py`), **J** simplification / dead code (`simplify_gate.py`:
+a narrow finder with a proven-safe oracle — first-wave T1: issue/proposal
+only until the owner promotes the stream), and **L** meta — gated behind
+its own kill switch (`meta.py`: claims replayed from recorded fleet
+history, L4 surfaces issue-only, lessons expire). **D** (migration
+safety) remains planned.
 **F** flake & determinism (`flakes.py`: finder + N-run oracle), the first
 expansion stream. The oracle demands ZERO failing runs after a fix —
 "passed twice in a row" is not evidence — and names a cause class
@@ -71,15 +73,25 @@ recording a negative row here.
 | **G** Performance | pinned-bench delta beyond noise **and** differential equivalence | T2 |
 | **H** Security & supply chain | PoC/regression test flips, or vulnerable version exits green | T3 deps / T2 code |
 | **I** Docs & spec truthfulness | executable examples flip fail→pass; spec-id trace complete | T3 path |
-| **J** Simplification / dead code | suite green **and** touched-area mutation score not lower | T2 |
+| **J** Simplification / dead code | suite green **and** touched-area mutation score not lower | T1 first wave → T2 |
 | **K** Dependency evolution | build + targeted suite green on the bump; majors one per PR | T2 |
 | **L** Meta (fleet self-improvement) | proposal beats incumbent on history replay; eval set does not regress | T1/T2 capped |
 
-`ledger.py` rejects the unshipped letters with "planned, not implemented"
+`ledger.py` rejects still-planned letters with "planned, not implemented"
 until a stream ships its finder + oracle + eval fixture. A stream that exists
 only as an encouraging paragraph produces cosmetic churn with a fancy name —
-do not start work under these letters before their tooling lands; offer A/B/F,
-or file the finding as an issue (that *is* T1 behavior).
+do not start work under a locked letter before its tooling lands; offer
+A/B/F/J, or file the finding as an issue (that *is* T1 behavior).
+
+Stream J's shipped finder is intentionally narrow: Python statements after
+a block terminator, plus private module-level definitions with zero textual
+fan-in, suppressed where dynamic markers (`getattr`, `globals()`, dynamic
+import, registries) make unseen callers plausible. A coverage.py JSON
+report may strengthen or suppress the zero-fan-in heuristic. The finder
+only nominates; `simplify_gate.py oracle` decides by requiring the current
+targeted tests green, no deleted tracked test file, no previously killed
+mutant newly surviving, and a non-lowering mutation kill rate. The mutant
+denominator may shrink only for mutants on lines the change removed.
 
 Sequencing rationale in brief: **F** repairs the oracle A/B/E trust; **E**
 is the largest value unlock (pre-justified defects via issue/CI intake);

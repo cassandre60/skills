@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the orchestrator stateless wake starter
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

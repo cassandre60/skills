@@ -29,6 +29,11 @@
       "include": ["tests/**/*.py", "test/**/*.py"],
       "exclude": ["**/conftest.py"],
       "priority_paths": []
+    },
+    "J": {
+      "include": ["src/**/*.py", "lib/**/*.py"],
+      "exclude": ["**/__init__.py", "**/conftest.py", "**/migrations/**"],
+      "priority_paths": []
     }
   },
   "pr_required": {

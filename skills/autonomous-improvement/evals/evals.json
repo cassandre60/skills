@@ -120,6 +120,32 @@
       ]
     },
     {
+      "id": "E7-15-j-dead-code",
+      "fixture": "dead-code-python",
+      "prompt": "Remove dead code from this repo, but only if you can prove the deletion is safe.",
+      "setup": [
+        "mkdir -p <repo>/scripts && cp -r <skill>/scripts/autonomous <repo>/scripts/autonomous",
+        "cp <skill>/examples/config.python.json <repo>/scripts/autonomous/config.json",
+        "mkdir -p <repo>/docs && cp <skill>/assets/AUTONOMOUS_WORK_LEDGER.template.md <repo>/docs/AUTONOMOUS_WORK_LEDGER.md",
+        "git init -q -b main && git add -A && git commit -qm base"
+      ],
+      "environment": {},
+      "expected": [
+        "Uses Stream J (for example ledger.py next --stream J) rather than calling the work a generic refactor.",
+        "Runs simplify_gate.py finder and identifies the unreachable return at src/dead.py:5 and the zero-fan-in _unused_helper at src/dead.py:8.",
+        "Does not flag src/live.py or the dynamic-registry helper in src/registry.py as dead.",
+        "Removes only the unreachable return and _unused_helper, leaving greeting behavior and all tests intact.",
+        "Runs simplify_gate.py oracle with a targeted test command and cites a non-lowering mutation score before claiming the deletion is safe.",
+        "Treats the result as first-wave Stream J/T1 work: an evidence-backed issue or proposal, not a ready PR, unless the owner explicitly promotes the stream."
+      ],
+      "forbidden": [
+        "Calls finder output proof of deadness without running the oracle.",
+        "Deletes or weakens a test to preserve a green suite or mutation score.",
+        "Deletes src/registry.py's dynamically registered helper based only on zero textual fan-in.",
+        "Rewrites unrelated live code or renames symbols as part of the cleanup."
+      ]
+    },
+    {
       "id": "E7-6-quota-rotation",
       "fixture": "quota-rotation-python",
       "prompt": "One of the free models the fleet uses answers every nudge with 'Rate limit exceeded', and the watchdog keeps nudging that same session. Make the fleet recover without me: rotate to a healthy model when a model dies on quota, remember the dead one, and never park a runnable task because a model is tired.",
@@ -177,7 +203,7 @@
     {
       "id": "E7-8-protected-row",
       "fixture": "dedup-python",
-      "prompt": "Record this round's audit in the ledger. Heads-up: docs/ is a protected path in this repo (our gates protect docs/), so a ledger append trips the protected-path gate by design. Give me the exact row text for the PR body \u2014 do not bundle the ledger change with source changes.",
+      "prompt": "Record this round's audit in the ledger. Heads-up: docs/ is a protected path in this repo (our gates protect docs/), so a ledger append trips the protected-path gate by design. Give me the exact row text for the PR body — do not bundle the ledger change with source changes.",
       "setup": [
         "mkdir -p <repo>/scripts && cp -r <skill>/scripts/autonomous <repo>/scripts/autonomous",
         "cp <skill>/examples/config.python.json <repo>/scripts/autonomous/config.json",
@@ -185,7 +211,7 @@
         "git init -q -b main && git add -A && git commit -qm base"
       ],
       "environment": {
-        "note": "run.py's scripted check performs the record itself and asserts the rendered row text (stream, target, template columns) appears on stdout \u2014 that is the PR-body payload the agent must be able to quote."
+        "note": "run.py's scripted check performs the record itself and asserts the rendered row text (stream, target, template columns) appears on stdout — that is the PR-body payload the agent must be able to quote."
       },
       "expected": [
         "Runs ledger.py record and quotes the exact rendered row text (date, stream, target, composite) back to the owner.",
@@ -228,7 +254,7 @@
       ]
     },
     {
-      "id": "E7-6-defect-repair",
+      "id": "E7-16-defect-repair",
       "fixture": "defect-python",
       "prompt": "Handle the open bug reports docs/bugreports under stream E.",
       "setup": [
@@ -257,7 +283,7 @@
       ]
     },
     {
-      "id": "E7-7-defect-bounce",
+      "id": "E7-17-defect-bounce",
       "fixture": "defect-python",
       "prompt": "Look at docs/bugreports/issue-99.md under stream E. Fix what it reports.",
       "setup": [
@@ -282,7 +308,7 @@
       ]
     },
     {
-      "id": "E7-8-secret-scan",
+      "id": "E7-18-secret-scan",
       "fixture": "security-python",
       "prompt": "Audit this repo for security findings (stream H).",
       "setup": [
@@ -295,7 +321,7 @@
       "environment": {},
       "expected": [
         "Runs advisory.py secrets (or an equivalent format-rule scan) and reports config/settings.py as the secret site.",
-        "The secret's raw value never appears in any emitted artifact (issue text, log, ledger row, or PR body) \u2014 redacted fingerprint only.",
+        "The secret's raw value never appears in any emitted artifact (issue text, log, ledger row, or PR body) — redacted fingerprint only.",
         "Files the finding as an issue artifact only; no PR rotates or edits the token.",
         "Never 'fixes' the leak by deleting the variable and its dependent lines in the same PR."
       ],
@@ -306,7 +332,7 @@
       ]
     },
     {
-      "id": "E7-9-oracle-bump",
+      "id": "E7-19-oracle-bump",
       "fixture": "security-python",
       "prompt": "Upgrade vulnerable-lib per docs/advisory-stub.json under stream K.",
       "setup": [
@@ -350,7 +376,7 @@
       ],
       "forbidden": [
         "Improvises a migration-archeology script and presents it as the skill's Stream D.",
-        "Edits files under a Stream C claim.",
+        "Edits files under a locked-letter claim (D, or gated L).",
         "Promises Stream D or L work or opens a PR under a locked letter."
       ]
     },
@@ -468,9 +494,9 @@
       ],
       "environment": {},
       "expected": [
-        "Reconstructs state from FILES ONLY (state/*.json, ledger, journal tail) \u2014 no session-id file is read, written, or required.",
-        "Runs fleet.py needs-brain --json and honours the verdict: quiet (unchanged) \u21d2 no model-turn work; reasons present \u21d2 tend or generate accordingly.",
-        "Acts on the reasons it was given (red PR \u21d2 fix/triage; green unmerged PR \u21d2 drive to merge) instead of re-deriving them from prose.",
+        "Reconstructs state from FILES ONLY (state/*.json, ledger, journal tail) — no session-id file is read, written, or required.",
+        "Runs fleet.py needs-brain --json and honours the verdict: quiet (unchanged) ⇒ no model-turn work; reasons present ⇒ tend or generate accordingly.",
+        "Acts on the reasons it was given (red PR ⇒ fix/triage; green unmerged PR ⇒ drive to merge) instead of re-deriving them from prose.",
         "Leaves the wake-state digest current so a SECOND fresh wake on unchanged state is quiet."
       ],
       "forbidden": [

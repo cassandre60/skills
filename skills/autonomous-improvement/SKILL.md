@@ -1,12 +1,12 @@
 ---
 name: autonomous-improvement
-description: Run falsifiable, high-signal improvement cycles on a codebase instead of cosmetic churn — mutation testing to find tests that don't actually protect behavior, and adversarial audits of existing tests (vacuous assertions, flaky sleeps, over-mocking). Use when asked to "improve the repo", "audit the tests", "find weak or flaky tests", "improve test quality, not just coverage", "run mutation testing", or when "tests pass but I don't trust them" — or when an agent has spare budget and needs work that can be proven real (fails without the fix, not already done at this file's content, cheap enough to run locally). Given as a session's only prompt, it turns that session into an orchestrator that dispatches worker subagents instead of building itself (references/04-workflow-and-roles.md). Do not use for feature work, refactors, or one-off bugfixes.
+description: Run falsifiable, high-signal improvement cycles on a codebase instead of cosmetic churn — mutation testing to find tests that don't actually protect behavior, adversarial audits of existing tests (vacuous assertions, flaky sleeps, over-mocking), and oracle-guarded removal of proven dead code. Use when asked to "improve the repo", "audit the tests", "find weak or flaky tests", "improve test quality, not just coverage", "run mutation testing", "remove dead code safely", or when "tests pass but I don't trust them" — or when an agent has spare budget and needs work that can be proven real (fails without the fix, not already done at this file's content, cheap enough to run locally). Given as a session's only prompt, it turns that session into an orchestrator that dispatches worker subagents instead of building itself (references/04-workflow-and-roles.md). Do not use for feature work, unguarded refactors, or one-off bugfixes.
 ---
 
 # Autonomous Improvement
 
 Spend tokens on work that can be **mechanically falsified**, not on renames,
-prose, or checkbox tests. Ten streams are active:
+prose, or checkbox tests. Eleven streams are active:
 
 - **A — mutation testing:** behavior the suite does not protect.
 - **B — adversarial test audit:** tests that cannot fail, assert mocks, or sleep instead of syncing.
@@ -16,6 +16,7 @@ prose, or checkbox tests. Ten streams are active:
 - **G — performance:** bench delta **and** output equivalence, both mandatory (`perf_gate.py`).
 - **H+K — security & dependency:** stub-advisory audits, redacting secret scan, oracle-first bumps (`advisory.py`).
 - **I — docs & spec truth:** runnable examples, symbol/spec drift (`docs_truth.py`).
+- **J — simplification:** delete dead code only when tests stay green and the mutation score does not fall (`simplify_gate.py`).
 - **L — meta (gated):** own kill switch, replay-gated claims, L4 issue-only (`meta.py`).
 
 Each round produces at most one small, evidence-backed PR; no gap is a valid result.
@@ -26,17 +27,15 @@ An explicit task ask runs the per-task protocol directly (`04`). When this
 skill is a session's **only** instruction, that session is the Orchestrator
 instead: it dispatches and supervises worker subagents — at most 3 at a
 time — and merges their PRs on green CI, building nothing in its own turns.
-See "Roles" in `04`; the unattended stack that keeps it alive is in `05`,
-whose cold start finds the state dir, writes its own session id, and arms
-the wake grid **before** the watchdog — boot order matters.
+See "Roles" in `04`; the unattended stack is in `05`, whose primary shape
+is stateless — `fleet.py wake` (snapshot → needs-brain → one fresh run) —
+with the session-id/wake-grid boot kept as the long-lived-session fallback.
 
 When a worker or the session itself dies with a quota error, the Orchestrator
 **rotates the model**, it does not retry the same one: enumerate the live
-models, re-dispatch on a different one, and put the dead model on the
-journal's dead-pool list. A resume that wakes a frozen session must name a
-live model too — verified 2026-10-20: seven nudges on the frozen model, every
-one answered "Rate limit exceeded", across an 8-hour freeze while another
-free model stayed alive. See "Model rotation" in `05`.
+models, re-dispatch on a different one, and record the dead model on the
+journal's dead-pool list; a resumed frozen session must wake on a live model
+too (the freeze record is in `05`). See "Model rotation" in `05`.
 
 A PR is not done when it is created. The Orchestrator owns each PR to merge:
 it reads the checks on every wake, drives a red check that sits inside the
@@ -84,38 +83,39 @@ for Python, Dart/Flutter, TypeScript/JavaScript, and Go examples.
 
 ## Quick start (one round)
 
-1. `python3 scripts/autonomous/ledger.py next --stream A` selects the next unaudited target.
+1. `python3 scripts/autonomous/ledger.py next --stream A` selects the next unaudited target (`--rank risk` for git-churn/issue-intake ordering — see `references/02-ledger-and-dedup.md`).
 2. `python3 scripts/autonomous/orchestrator.py create-worktree --slug <slug> --type test` isolates it.
 3. `python3 scripts/autonomous/mutation_engine.py --source <target> --test-cmd "<targeted cmd>"` finds survivors.
 4. For one triaged survivor, prove the new test is red with the mutant and green on clean source.
-5. Commit, then run `python3 scripts/autonomous/orchestrator.py verify-gate --worktree .`.
+5. Generate the evidence artifact (`evidence.py mutant|defect` — it runs red/green/pass-to-pass itself), commit, then run `python3 scripts/autonomous/orchestrator.py verify-gate --worktree .`.
 6. Push the branch and open the PR; then record the audit on that branch — or, if the ledger is a protected path, report the row text for the wave's batched ledger PR (see `04`).
 
 Full commands, worktree cleanup, and the evidence contract: `references/04-workflow-and-roles.md`.
 
 ## Stream A — mutation testing
 
-The engine is regex-based (`scripts/autonomous/mutation_rules/`): it mutates one
-line at a time and runs your targeted test command once per mutant; the timeout
-scales off the measured baseline, and survivors need a clean-source confirm pass.
+The engine is regex-based (`scripts/autonomous/mutation_rules/`): one mutant
+line at a time, one targeted test run per mutant, a timeout scaled off the
+measured baseline, clean-source confirm passes, and a persisted verdict
+cache — stryker reports normalize via `--backend stryker` (`auto` → regex).
 
 - `KILLED`: the suite noticed. No work.
 - `SURVIVED`: a candidate gap. **Triage first** — equivalent mutants, string or
-  comment noise, and regex false positives are real. Record the verdict with
-  `mutants.py record`; open survivors keep the file in `next`.
+  comment noise, and regex false positives are real. Record it with `mutants.py
+  record`; open survivors keep the file in `next`.
 - `UNCOMPILABLE`: an anchored compiler-error pattern matched; excluded from the
   kill rate. Never "fix" these with tests.
 - `TIMEOUT`: reported separately; counted as killed by default. Change with
   `--timeout-counts-as`.
 
 A survivor becomes work only when you can state the behavior it breaks and write
-a test that is red with the mutant and green without it. The test passes on
-`origin/main` by construction; that is expected (Law 1).
+a test that is red with the mutant and green without it (it passes on
+`origin/main` by construction — that is expected: Law 1).
 
 Safety: the engine refuses a dirty source unless `--allow-dirty`, writes
-`<file>.mutbak` + `<file>.mutlock`, restores on SIGTERM/SIGINT/SIGHUP, and
-recovers a stale backup after SIGKILL. Add these patterns to `.gitignore`; see
-`assets/gitignore.fragment.txt`. Shards need separate worktrees.
+`<file>.mutbak` + `<file>.mutlock` (restores on SIGTERM/SIGINT/SIGHUP, recovers
+a stale backup after SIGKILL), and needs these patterns in `.gitignore`
+(`assets/gitignore.fragment.txt`). Shards need separate worktrees.
 
 ## Stream B — adversarial test audit
 
@@ -141,22 +141,22 @@ The ledger is a git-tracked markdown table:
   topmost row wins.
 - Statuses are audits (`COMPLETED`, `SOUND`) or hash-scoped refusals
   (`REJECTED`, `WONTFIX`, `SUPERSEDED`). No in-progress status: claim a target
-  by opening a draft PR early; `sync-rejections` records closed PRs.
+  via `fleet.py claim` (draft PR at minute 1); `sync-rejections` records closed PRs.
 - Cells are escaped (`\|`, `\\`); rows must stay append-only. Add the
   `merge=union` fragment from `assets/gitattributes.fragment.txt` so parallel
   appends merge without conflicts, and the Status cell must be the bare token.
 - The hash is the blob at HEAD; `record` warns if the target is dirty.
 
-## Beyond testing (planned streams D, J)
+## Beyond testing (planned stream D; L is gated)
 
-Testing is the bootstrap, not the ceiling. The remaining streams generalize
-the same five laws to migration safety and simplification. Each must pass
-the stream contract in `references/08-recursive-self-improvement.md`
-(deterministic finder, mechanical oracle, content-addressed memory, bounded
-blast radius, referee isolation) before its letter unlocks; `ledger.py`
-rejects them until then. Do not start work under a locked letter or promise
-it in a PR; offer an unlocked stream, or file the finding as an
-evidence-backed issue.
+Testing is the bootstrap, not the ceiling. Streams C–I and K generalize the
+five laws to fuzzing, defect repair, flakiness, performance, security, docs
+truth, simplification, and dependency evolution — each behind its shipped
+finder + oracle + eval fixture (reference 08). **L** (the fleet improving
+itself) is its own kill-switched, replay-gated stream with T2 caps; **D**
+(migration safety) is still planned. While a stream's tooling is absent,
+`ledger.py` rejects its letter: offer an unlocked stream (J is first-wave
+T1 — issue/proposal only), or file the finding as an evidence-backed issue.
 
 ## Unattended operation (advanced)
 
@@ -175,8 +175,8 @@ carry quota independent of the others — and must actually be free.
 | File | Read when |
 |---|---|
 | `references/01-mutation-engine.md` | Rule packs, statuses, seeds/shards, diff scoping, triage |
-| `references/02-ledger-and-dedup.md` | Schema, newest-wins, composite hash, escaping, merge driver, the validator |
-| `references/03-streams-and-triage.md` | Deeper Stream A/B checklists and planned streams |
+| `references/02-ledger-and-dedup.md` | Schema, newest-wins, composite hash, escaping, merge driver, the validator, draft-PR claims |
+| `references/03-streams-and-triage.md` | Deeper Stream A/B/J checklists and planned streams |
 | `references/04-workflow-and-roles.md` | The one canonical per-task protocol and evidence contract |
 | `references/05-unattended-operation.md` | Heartbeats, watchdog, quotas, fleet coordination, the improvement cadence (advanced) |
 | `references/07-moving-main.md` | Working on a repo that keeps merging; stale-base traps |

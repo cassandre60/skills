@@ -50,6 +50,7 @@ from common import (
     Fatal,
     UsageError,
     git as _git,
+    load_config,
     repo_root,
     write_json_atomic,
 )
@@ -460,15 +461,19 @@ def _split_test_cmd(test_cmd: str) -> List[str]:
 
 
 def _effective_timeout(
-    baseline_elapsed: float, timeout: Optional[float]
+    baseline_elapsed: float,
+    timeout: Optional[float],
+    timeout_factor: float = 5.0,
+    timeout_floor: float = 20.0,
 ) -> float:
     """Per-mutant cap: an explicit --timeout wins; the default scales off the
-    measured baseline instead of a fixed number (5x baseline, 20s floor, #16).
-    A contended box has slow tests in it — a fixed timeout counts them as
-    KILLED by coin flip, which manufactures kill rate."""
+    measured baseline instead of a fixed number (timeout_factor x baseline,
+    timeout_floor as the minimum, #16). A contended box has slow tests in it —
+    a fixed timeout counts them as KILLED by coin flip, which manufactures
+    kill rate."""
     if timeout is not None:
         return timeout
-    return max(5.0 * baseline_elapsed, 20.0)
+    return max(timeout_factor * baseline_elapsed, timeout_floor)
 
 
 def _bust_pycache(source: Path) -> None:
@@ -482,18 +487,156 @@ def _bust_pycache(source: Path) -> None:
 
 
 def _resolve_backend(backend: str) -> str:
-    # v1 of #16 ships exactly one backend: the regex engine ("sregex").
-    # auto resolves to sregex and says so; adapters for external mutators
-    # (stryker/mutmut/cargo-mutants/gremlins/pit) land once their reports
-    # can be recorded as fixtures — see the backends table in references/01.
+    # The regex engine ("sregex") is the always-available backend; a stryker
+    # adapter ships with this tree and is selected by --backend or by
+    # mutation_backend/mutation_backends config (see references/01).
     if backend == "auto":
         print(
-            "[*] backend: sregex (auto: no external mutator adapters are "
-            "built yet; the regex engine stays the always-available backend)"
+            "[*] backend: sregex (auto: no usable external mutator resolved; "
+            "the regex engine stays the always-available backend)"
         )
         return "sregex"
     print(f"[*] backend: {backend}")
     return backend
+
+
+_STRYKER_STATUS = {
+    "Killed": "killed",
+    "Survived": "survived",
+    "NoCoverage": "survived",
+    "CompileError": "uncompilable",
+    "RuntimeError": "uncompilable",
+    "Timeout": "timeout",
+}
+
+
+def run_stryker_backend(
+    source_path: str,
+    test_cmd: str,
+    cmd: Optional[List[str]],
+    report_path: str,
+    timeout_counts_as: str = "killed",
+) -> Dict[str, Any]:
+    """External-mutator adapter (stryker): run the configured mutator, read its
+    report, and map report statuses onto the shared verdict vocabulary. The
+    adapter trusts the mutator's own executions — the regex engine's
+    confirmation runs apply only to mutants this engine applies itself."""
+    source = Path(source_path)
+    if not source.exists():
+        raise UsageError(f"source file not found: {source_path}")
+    if cmd:
+        argv = [str(part).replace("{source}", str(source)) for part in cmd]
+        print(f"[*] Running external mutator: {' '.join(argv)}")
+        proc = subprocess.run(argv, capture_output=True, text=True)
+        if proc.returncode != 0:
+            detail = (proc.stderr or proc.stdout).strip()[:2000]
+            raise EnvError(f"external mutator failed (exit {proc.returncode}): {detail}")
+    report_file = Path(report_path.replace("{source}", str(source)))
+    if not report_file.exists():
+        raise EnvError(
+            f"stryker report not found: {report_file} "
+            "(configure mutation_backends.stryker.cmd/report or --backend-report)"
+        )
+    try:
+        report = json.loads(report_file.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise EnvError(f"stryker report is not valid JSON: {exc}")
+    files = report.get("files") if isinstance(report, dict) else None
+    if not isinstance(files, dict) or not files:
+        raise UsageError("stryker report has no files object")
+    wanted = str(source)
+    entry = files.get(wanted)
+    matched_key = wanted
+    if entry is None:
+        for key, value in files.items():
+            if key.endswith(wanted) or wanted.endswith(key):
+                entry, matched_key = value, key
+                break
+    if entry is None:
+        raise UsageError(
+            f"stryker report has no entry for {wanted} (has: {', '.join(sorted(files))})"
+        )
+
+    source_lines = source.read_text(encoding="utf-8", errors="ignore").splitlines()
+    buckets: Dict[str, List[Dict[str, Any]]] = {
+        "killed": [], "survived": [], "uncompilable": [], "timeout": [],
+    }
+    for mutant in entry.get("mutants") or []:
+        verdict = _STRYKER_STATUS.get(str(mutant.get("status") or ""))
+        if verdict is None:
+            continue
+        location = mutant.get("location") or {}
+        start = location.get("start") or {}
+        end = location.get("end") or {}
+        line_no = int(start.get("line") or 0)
+        original_line = (
+            source_lines[line_no - 1] if 1 <= line_no <= len(source_lines) else ""
+        )
+        mutated_line = original_line
+        replacement = str(mutant.get("replacement") or "")
+        if (
+            end.get("line") == start.get("line")
+            and isinstance(start.get("column"), int)
+            and isinstance(end.get("column"), int)
+        ):
+            mutated_line = (
+                original_line[: start["column"] - 1]
+                + replacement
+                + original_line[end["column"] - 1:]
+            )
+        buckets[verdict].append(
+            {
+                "file": matched_key,
+                "line": line_no,
+                "column": int(start.get("column") or 0),
+                "original": original_line,
+                "mutated": mutated_line,
+                "description": f"{mutant.get('mutatorName') or 'mutant'} (stryker)",
+            }
+        )
+
+    timeout_killed = len(buckets["timeout"]) if timeout_counts_as == "killed" else 0
+    timeout_survived = len(buckets["timeout"]) if timeout_counts_as == "survived" else 0
+    denominator = (
+        len(buckets["killed"]) + len(buckets["survived"])
+        + timeout_killed + timeout_survived
+    )
+    kill_rate = (
+        (len(buckets["killed"]) + timeout_killed) / denominator * 100.0
+        if denominator else None
+    )
+    counts = {
+        "killed": len(buckets["killed"]),
+        "survived": len(buckets["survived"]),
+        "uncompilable": len(buckets["uncompilable"]),
+        "timeout": len(buckets["timeout"]),
+        "unverified": 0,
+        "total": sum(len(items) for items in buckets.values()),
+    }
+    _print_summary(
+        str(source), buckets["killed"], buckets["survived"],
+        buckets["uncompilable"], buckets["timeout"], counts, kill_rate,
+    )
+    return {
+        "source": str(source),
+        "language": str(entry.get("language") or "stryker"),
+        "backend": "stryker",
+        "test_cmd": test_cmd,
+        "seed": 0,
+        "shard": None,
+        "timeout_mode": "external-report",
+        "timeout_effective": None,
+        "confirm_survivors": 0,
+        "cache_hits": 0,
+        "counts": counts,
+        "kill_rate": kill_rate,
+        "timeout_counts_as": timeout_counts_as,
+        "killed": buckets["killed"],
+        "survived": buckets["survived"],
+        "uncompilable": buckets["uncompilable"],
+        "timeout": buckets["timeout"],
+        "unverified": [],
+    }
 
 
 def _cache_path(source: Path) -> Optional[Path]:
@@ -547,6 +690,9 @@ def _run_test_cmd(
 ) -> Tuple[int, str, str, float, bool]:
     global _active_pgid
     start = time.time()
+    # A same-size mutant applied within the same second keeps the (mtime,
+    # size) pair a .pyc validates against; without this, a fast Python test
+    # command can execute the unmutated bytecode and report a false survivor.
     try:
         # A mutant rewrite keeps byte-length and mtime-second equal, so a
         # stale pyc (clean or mutant bytecode) can look fresh and the test
@@ -554,10 +700,10 @@ def _run_test_cmd(
         env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
         proc = subprocess.Popen(
             argv,
+            env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            env=env,
             start_new_session=True,
         )
     except FileNotFoundError:
@@ -604,7 +750,6 @@ def _print_summary(
     if survived:
         print("NOTE: every survivor needs human triage — equivalent mutants and regex noise exist.")
 
-
 def run_mutation_pass(
     source_path: str,
     test_cmd: str,
@@ -619,6 +764,8 @@ def run_mutation_pass(
     allow_dirty: bool = False,
     timeout_counts_as: str = "killed",
     spread: bool = False,
+    timeout_factor: float = 5.0,
+    timeout_floor: float = 20.0,
     backend: str = "auto",
     confirm_survivors: int = 1,
     no_cache: bool = False,
@@ -656,7 +803,9 @@ def run_mutation_pass(
         )
     print(f"    [+] baseline passed ({baseline_elapsed:.1f}s)")
     # Per-mutant timeout: baseline-relative by default (#16), explicit flag wins.
-    effective_timeout = _effective_timeout(baseline_elapsed, timeout)
+    effective_timeout = _effective_timeout(
+        baseline_elapsed, timeout, timeout_factor, timeout_floor
+    )
     timeout_mode = "fixed" if timeout is not None else "baseline-relative"
     print(f"    [+] per-mutant timeout: {effective_timeout:.1f}s ({timeout_mode})")
 
@@ -691,6 +840,7 @@ def run_mutation_pass(
 
     killed: List[Dict[str, Any]] = []
     survived: List[Dict[str, Any]] = []
+    unconfirmed: List[Dict[str, Any]] = []
     uncompilable: List[Dict[str, Any]] = []
     timeouts: List[Dict[str, Any]] = []
     unverified: List[Dict[str, Any]] = []
@@ -877,6 +1027,147 @@ def _parse_shard(value: Optional[str]) -> Optional[Tuple[int, int]]:
     return index, total
 
 
+# --- External backends (issue #16) -----------------------------------------
+# The regex engine stays the guaranteed-available backend. External mutators
+# normalize into the same verdict schema, so triage/ledger/evidence flows do
+# not change. Supported today: Stryker's mutation-report JSON. Configure via
+# config `mutation_backend` + `mutation_backends.<name>.{cmd,report}` (argv
+# array, `{source}` substituted) or --backend-cmd/--backend-report.
+
+_STRYKER_STATUS = {
+    "Killed": "killed",
+    "Survived": "survived",
+    "NoCoverage": "survived",
+    "CompileError": "uncompilable",
+    "RuntimeError": "uncompilable",
+    "Timeout": "timeout",
+}
+
+
+def run_stryker_backend(
+    source_path: str,
+    test_cmd: str,
+    cmd: Optional[List[str]],
+    report_path: str,
+    timeout_counts_as: str = "killed",
+) -> Dict[str, Any]:
+    source = Path(source_path)
+    if not source.exists():
+        raise UsageError(f"source file not found: {source_path}")
+    if cmd:
+        argv = [str(part).replace("{source}", str(source)) for part in cmd]
+        print(f"[*] Running external mutator: {' '.join(argv)}")
+        proc = subprocess.run(argv, capture_output=True, text=True)
+        if proc.returncode != 0:
+            detail = (proc.stderr or proc.stdout).strip()[:2000]
+            raise EnvError(f"external mutator failed (exit {proc.returncode}): {detail}")
+    report_file = Path(report_path.replace("{source}", str(source)))
+    if not report_file.exists():
+        raise EnvError(
+            f"stryker report not found: {report_file} "
+            "(configure mutation_backends.stryker.cmd/report or --backend-report)"
+        )
+    try:
+        report = json.loads(report_file.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise EnvError(f"stryker report is not valid JSON: {exc}")
+    files = report.get("files") if isinstance(report, dict) else None
+    if not isinstance(files, dict) or not files:
+        raise UsageError("stryker report has no files object")
+    wanted = str(source)
+    entry = files.get(wanted)
+    matched_key = wanted
+    if entry is None:
+        for key, value in files.items():
+            if key.endswith(wanted) or wanted.endswith(key):
+                entry, matched_key = value, key
+                break
+    if entry is None:
+        raise UsageError(
+            f"stryker report has no entry for {wanted} (has: {', '.join(sorted(files))})"
+        )
+
+    source_lines = source.read_text(encoding="utf-8", errors="ignore").splitlines()
+    buckets: Dict[str, List[Dict[str, Any]]] = {
+        "killed": [], "survived": [], "uncompilable": [], "timeout": [],
+    }
+    for mutant in entry.get("mutants") or []:
+        verdict = _STRYKER_STATUS.get(str(mutant.get("status") or ""))
+        if verdict is None:
+            continue
+        location = mutant.get("location") or {}
+        start = location.get("start") or {}
+        end = location.get("end") or {}
+        line_no = int(start.get("line") or 0)
+        original_line = (
+            source_lines[line_no - 1] if 1 <= line_no <= len(source_lines) else ""
+        )
+        mutated_line = original_line
+        replacement = str(mutant.get("replacement") or "")
+        if (
+            end.get("line") == start.get("line")
+            and isinstance(start.get("column"), int)
+            and isinstance(end.get("column"), int)
+        ):
+            mutated_line = (
+                original_line[: start["column"] - 1]
+                + replacement
+                + original_line[end["column"] - 1:]
+            )
+        buckets[verdict].append(
+            {
+                "file": matched_key,
+                "line": line_no,
+                "column": int(start.get("column") or 0),
+                "original": original_line,
+                "mutated": mutated_line,
+                "description": f"{mutant.get('mutatorName') or 'mutant'} (stryker)",
+            }
+        )
+
+    timeout_killed = len(buckets["timeout"]) if timeout_counts_as == "killed" else 0
+    timeout_survived = len(buckets["timeout"]) if timeout_counts_as == "survived" else 0
+    denominator = (
+        len(buckets["killed"]) + len(buckets["survived"])
+        + timeout_killed + timeout_survived
+    )
+    kill_rate = (
+        (len(buckets["killed"]) + timeout_killed) / denominator * 100.0
+        if denominator else None
+    )
+    counts = {
+        "killed": len(buckets["killed"]),
+        "survived": len(buckets["survived"]),
+        "unconfirmed": 0,
+        "uncompilable": len(buckets["uncompilable"]),
+        "timeout": len(buckets["timeout"]),
+        "total": sum(len(items) for items in buckets.values()),
+    }
+    _print_summary(
+        str(source), buckets["killed"], buckets["survived"],
+        buckets["uncompilable"], buckets["timeout"], counts, kill_rate,
+    )
+    return {
+        "source": str(source),
+        "backend": "stryker",
+        "language": str(entry.get("language") or "external"),
+        "test_cmd": test_cmd,
+        "seed": 0,
+        "shard": None,
+        "counts": counts,
+        "kill_rate": kill_rate,
+        "timeout_counts_as": timeout_counts_as,
+        "timeout_effective_s": None,
+        "baseline_s": None,
+        "cache_hits": 0,
+        "killed": buckets["killed"],
+        "survived": buckets["survived"],
+        "unconfirmed": [],
+        "uncompilable": buckets["uncompilable"],
+        "timeout": buckets["timeout"],
+    }
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Regex-based mutation engine with per-language rule packs (triage required)"
@@ -895,17 +1186,25 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--allow-dirty", action="store_true", help="allow a dirty source file")
     parser.add_argument(
         "--backend",
-        choices=["auto", "sregex"],
+        choices=["auto", "sregex", "stryker"],
         default="auto",
-        help="mutator backend: auto resolves to the always-available regex engine "
-        "until an external-mutator adapter is built (see references/01)",
+        help="mutator backend: auto resolves to a configured external mutator "
+        "when its command is on PATH, otherwise the always-available regex "
+        "engine (see references/01)",
     )
     parser.add_argument(
         "--timeout",
         type=float,
         default=None,
-        help="per-mutant timeout in seconds (default: baseline-relative, max(5x baseline, 20s))",
+        help="fixed per-mutant timeout in seconds "
+        "(default: baseline-relative, see --timeout-factor/--timeout-floor)",
     )
+    parser.add_argument("--timeout-factor", type=float, default=5.0,
+                        help="per-mutant timeout = factor x baseline (default: 5)")
+    parser.add_argument("--timeout-floor", type=float, default=20.0,
+                        help="minimum per-mutant timeout in seconds (default: 20)")
+    parser.add_argument("--backend-cmd", help="external mutator command ({source} substituted)")
+    parser.add_argument("--backend-report", help="external mutator report path")
     parser.add_argument("--baseline-timeout", type=float, default=600.0, help="baseline timeout in seconds")
     parser.add_argument(
         "--confirm-survivors",
@@ -932,24 +1231,59 @@ def main() -> int:
     args = parser.parse_args()
     try:
         shard = _parse_shard(args.shard)
-        results = run_mutation_pass(
-            source_path=args.source,
-            test_cmd=args.test_cmd,
-            language=args.lang,
-            max_mutants=args.max_mutants,
-            timeout=args.timeout,
-            baseline_timeout=args.baseline_timeout,
-            seed=args.seed,
-            shard=shard,
-            diff_base=args.diff_base,
-            lines_filter=args.lines,
-            allow_dirty=args.allow_dirty,
-            timeout_counts_as=args.timeout_counts_as,
-            spread=args.spread,
-            backend=args.backend,
-            confirm_survivors=args.confirm_survivors,
-            no_cache=args.no_cache,
-        )
+        cfg: Dict[str, Any] = {}
+        try:
+            cfg = load_config(repo_root())
+        except Exception:
+            cfg = {}
+        specs = cfg.get("mutation_backends") or {}
+        spec = specs.get("stryker") if isinstance(specs, dict) else None
+        spec = spec if isinstance(spec, dict) else {}
+        backend = args.backend
+        if backend == "auto":
+            configured_cmd = spec.get("cmd") if cfg.get("mutation_backend") == "stryker" else None
+            if configured_cmd and shutil.which(str(configured_cmd[0])):
+                backend = "stryker"
+            # no usable external mutator: auto stays auto and run_mutation_pass
+            # resolves it to the regex engine (and says so).
+        if backend == "stryker":
+            cmd: Optional[List[str]] = None
+            if args.backend_cmd:
+                cmd = _split_test_cmd(args.backend_cmd)
+            elif spec.get("cmd"):
+                cmd = [str(part) for part in spec["cmd"]]
+            report = (
+                args.backend_report or spec.get("report")
+                or "reports/mutation/mutation.json"
+            )
+            results = run_stryker_backend(
+                source_path=args.source,
+                test_cmd=args.test_cmd,
+                cmd=cmd,
+                report_path=str(report),
+                timeout_counts_as=args.timeout_counts_as,
+            )
+        else:
+            results = run_mutation_pass(
+                source_path=args.source,
+                test_cmd=args.test_cmd,
+                language=args.lang,
+                max_mutants=args.max_mutants,
+                timeout=args.timeout,
+                baseline_timeout=args.baseline_timeout,
+                seed=args.seed,
+                shard=shard,
+                diff_base=args.diff_base,
+                lines_filter=args.lines,
+                allow_dirty=args.allow_dirty,
+                timeout_counts_as=args.timeout_counts_as,
+                spread=args.spread,
+                timeout_factor=args.timeout_factor,
+                timeout_floor=args.timeout_floor,
+                backend=backend,
+                confirm_survivors=args.confirm_survivors,
+                no_cache=args.no_cache,
+            )
         if args.output_json:
             path = Path(args.output_json)
             path.parent.mkdir(parents=True, exist_ok=True)

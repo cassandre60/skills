@@ -40,6 +40,9 @@ DEFAULT_CONFIG = {
     "analyze_extensions": [],
     "gate_cmd": None,
     "test_cmd": None,
+    "mutation_backend": None,
+    "mutation_backends": {},
+    "coverage_report": None,
     "test_for_source": [],
     "candidates": {
         "A": {"include": [], "exclude": [], "require_test": True, "priority_paths": []},
@@ -53,15 +56,19 @@ DEFAULT_CONFIG = {
         "G": {"include": ["src/**/*.py", "lib/**/*.py"], "exclude": [], "require_test": False, "priority_paths": []},
         "H": {"include": ["**/*"], "exclude": ["**/.git/**", "**/node_modules/**"], "require_test": False, "priority_paths": []},
         "I": {"include": ["**/*.md", "src/**/*.py"], "exclude": [], "require_test": False, "priority_paths": []},
+        "J": {"include": ["src/**/*.py", "lib/**/*.py"], "exclude": [], "require_test": False, "priority_paths": []},
         "K": {"include": ["**/*"], "exclude": ["**/.git/**"], "require_test": False, "priority_paths": []},
         "L": {"include": ["**/*"], "exclude": ["**/.git/**"], "require_test": False, "priority_paths": []},
     },
     "pr_required": {"COMPLETED": True, "SOUND": False},
+    "verify_gate": {"weakening": "fail", "evidence": "warn"},
     "fleet": {
         "max_open_prs": 5,
         "max_new_prs_per_day": 6,
-        "min_acceptance_rate_14d": 0.5,
         "kill_switch_file": ".autonomous/STOP",
+        "harness_cmd": None,
+        "model_ladder": [],
+        "doctor_min_free_gb": 2,
         "merge_policy": "never",
         "ledger_mode": "batched",
         "doctor": {
@@ -479,7 +486,7 @@ STREAMS: Dict[str, Dict[str, Any]] = {
     "G": {"label": "G (Performance)", "status": "available"},
     "H": {"label": "H (Security & Supply Chain)", "status": "available"},
     "I": {"label": "I (Docs & Spec Truthfulness)", "status": "available"},
-    "J": {"label": "J (Simplification / Dead Code)", "status": "planned"},
+    "J": {"label": "J (Simplification / Dead Code)", "status": "available"},
     "K": {"label": "K (Dependency Evolution)", "status": "available"},
     "L": {"label": "L (Meta: Fleet Self-Improvement)", "status": "gated"},
 }
@@ -503,7 +510,7 @@ def normalize_stream(value: str) -> str:
     if info["status"] not in ("available", "gated"):
         raise UsageError(
             f"stream {info['label']} is planned, not implemented "
-            "(use A, B, or F; see references/08-recursive-self-improvement.md)"
+            "(use A, B, F, or J; see references/08-recursive-self-improvement.md)"
         )
     return stream
 

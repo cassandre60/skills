@@ -1,0 +1,9 @@
+[Unit]
+Description=Orchestrator stateless wake (snapshot, needs-brain gate, fresh headless run)
+
+[Service]
+Type=oneshot
+EnvironmentFile=-%h/.local/share/orchestrator/watchdog.env
+ExecStart=%h/.local/share/orchestrator/wake.sh
+TimeoutStartSec=2h
+KillMode=process
