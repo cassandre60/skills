@@ -42,6 +42,11 @@
 #                     the session's model too, so the next interactive turn
 #                     also runs on a live, authorised pool (default: 1)
 #   ORCH_ALERT_INTERVAL seconds between repeated exhaustion alerts (default 21600)
+#   ORCH_RETRY_AFTER_EXHAUSTION  seconds to wait after a tick exhausted every
+#                     model before nudging again (default 1800). Without it a
+#                     dead pool floods the session: each attempt delivers its
+#                     message BEFORE the model call fails, so a 4-model ladder
+#                     at a 20-minute timer is 4 stale messages per tick.
 #
 # Harness-specific: the default resume command is for opencode. Read your
 # harness docs for its headless resume-session flags; do not copy these flags
@@ -71,6 +76,8 @@ AUTHORIZED="${ORCH_AUTHORIZED_PROVIDERS:-opencode}"
 SWITCH_MODEL="${ORCH_SWITCH_SESSION_MODEL:-1}"
 ALERT_FILE="$STATE_DIR/ALERT.md"
 ALERT_INTERVAL="${ORCH_ALERT_INTERVAL:-21600}"
+EXHAUSTED_FILE="$STATE_DIR/exhausted_at"
+RETRY_AFTER_EXHAUSTION="${ORCH_RETRY_AFTER_EXHAUSTION:-1800}"
 
 mkdir -p "$STATE_DIR"
 
@@ -217,6 +224,18 @@ if [ -f "$STATE_DIR/last_nudge" ]; then
     exit 0
   fi
 fi
+
+# The previous tick exhausted every model. Do not keep injecting messages into
+# a session that cannot run a turn: each attempt delivers its message before
+# the model call fails. Back off, keep the heartbeat stale (the state is still
+# broken), and let the alert carry the news.
+if [ -f "$EXHAUSTED_FILE" ]; then
+  SINCE_EXHAUSTED=$(( $(date +%s) - $(stat -c %Y "$EXHAUSTED_FILE") ))
+  if [ "$SINCE_EXHAUSTED" -lt "$RETRY_AFTER_EXHAUSTION" ]; then
+    echo "$(date -Is) previous tick exhausted every model ${SINCE_EXHAUSTED}s ago; backing off without nudging (see $ALERT_FILE)" >>"$LOG"
+    exit 0
+  fi
+fi
 touch "$STATE_DIR/last_nudge"
 
 # Mark the attempt before running so a crash does not cause a nudge storm.
@@ -255,6 +274,7 @@ for model in "${candidates[@]}"; do
     # the only trustworthy witness - the session touches it when it wakes.
     if [ "$(stat -c %Y "$HB" 2>/dev/null || echo 0)" -gt "$ATTEMPT_TS" ]; then
       echo "$(date -Is) nudge on '$label' timed out but the session woke (heartbeat moved); done" >>"$LOG"
+      rm -f "$EXHAUSTED_FILE"
       exit 0
     fi
     echo "$(date -Is) nudge on '$label' timed out without the heartbeat moving; rotating" >>"$LOG"
@@ -269,6 +289,7 @@ for model in "${candidates[@]}"; do
   fi
   echo "$(date -Is) nudge on '$label' finished with exit 0; done" >>"$LOG"
   [ -n "$model" ] && switch_session_model "$model"
+  rm -f "$EXHAUSTED_FILE"
   exit 0
 done
 
@@ -278,6 +299,7 @@ done
 # a freshness the session never earned. Then leave evidence the owner can see
 # without reading this log.
 touch -d "@$(( $(date +%s) - MAX_AGE - 1 ))" "$HB"
+touch "$EXHAUSTED_FILE"
 alert_exhausted
 echo "$(date -Is) every attempted model failed; heartbeat left stale and an alert written for the next tick" >>"$LOG"
 exit 0

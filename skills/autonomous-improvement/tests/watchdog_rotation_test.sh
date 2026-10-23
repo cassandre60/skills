@@ -95,7 +95,7 @@ EOF
 
 run_watchdog() {
   rm -f "$TMP/state/watchdog.log" "$TMP/state/model_failures" "$TMP/state/last_nudge" \
-        "$TMP/state/ALERT.md" "$TMP/state/switch_calls"
+        "$TMP/state/ALERT.md" "$TMP/state/switch_calls" "$TMP/state/exhausted_at"
   printf 'ses_TEST\n' >"$TMP/state/opencode_session_id"
   touch "$TMP/state/last_beat"
   touch -d '3 hours ago' "$TMP/state/last_beat"
@@ -231,7 +231,7 @@ fi
 
 run_watchdog_timeout() {
   rm -f "$TMP/state/watchdog.log" "$TMP/state/model_failures" "$TMP/state/last_nudge" \
-        "$TMP/state/ALERT.md" "$TMP/state/switch_calls"
+        "$TMP/state/ALERT.md" "$TMP/state/switch_calls" "$TMP/state/exhausted_at"
   printf 'ses_TEST\n' >"$TMP/state/opencode_session_id"
   touch -d '3 hours ago' "$TMP/state/last_beat"
   PATH="$TMP/bin:$PATH" ORCH_STATE_DIR="$TMP/state" \
@@ -306,6 +306,31 @@ if grep -q 'post /api/session/ses_TEST/model' "$TMP/state/switch_calls" 2>/dev/n
   ok "the session model was switched to the model that carried the nudge"
 else
   fail "the session model was not switched after rotation"
+fi
+
+# --- case 10: an exhausted tick must not flood the session -------------
+# Each attempt delivers its message BEFORE the model call fails. With every
+# model dead, one tick per 20 minutes would pile messages into a session that
+# cannot run a turn (verified 2026-10-22: six stale nudges queued). The next
+# tick must back off and leave the alert to speak.
+write_fake_unknown_error
+run_watchdog
+: >"$TMP/state/watchdog.log"
+touch -d '3 hours ago' "$TMP/state/last_beat"
+rm -f "$TMP/state/last_nudge"
+PATH="$TMP/bin:$PATH" ORCH_STATE_DIR="$TMP/state" \
+  ORCH_MODEL_LADDER="opencode/alpha-free opencode/beta-free" \
+  ORCH_NUDGE_TIMEOUT=20 ORCH_MIN_INTERVAL=0 ORCH_HB_MAX_AGE=60 \
+  bash "$ASSETS" >/dev/null 2>&1
+if grep -q 'backing off without nudging' "$TMP/state/watchdog.log"; then
+  ok "an exhausted tick backs off instead of flooding the session"
+else
+  fail "an exhausted tick kept nudging"
+fi
+if grep -q 'nudge attempt' "$TMP/state/watchdog.log"; then
+  fail "a backed-off tick still delivered a nudge"
+else
+  ok "no nudge was delivered while backing off"
 fi
 
 if [ "$FAILED" -eq 0 ]; then

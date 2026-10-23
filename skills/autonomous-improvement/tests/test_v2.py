@@ -11780,6 +11780,12 @@ class WorkerLifecycleContractTests(unittest.TestCase):
         installer = (ASSETS / "install-watchdog.sh").read_text(encoding="utf-8")
         self.assertIn("--check", installer)
 
+    def test_an_exhausted_tick_does_not_flood_the_session(self) -> None:
+        # Each attempt delivers its message before the model call fails, so a
+        # dead ladder at a 20-minute timer would queue four questions a tick.
+        self.assertIn("must not flood the session", self.unattended.lower())
+        self.assertIn("ORCH_RETRY_AFTER_EXHAUSTION", self.watchdog)
+
     def test_the_checkpoint_covers_new_files(self) -> None:
         self.assertIn("stage new files by name", self.unattended.lower())
 

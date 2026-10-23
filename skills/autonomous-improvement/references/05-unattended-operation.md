@@ -449,6 +449,14 @@ nothing left to try in-process: write `ALERT.md` in the state directory
 and the exact recovery commands. A watchdog that fails quietly is
 indistinguishable from an idle fleet.
 
+**A dead fleet must not flood the session.** Each nudge attempt delivers its
+message *before* the model call fails, so a tick that exhausts a four-model
+ladder leaves four questions in the conversation — and a 20-minute timer
+repeats that all day. After an exhausted tick the watchdog backs off for
+`ORCH_RETRY_AFTER_EXHAUSTION` (default 1800) and logs that it did; the alert
+already carries the news. Verified 2026-10-22: six stale nudges queued in a
+session that could not answer one.
+
 **The ladder is owner-scoped.** `ORCH_AUTHORIZED_PROVIDERS` (default
 `opencode`) is the owner's approved pool; a ladder entry from any other
 provider is refused and logged, never tried. The same rule governs ad-hoc
