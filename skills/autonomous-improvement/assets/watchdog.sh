@@ -187,17 +187,41 @@ authorized_model() { # $1: model id -> 0 when its provider is owner-authorised
   esac
 }
 
+current_session_model() {
+  command -v jq >/dev/null 2>&1 || return 0
+  opencode api get "/api/session/$SID" 2>/dev/null \
+    | jq -r '.. | objects | select(has("model")) | .model | select(.id != null) | "\(.providerID)/\(.id)"' 2>/dev/null \
+    | head -1
+}
+
 switch_session_model() { # $1: model id that just carried a nudge
-  local provider id
+  local provider id current
   [ -n "${1:-}" ] || return 0
   [ "$SWITCH_MODEL" = "1" ] || return 0
+  # Never override a session that is already on a live ladder model: the
+  # nudge may have been carried by the first ladder entry while the owner's
+  # own model is healthy. Switch only when the current model is outside the
+  # ladder, or is one the ladder has just parked as dead.
+  current="$(current_session_model)"
+  if [ -z "$current" ]; then
+    echo "$(date -Is) cannot read the session's current model; not switching (fail-safe)" >>"$LOG"
+    return 0
+  fi
+  case " $LADDER " in
+    *" $current "*)
+      if ! failed_recently "$current"; then
+        echo "$(date -Is) session is already on '$current', a live ladder model; not switching" >>"$LOG"
+        return 0
+      fi
+      ;;
+  esac
   provider="${1%%/*}"
   id="${1#*/}"
   # 204 No Content on success; the endpoint is documented as
   # "Switch the model used by subsequent provider turns".
   if opencode api post "/api/session/$SID/model" \
       -d "{\"model\":{\"id\":\"$id\",\"providerID\":\"$provider\"}}" >/dev/null 2>&1; then
-    echo "$(date -Is) session model switched to '$1': the previous default failed this tick, so the next interactive turn runs on the live pool too" >>"$LOG"
+    echo "$(date -Is) session model switched from '$current' to '$1': the current model is not a live ladder model, so the next interactive turn runs on the live pool too" >>"$LOG"
     printf '%s\n' "$1" >"$STATE_DIR/last_good_model"
   else
     echo "$(date -Is) could not switch the session model to '$1'; the ladder still carries the next nudge" >>"$LOG"

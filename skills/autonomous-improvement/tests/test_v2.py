@@ -7,6 +7,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 import unittest
 from pathlib import Path
@@ -298,6 +299,67 @@ class WorkerLifecycleContractTests(unittest.TestCase):
         # dead ladder at a 20-minute timer would queue four questions a tick.
         self.assertIn("must not flood the session", self.unattended.lower())
         self.assertIn("ORCH_RETRY_AFTER_EXHAUSTION", self.watchdog)
+
+    def test_a_healthy_session_model_is_not_overridden(self) -> None:
+        # The ladder is tried before the session default, so a blind switch
+        # would move a session whose model is already a live ladder entry.
+        self.assertIn(
+            "never override a model that is already working",
+            self.unattended.lower(),
+        )
+        self.assertIn("current_session_model", self.watchdog)
+
+    def test_check_reports_a_unit_that_cannot_see_the_env_file(self):
+        # A hand-written unit without EnvironmentFile= runs with every default
+        # (an empty ladder included) even when the script bytes match the
+        # asset. Verified 2026-10-23 on a fleet whose unit only set
+        # ORCH_STATE_DIR: the merged rotation fix could never fire.
+        if not shutil.which("bash") or not shutil.which("install"):
+            self.skipTest("bash/install not available")
+        home = Path(tempfile.mkdtemp(prefix="unitcheck-"))
+        self.addCleanup(shutil.rmtree, home, True)
+        install_dir = home / "install"
+        state_dir = home / "state"
+        unit_dir = home / ".config/systemd/user"
+        install_dir.mkdir(parents=True)
+        state_dir.mkdir(parents=True)
+        unit_dir.mkdir(parents=True)
+        for name in ("watchdog.sh", "snapshot.sh"):
+            shutil.copy2(ASSETS / name, install_dir / name)
+        unit = unit_dir / "orchestrator-watchdog.service"
+        write(unit, "[Service]\nType=oneshot\nExecStart=%h/install/watchdog.sh\n")
+        env = dict(os.environ)
+        env.update(
+            HOME=str(home),
+            ORCH_INSTALL_DIR=str(install_dir),
+            ORCH_STATE_DIR=str(state_dir),
+        )
+        env.pop("XDG_CONFIG_HOME", None)
+        result = run(
+            [str(ASSETS / "install-watchdog.sh"), "--check"], cwd=home, env=env
+        )
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("no EnvironmentFile=", result.stdout + result.stderr)
+        write(
+            unit,
+            "[Service]\nEnvironmentFile=-%h/state/watchdog.env\n"
+            "ExecStart=%h/install/watchdog.sh\n",
+        )
+        write(state_dir / "watchdog.env", "ORCH_MODEL_LADDER=\n")
+        result = run(
+            [str(ASSETS / "install-watchdog.sh"), "--check"], cwd=home, env=env
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_the_unit_must_load_the_env_file(self) -> None:
+        # The env file is inert until the unit references it; a default
+        # ORCH_MODEL_LADDER is empty, so rotation silently cannot fire.
+        self.assertIn(
+            "installed copy is not yet a running configuration",
+            self.unattended.lower(),
+        )
+        installer = (ASSETS / "install-watchdog.sh").read_text(encoding="utf-8")
+        self.assertIn("has no EnvironmentFile=", installer)
 
     def test_the_checkpoint_covers_new_files(self) -> None:
         self.assertIn("stage new files by name", self.unattended.lower())
@@ -1833,6 +1895,77 @@ class FleetTests(RepoTestCase):
         data_kill = json.loads(res_kill.stdout)
         self.assertFalse(data_kill["dispatch"])
         self.assertIn("kill switch", data_kill["reason"].lower())
+
+    def test_govern_enforces_acceptance_floor(self):
+        # Issue #13: min_acceptance_rate_14d parsed by cmd_govern must actually
+        # gate dispatch. The stub serves one JSON payload to both governor
+        # fetches (open-cap list and 14d acceptance list), so entries stay
+        # capped below max_open_prs (5) and max_new_prs_per_day (6) to isolate
+        # the floor as the only blocker.
+        repo, _ = self.make()
+        bin_dir = path_with_only(self.tmp, ("git",))
+        gh = write(
+            bin_dir / "gh",
+            "#!/bin/sh\nwhile IFS= read -r line; do printf '%s\\n' \"$line\"; done < \"$GH_JSON\"\n",
+        )
+        gh.chmod(0o755)
+        json_path = self.tmp / "prs_floor.json"
+        env = env_with_path(bin_dir, GH_JSON=str(json_path))
+
+        def fleet_payload(n_open: int, n_merged: int, n_closed: int) -> list:
+            entries = [
+                {"number": i, "headRefName": f"pr-{i}", "headRefOid": f"sha-{i}"}
+                for i in range(1, n_open + 1)
+            ]
+            for _ in range(n_merged):
+                entries.append(
+                    {
+                        "number": 100,
+                        "state": "MERGED",
+                        "createdAt": "2026-10-21T01:00:00Z",
+                        "mergedAt": "2026-10-21T02:00:00Z",
+                    }
+                )
+            for _ in range(n_closed):
+                entries.append(
+                    {
+                        "number": 200,
+                        "state": "CLOSED",
+                        "createdAt": "2026-10-21T01:00:00Z",
+                        "mergedAt": None,
+                    }
+                )
+            return entries
+
+        # 1 merged + 2 closed-unmerged in-window -> rate 0.33 < floor 0.5 -> blocked
+        json_path.write_text(json.dumps(fleet_payload(1, 1, 2)) + "\n")
+        res_blocked = script(repo, "fleet.py", "govern", "--json", env=env)
+        self.assertEqual(res_blocked.returncode, 1)
+        data_blocked = json.loads(res_blocked.stdout)
+        self.assertFalse(data_blocked["dispatch"])
+        self.assertIn("acceptance", data_blocked["reason"])
+        self.assertIn("14d", data_blocked["reason"])
+
+        # 2 merged + 1 closed-unmerged -> rate 0.67 >= floor -> dispatch flows again
+        json_path.write_text(json.dumps(fleet_payload(1, 2, 1)) + "\n")
+        res_allowed = script(repo, "fleet.py", "govern", "--json", env=env)
+        self.assertEqual(res_allowed.returncode, 0)
+        self.assertTrue(json.loads(res_allowed.stdout)["dispatch"])
+
+        # Fresh fleet: only PRs settled outside the 14d window -> no signal, dispatch stays open
+        fresh = [
+            {"number": 1, "headRefName": "pr-1", "headRefOid": "sha-1"},
+            {
+                "number": 2,
+                "state": "MERGED",
+                "createdAt": "2026-08-15T00:00:00Z",
+                "mergedAt": "2026-08-16T00:00:00Z",
+            },
+        ]
+        json_path.write_text(json.dumps(fresh) + "\n")
+        res_fresh = script(repo, "fleet.py", "govern", "--json", env=env)
+        self.assertEqual(res_fresh.returncode, 0)
+        self.assertTrue(json.loads(res_fresh.stdout)["dispatch"])
 
     def test_stats_computes_acceptance_rate(self):
         repo, _ = self.make()

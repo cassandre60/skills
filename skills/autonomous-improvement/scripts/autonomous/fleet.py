@@ -843,6 +843,56 @@ def cmd_govern(args: argparse.Namespace) -> int:
             eprint(f"[!] Governor: DISPATCH BLOCKED ({payload['reason']})")
         return EXIT_NEGATIVE
 
+    # 5. Acceptance-rate floor (last 14 days). Only enforced against settled
+    # verdicts (merged vs closed-unmerged) in the window: a fresh fleet with
+    # no settled PRs has no evidence yet and must keep dispatching -- the
+    # governor measures outcomes, it does not prevent the first one.
+    if min_acceptance_rate_14d > 0:
+        settled_data, settle_warn = fetch_gh_prs(
+            root, state="all", limit=200, require_gh=args.require_gh
+        )
+        if settle_warn:
+            eprint(f"[warn] {settle_warn}")
+        now = datetime.datetime.now(datetime.timezone.utc)
+        merged_14d = 0
+        closed_unmerged_14d = 0
+        for p in settled_data:
+            created_str = p.get("createdAt")
+            if created_str:
+                try:
+                    dt = datetime.datetime.fromisoformat(
+                        created_str.replace("Z", "+00:00")
+                    )
+                    if (now - dt).total_seconds() > 14 * 86400:
+                        continue
+                except (ValueError, TypeError):
+                    continue
+            state = str(p.get("state") or "").upper()
+            if p.get("mergedAt") or state == "MERGED":
+                merged_14d += 1
+            elif state == "CLOSED":
+                closed_unmerged_14d += 1
+        settled_14d = merged_14d + closed_unmerged_14d
+        rate_14d = (merged_14d / settled_14d) if settled_14d > 0 else 0.0
+        if settled_14d > 0 and rate_14d < min_acceptance_rate_14d:
+            payload = {
+                "dispatch": False,
+                "reason": (
+                    f"acceptance floor missed "
+                    f"(14d: {merged_14d}/{settled_14d} = {rate_14d:.2f} "
+                    f"< {min_acceptance_rate_14d:.2f})"
+                ),
+                "open_prs": open_count,
+                "tend": tend,
+                "acceptance_rate_14d": round(rate_14d, 4),
+                "min_acceptance_rate_14d": min_acceptance_rate_14d,
+            }
+            if args.json:
+                print(json.dumps(payload, indent=2))
+            else:
+                eprint(f"[!] Governor: DISPATCH BLOCKED ({payload['reason']})")
+            return EXIT_NEGATIVE
+
     payload = {
         "dispatch": True,
         "reason": "within limits",
