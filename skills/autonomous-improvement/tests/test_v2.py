@@ -13457,6 +13457,8 @@ class DocumentationInvariantTests(unittest.TestCase):
             "references/04-workflow-and-roles.md",
             "references/05-unattended-operation.md",
             "references/07-moving-main.md",
+            "references/08-recursive-self-improvement.md",
+            "references/09-session-history-review.md",
             "references/gates-and-vocabulary.md",
             "references/stack-adapters.md",
             "references/examples.md",
@@ -13519,9 +13521,6 @@ class MutationMeasurementContractTests(unittest.TestCase):
         # the phrase lives in a shell comment, so assert on the part after it
         self.assertIn("a second oracle may already kill it", self.protocol)
 
-
-if __name__ == "__main__":
-    unittest.main()
 
 def _flat_landing(text: str) -> str:
     """Collapse whitespace and drop markdown emphasis, so an assertion
@@ -13598,4 +13597,135 @@ class EnvironmentIndependenceTests(unittest.TestCase):
     def test_the_fleet_suite_rule_is_stated(self) -> None:
         self.assertIn("same result everywhere", self.unattended.lower())
         self.assertIn("temporary tree", self.unattended.lower())
+
+
+class SkillImprovementCadenceTests(unittest.TestCase):
+    """The cadence: idle capacity improves the skill, from the fleet's own
+    session history — and the method that turns a session's history into a
+    proposal.
+
+    Red before this change: nothing in the skill said when to look at the
+    fleet's own history, what a proposal has to carry, or what the cadence
+    does not authorise. The one session that produced a long list of rule
+    misfires found them by hand, at the end — and missed three it had
+    already written down and addressed to the skill.
+    """
+
+    def setUp(self) -> None:
+        self.unattended = _flat_landing(
+            (SKILL_ROOT / "references" / "05-unattended-operation.md").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.protocol = _flat_landing(
+            (SKILL_ROOT / "references" / "04-workflow-and-roles.md").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.review = _flat_landing(
+            (SKILL_ROOT / "references" / "09-session-history-review.md").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.skill = _flat_landing((SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8"))
+
+    def test_the_cadence_is_stated(self) -> None:
+        self.assertIn("spare capacity improves the skill", self.unattended.lower())
+        self.assertIn("10% of the remaining time", self.unattended)
+        self.assertIn("at least once a week", self.unattended)
+
+    def test_the_cadence_is_bound_to_an_empty_queue(self) -> None:
+        self.assertIn("nothing meaningful left", self.unattended)
+        self.assertIn("spare capacity", self.unattended.lower())
+
+    def test_the_cadence_authorises_no_merge(self) -> None:
+        # the rule must not be readable as permission to land something
+        self.assertIn("does not authorise a merge", self.unattended.lower())
+        self.assertIn("never produces a merge", self.protocol.lower())
+
+    def test_the_cadence_excludes_the_referee(self) -> None:
+        for surface in ("five laws", "stream contract", "eval sets", "tier floors"):
+            self.assertIn(surface, self.unattended.lower(), surface)
+        self.assertIn("merge policy", self.unattended.lower())
+
+    def test_the_cadence_is_not_the_skill_rounds_on_itself(self) -> None:
+        self.assertIn(
+            "running this skill's rounds against this skill's own code",
+            self.review.lower(),
+        )
+        self.assertIn("not a second stream l", self.review.lower())
+
+    def test_the_evidence_surface_is_named(self) -> None:
+        for source in (
+            "journal",
+            "compaction-proof state file",
+            "nudge transcripts",
+            "watchdog log",
+            "snapshot accumulator",
+            "ledger",
+            "pr and issue timeline",
+        ):
+            self.assertIn(source, self.review.lower(), source)
+
+    def test_a_proposal_carries_evidence_scope_and_the_rule(self) -> None:
+        self.assertIn("evidence", self.review.lower())
+        self.assertIn("scope", self.review.lower())
+        self.assertIn("the rule it would have prevented", self.review.lower())
+
+    def test_the_already_covered_case_is_required(self) -> None:
+        # "the rule existed and was not followed" is a different finding from
+        # "no rule existed", and the review has to be able to say which.
+        self.assertIn("already covered?", self.review.lower())
+        self.assertIn("the rule existed and was not followed", self.review.lower())
+
+    def test_a_referee_change_is_an_issue_not_a_pr(self) -> None:
+        self.assertIn("never a pr the fleet can merge", self.review.lower())
+
+    def test_the_orchestrator_duty_is_in_the_protocol(self) -> None:
+        self.assertIn("spends idle capacity on the skill itself", self.protocol.lower())
+        self.assertIn("references/09-session-history-review.md", self.protocol)
+
+    def test_the_summary_reaches_the_cadence(self) -> None:
+        # SKILL.md is the injected summary: a duty that lives only in a
+        # reference file is a duty that never fires.
+        self.assertIn(
+            "idle capacity turns the fleet's own history into skill proposals",
+            self.skill.lower(),
+        )
+
+
+class FleetStateDurabilityTests(unittest.TestCase):
+    """The disk, the journal write, and where the state directory lives.
+
+    Red before this change: the fleet's journal carried a lesson addressed
+    to the skill — a worktree is ~400 MB, twenty of them fill a disk, and
+    cleanup is part of the round — and it never reached the skill. The same
+    session lost two journal appends that reported success, and the skill's
+    rule covered only failed *reads*.
+    """
+
+    def setUp(self) -> None:
+        self.unattended = _flat_landing(
+            (SKILL_ROOT / "references" / "05-unattended-operation.md").read_text(
+                encoding="utf-8"
+            )
+        )
+
+    def test_the_disk_is_part_of_the_machine_budget(self) -> None:
+        self.assertIn("the disk is part of the machine budget", self.unattended.lower())
+        self.assertIn("budget the worktrees", self.unattended.lower())
+
+    def test_the_cleanup_is_part_of_the_round(self) -> None:
+        self.assertIn("clean up as part of the round", self.unattended.lower())
+
+    def test_the_journal_write_is_atomic_and_verified(self) -> None:
+        self.assertIn("write the entry to a temp file", self.unattended.lower())
+        self.assertIn("read the tail back", self.unattended.lower())
+
+    def test_the_state_dir_is_outside_the_harness_tree(self) -> None:
+        self.assertIn("outside any tree the harness manages", self.unattended.lower())
+
+
+if __name__ == "__main__":
+    unittest.main()
 
