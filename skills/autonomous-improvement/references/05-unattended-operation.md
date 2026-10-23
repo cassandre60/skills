@@ -474,6 +474,18 @@ proves it is alive; make it the session's model too
 live pool. Rotating only the headless nudge leaves the owner's own turns on
 the dead default — exactly the "the model did not get switched" failure.
 
+**But never override a model that is already working.** The ladder is tried
+before the session default, so the first ladder entry carries the nudge even
+when the owner's own model is healthy; switching unconditionally would move
+the session on every tick, outside the owner's choice. Read the session's
+current model first and switch only when it is outside the ladder or is one
+the ladder has just parked as dead. If it cannot be read, do not switch —
+log the fail-safe. Two facts make this cheap: `run -s <id> -m <model>` already
+persists the model it ran with (verified live 2026-10-23: a session on a dead
+model ended on the ladder model after one successful nudge), so the explicit
+switch is the fallback for paths that do not pass `-m`, not the primary
+mechanism.
+
 A quota error is a routing decision, not a retry decision. The orchestrator
 rotates the **model**, it never re-dispatches the one that just failed.
 
