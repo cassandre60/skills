@@ -295,6 +295,18 @@ both — the log looked like the old bug for seven hours after the fix existed.
 `--check` exits non-zero when the installed scripts differ from the assets;
 run it at every cold start and after every skill update.
 
+**An installed copy is not yet a running configuration.** The same day, the
+same fleet ran a byte-perfect script with an **empty ladder**: its hand-written
+unit set only `Environment=ORCH_STATE_DIR=...` and never loaded
+`watchdog.env`, so every other `ORCH_*` setting was silently default. The env
+file is inert until the unit references it. `--check` now fails when the unit
+has no `EnvironmentFile=`, when the file it names does not exist, or when its
+`ExecStart` is not the installed script. After any wiring change, ask the
+manager what it sees:
+`systemctl --user show <unit> -p EnvironmentFiles -p ExecStart`, and quote
+space-separated values in the env file (`ORCH_MODEL_LADDER="a b c"`) so a
+shell sources it exactly as systemd does.
+
 The installer is idempotent: copies `watchdog.sh` to
 `~/.local/share/orchestrator/`, copies
 `orchestrator-watchdog.{service,timer}` to `~/.config/systemd/user/`, runs

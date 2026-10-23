@@ -7,6 +7,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 import unittest
 from pathlib import Path
@@ -11794,6 +11795,58 @@ class WorkerLifecycleContractTests(unittest.TestCase):
             self.unattended.lower(),
         )
         self.assertIn("current_session_model", self.watchdog)
+
+    def test_check_reports_a_unit_that_cannot_see_the_env_file(self):
+        # A hand-written unit without EnvironmentFile= runs with every default
+        # (an empty ladder included) even when the script bytes match the
+        # asset. Verified 2026-10-23 on a fleet whose unit only set
+        # ORCH_STATE_DIR: the merged rotation fix could never fire.
+        if not shutil.which("bash") or not shutil.which("install"):
+            self.skipTest("bash/install not available")
+        home = Path(tempfile.mkdtemp(prefix="unitcheck-"))
+        self.addCleanup(shutil.rmtree, home, True)
+        install_dir = home / "install"
+        state_dir = home / "state"
+        unit_dir = home / ".config/systemd/user"
+        install_dir.mkdir(parents=True)
+        state_dir.mkdir(parents=True)
+        unit_dir.mkdir(parents=True)
+        for name in ("watchdog.sh", "snapshot.sh"):
+            shutil.copy2(ASSETS / name, install_dir / name)
+        unit = unit_dir / "orchestrator-watchdog.service"
+        write(unit, "[Service]\nType=oneshot\nExecStart=%h/install/watchdog.sh\n")
+        env = dict(os.environ)
+        env.update(
+            HOME=str(home),
+            ORCH_INSTALL_DIR=str(install_dir),
+            ORCH_STATE_DIR=str(state_dir),
+        )
+        env.pop("XDG_CONFIG_HOME", None)
+        result = run(
+            [str(ASSETS / "install-watchdog.sh"), "--check"], cwd=home, env=env
+        )
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("no EnvironmentFile=", result.stdout + result.stderr)
+        write(
+            unit,
+            "[Service]\nEnvironmentFile=-%h/state/watchdog.env\n"
+            "ExecStart=%h/install/watchdog.sh\n",
+        )
+        write(state_dir / "watchdog.env", "ORCH_MODEL_LADDER=\n")
+        result = run(
+            [str(ASSETS / "install-watchdog.sh"), "--check"], cwd=home, env=env
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_the_unit_must_load_the_env_file(self) -> None:
+        # The env file is inert until the unit references it; a default
+        # ORCH_MODEL_LADDER is empty, so rotation silently cannot fire.
+        self.assertIn(
+            "installed copy is not yet a running configuration",
+            self.unattended.lower(),
+        )
+        installer = (ASSETS / "install-watchdog.sh").read_text(encoding="utf-8")
+        self.assertIn("has no EnvironmentFile=", installer)
 
     def test_the_checkpoint_covers_new_files(self) -> None:
         self.assertIn("stage new files by name", self.unattended.lower())
