@@ -26,6 +26,10 @@ write_fake_opencode() { # $1: model that fails ("" = none), $2: model that succe
   cat >"$TMP/bin/opencode" <<EOF
 #!/bin/bash
 if [ "\${1:-}" = "api" ]; then
+  if [ "\${2:-}" = "get" ]; then
+    echo "{\\"model\\":{\\"id\\":\\"\$(cat "\$ORCH_STATE_DIR/current_model" 2>/dev/null || echo old-model)\\",\\"providerID\\":\\"opencode\\"}}"
+    exit 0
+  fi
   printf '%s\n' "\$*" >>"\$ORCH_STATE_DIR/switch_calls"
   exit 0
 fi
@@ -42,6 +46,10 @@ write_fake_dead() { # $1: the model the harness reports as unavailable
   cat >"$TMP/bin/opencode" <<EOF
 #!/bin/bash
 if [ "\${1:-}" = "api" ]; then
+  if [ "\${2:-}" = "get" ]; then
+    echo "{\\"model\\":{\\"id\\":\\"\$(cat "\$ORCH_STATE_DIR/current_model" 2>/dev/null || echo old-model)\\",\\"providerID\\":\\"opencode\\"}}"
+    exit 0
+  fi
   printf '%s\n' "\$*" >>"\$ORCH_STATE_DIR/switch_calls"
   exit 0
 fi
@@ -58,6 +66,10 @@ write_fake_unknown_error() { # exit 1 with a signature nobody has taught the scr
   cat >"$TMP/bin/opencode" <<'EOF'
 #!/bin/bash
 if [ "${1:-}" = "api" ]; then
+  if [ "${2:-}" = "get" ]; then
+    echo "{\\"model\\":{\\"id\\":\\"$(cat \"$ORCH_STATE_DIR/current_model\" 2>/dev/null || echo old-model)\\",\\"providerID\\":\\"opencode\\"}}"
+    exit 0
+  fi
   printf '%s\n' "$*" >>"$ORCH_STATE_DIR/switch_calls"
   exit 0
 fi
@@ -74,6 +86,10 @@ write_fake_timeout() { # $1: "wake" touches the heartbeat before hanging
   cat >"$TMP/bin/opencode" <<EOF
 #!/bin/bash
 if [ "\${1:-}" = "api" ]; then
+  if [ "\${2:-}" = "get" ]; then
+    echo "{\\"model\\":{\\"id\\":\\"\$(cat "\$ORCH_STATE_DIR/current_model" 2>/dev/null || echo old-model)\\",\\"providerID\\":\\"opencode\\"}}"
+    exit 0
+  fi
   printf '%s\n' "\$*" >>"\$ORCH_STATE_DIR/switch_calls"
   exit 0
 fi
@@ -231,7 +247,7 @@ fi
 
 run_watchdog_timeout() {
   rm -f "$TMP/state/watchdog.log" "$TMP/state/model_failures" "$TMP/state/last_nudge" \
-        "$TMP/state/ALERT.md" "$TMP/state/switch_calls" "$TMP/state/exhausted_at"
+        "$TMP/state/ALERT.md" "$TMP/state/switch_calls" "$TMP/state/exhausted_at" "$TMP/state/current_model"
   printf 'ses_TEST\n' >"$TMP/state/opencode_session_id"
   touch -d '3 hours ago' "$TMP/state/last_beat"
   PATH="$TMP/bin:$PATH" ORCH_STATE_DIR="$TMP/state" \
@@ -331,6 +347,24 @@ if grep -q 'nudge attempt' "$TMP/state/watchdog.log"; then
   fail "a backed-off tick still delivered a nudge"
 else
   ok "no nudge was delivered while backing off"
+fi
+
+# --- case 11: do not override a session already on a live ladder model -
+# The ladder is tried before the session default, so the first entry carries
+# the nudge even when the owner's model is healthy. Switching then would move
+# the session without cause (and outside the owner's choice).
+printf 'beta-free\n' >"$TMP/state/current_model"
+write_fake_opencode "alpha-free" "beta-free"
+run_watchdog
+if grep -q 'already on .opencode/beta-free., a live ladder model; not switching' "$TMP/state/watchdog.log"; then
+  ok "a healthy session model was not overridden"
+else
+  fail "the session model was overridden while healthy"
+fi
+if [ -s "$TMP/state/switch_calls" ]; then
+  fail "a switch was issued while the session was on a live ladder model"
+else
+  ok "no switch was issued"
 fi
 
 if [ "$FAILED" -eq 0 ]; then

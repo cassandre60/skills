@@ -11786,6 +11786,15 @@ class WorkerLifecycleContractTests(unittest.TestCase):
         self.assertIn("must not flood the session", self.unattended.lower())
         self.assertIn("ORCH_RETRY_AFTER_EXHAUSTION", self.watchdog)
 
+    def test_a_healthy_session_model_is_not_overridden(self) -> None:
+        # The ladder is tried before the session default, so a blind switch
+        # would move a session whose model is already a live ladder entry.
+        self.assertIn(
+            "never override a model that is already working",
+            self.unattended.lower(),
+        )
+        self.assertIn("current_session_model", self.watchdog)
+
     def test_the_checkpoint_covers_new_files(self) -> None:
         self.assertIn("stage new files by name", self.unattended.lower())
 
