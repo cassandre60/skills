@@ -1833,6 +1833,77 @@ class FleetTests(RepoTestCase):
         self.assertFalse(data_kill["dispatch"])
         self.assertIn("kill switch", data_kill["reason"].lower())
 
+    def test_govern_enforces_acceptance_floor(self):
+        # Issue #13: min_acceptance_rate_14d parsed by cmd_govern must actually
+        # gate dispatch. The stub serves one JSON payload to both governor
+        # fetches (open-cap list and 14d acceptance list), so entries stay
+        # capped below max_open_prs (5) and max_new_prs_per_day (6) to isolate
+        # the floor as the only blocker.
+        repo, _ = self.make()
+        bin_dir = path_with_only(self.tmp, ("git",))
+        gh = write(
+            bin_dir / "gh",
+            "#!/bin/sh\nwhile IFS= read -r line; do printf '%s\\n' \"$line\"; done < \"$GH_JSON\"\n",
+        )
+        gh.chmod(0o755)
+        json_path = self.tmp / "prs_floor.json"
+        env = env_with_path(bin_dir, GH_JSON=str(json_path))
+
+        def fleet_payload(n_open: int, n_merged: int, n_closed: int) -> list:
+            entries = [
+                {"number": i, "headRefName": f"pr-{i}", "headRefOid": f"sha-{i}"}
+                for i in range(1, n_open + 1)
+            ]
+            for _ in range(n_merged):
+                entries.append(
+                    {
+                        "number": 100,
+                        "state": "MERGED",
+                        "createdAt": "2026-10-21T01:00:00Z",
+                        "mergedAt": "2026-10-21T02:00:00Z",
+                    }
+                )
+            for _ in range(n_closed):
+                entries.append(
+                    {
+                        "number": 200,
+                        "state": "CLOSED",
+                        "createdAt": "2026-10-21T01:00:00Z",
+                        "mergedAt": None,
+                    }
+                )
+            return entries
+
+        # 1 merged + 2 closed-unmerged in-window -> rate 0.33 < floor 0.5 -> blocked
+        json_path.write_text(json.dumps(fleet_payload(1, 1, 2)) + "\n")
+        res_blocked = script(repo, "fleet.py", "govern", "--json", env=env)
+        self.assertEqual(res_blocked.returncode, 1)
+        data_blocked = json.loads(res_blocked.stdout)
+        self.assertFalse(data_blocked["dispatch"])
+        self.assertIn("acceptance", data_blocked["reason"])
+        self.assertIn("14d", data_blocked["reason"])
+
+        # 2 merged + 1 closed-unmerged -> rate 0.67 >= floor -> dispatch flows again
+        json_path.write_text(json.dumps(fleet_payload(1, 2, 1)) + "\n")
+        res_allowed = script(repo, "fleet.py", "govern", "--json", env=env)
+        self.assertEqual(res_allowed.returncode, 0)
+        self.assertTrue(json.loads(res_allowed.stdout)["dispatch"])
+
+        # Fresh fleet: only PRs settled outside the 14d window -> no signal, dispatch stays open
+        fresh = [
+            {"number": 1, "headRefName": "pr-1", "headRefOid": "sha-1"},
+            {
+                "number": 2,
+                "state": "MERGED",
+                "createdAt": "2026-08-15T00:00:00Z",
+                "mergedAt": "2026-08-16T00:00:00Z",
+            },
+        ]
+        json_path.write_text(json.dumps(fresh) + "\n")
+        res_fresh = script(repo, "fleet.py", "govern", "--json", env=env)
+        self.assertEqual(res_fresh.returncode, 0)
+        self.assertTrue(json.loads(res_fresh.stdout)["dispatch"])
+
     def test_stats_computes_acceptance_rate(self):
         repo, _ = self.make()
         bin_dir = path_with_only(self.tmp, ("git",))

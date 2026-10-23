@@ -62,6 +62,8 @@ local instructions file. It is not an independent policy document.
      Keep the global write-back rules in mind: no speculation, no narration,
      no anything already obvious from reading the code. -->
 
+- [2026-10-21, GLM-5.3-Flash Free] Stub-`gh` PR fixtures: CLOSED-unmerged rows must carry `mergedAt: null` — a truthy `mergedAt` makes any counting logic treat them as merged, which turned a red-first test wrong-reason (red for the wrong cause, then false green). Verified by: red-first run of `FleetTests.test_govern_enforces_acceptance_floor`, implementation reverted to confirm the fail-reason.
+
 ---
 
 Everything below is the **global baseline**, copied verbatim from
