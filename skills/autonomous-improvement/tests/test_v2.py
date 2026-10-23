@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import datetime
 import importlib
 import json
 import os
@@ -48,6 +47,377 @@ class RepoTestCase(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.tmp = Path(self._tmp.name)
         self.addCleanup(self._tmp.cleanup)
+
+
+def _flat(text: str) -> str:
+    """Collapse whitespace so an assertion survives a re-wrap."""
+    return " ".join(text.split())
+
+
+def _flat_lifecycle(text: str) -> str:
+    """Collapse whitespace so an assertion survives a re-wrap."""
+    return " ".join(text.split())
+
+
+def _flat_git(text: str) -> str:
+    """Collapse whitespace so an assertion survives a re-wrap."""
+    return " ".join(text.split())
+
+
+def _flat_ask(text: str) -> str:
+    """Collapse whitespace so an assertion survives a re-wrap."""
+    return " ".join(text.split())
+
+
+def _flat_landing(text: str) -> str:
+    """Collapse whitespace and drop markdown emphasis, so an assertion
+    survives a re-wrap or a `**bold**` that moved."""
+    return " ".join(text.replace("*", "").replace("`", "").split())
+
+
+class StreamBChecklistTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.text = (SKILL_ROOT / "references" / "03-streams-and-triage.md").read_text(
+            encoding="utf-8"
+        )
+
+    def test_the_harness_fidelity_question_exists(self) -> None:
+        self.assertIn("measure what production measures", self.text)
+        for detail in ("theme", "font"):
+            self.assertIn(detail, self.text.lower())
+
+    def test_the_swallowed_exception_question_exists(self) -> None:
+        self.assertIn("framework errors", self.text)
+        self.assertIn("swallow", self.text.lower())
+
+    def test_the_fidelity_finding_shape_is_measured_not_asserted(self) -> None:
+        """'Most of them are noise' is not a measurement."""
+        self.assertIn("per-site", self.text)
+        self.assertIn("in production", self.text)
+
+    def test_the_report_before_failing_rule_is_stated(self) -> None:
+        self.assertIn("report first", self.text.lower())
+
+
+class GitRealityContractTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.moving = _flat_git(
+            (SKILL_ROOT / "references" / "07-moving-main.md").read_text(encoding="utf-8")
+        )
+        self.protocol = _flat_git(
+            (SKILL_ROOT / "references" / "04-workflow-and-roles.md").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.unattended = _flat_git(
+            (SKILL_ROOT / "references" / "05-unattended-operation.md").read_text(
+                encoding="utf-8"
+            )
+        )
+
+    def test_strict_protection_is_named(self) -> None:
+        self.assertIn("strict branch protection", self.moving.lower())
+        self.assertIn("--admin", self.moving)
+
+    def test_the_resync_is_a_merge_not_a_rebase(self) -> None:
+        self.assertIn("merge the base into the branch", self.moving.lower())
+        self.assertIn("git merge origin/main", self.moving)
+        self.assertIn("never by rebasing", self.protocol.lower())
+
+    def test_branch_inheritance_is_named(self) -> None:
+        self.assertIn("inherits that worktree's commits", self.protocol.lower())
+        self.assertIn("git diff origin/main...HEAD --stat", self.protocol)
+
+    def test_batched_deliveries_are_named(self) -> None:
+        self.assertIn("Batch the fleet's own deliveries", self.protocol)
+        self.assertIn("one commit per change", self.protocol)
+
+    def test_the_owners_checkout_is_checked_at_cold_start(self) -> None:
+        self.assertIn("orchestrator's own checkout", self.unattended.lower())
+        self.assertIn("rev-parse --abbrev-ref HEAD", self.unattended)
+
+
+class OwnerAskContractTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.protocol = _flat_ask(
+            (SKILL_ROOT / "references" / "04-workflow-and-roles.md").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.unattended = _flat_ask(
+            (SKILL_ROOT / "references" / "05-unattended-operation.md").read_text(
+                encoding="utf-8"
+            )
+        )
+
+    def test_the_ask_states_three_plain_things(self) -> None:
+        for phrase in (
+            "what changes",
+            "what it costs",
+            "what happens if the owner declines",
+        ):
+            self.assertIn(phrase, self.protocol.lower(), phrase)
+
+    def test_the_consent_record_has_its_four_fields(self) -> None:
+        for field in ("class", "authority", "date", "withdrawal path"):
+            self.assertIn(field, self.protocol.lower(), field)
+
+    def test_consent_is_per_item(self) -> None:
+        self.assertIn("consent is per item", self.protocol.lower())
+        self.assertIn("standing consent", self.protocol.lower())
+
+    def test_the_gh_fallbacks_are_documented(self) -> None:
+        self.assertIn("gh api --method POST", self.unattended)
+        self.assertIn("repos/<owner>/<repo>/issues/<n>/labels", self.unattended)
+
+    def test_the_repo_override_rule_is_stated(self) -> None:
+        self.assertIn("always pass", self.unattended.lower())
+        self.assertIn("-r <owner>/<repo>", self.unattended.lower())
+        self.assertIn("parent", self.unattended.lower())
+
+
+class ConfigGuardTests(RepoTestCase):
+    def make(self, with_origin: bool = False):
+        repo, origin = python_repo(self.tmp, with_origin=with_origin)
+        commit(repo)
+        return repo, origin
+
+    def test_empty_include_is_a_named_configuration_error(self) -> None:
+        """An empty candidate list is 'not configured', not 'nothing to do'."""
+        repo, _ = self.make()
+        path = repo / "scripts" / "autonomous" / "config.json"
+        cfg = json.loads(path.read_text(encoding="utf-8"))
+        cfg["candidates"]["A"]["include"] = []
+        path.write_text(json.dumps(cfg), encoding="utf-8")
+        proc = script(repo, "ledger.py", "next", "--stream", "A")
+        self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("not configured", proc.stderr)
+        self.assertNotIn("No eligible targets remain", proc.stdout)
+
+    def test_missing_config_is_named_too(self) -> None:
+        """No config file at all: the message says which file to create."""
+        repo, _ = self.make()
+        (repo / "scripts" / "autonomous" / "config.json").unlink()
+        proc = script(repo, "ledger.py", "next", "--stream", "A")
+        self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("no config file at", proc.stderr)
+
+    def test_globs_that_match_nothing_are_reported_as_a_configuration_problem(self) -> None:
+        """0 candidates matched != 0 eligible targets."""
+        repo, _ = self.make()
+        path = repo / "scripts" / "autonomous" / "config.json"
+        cfg = json.loads(path.read_text(encoding="utf-8"))
+        cfg["candidates"]["A"]["include"] = ["nowhere/**/*.py"]
+        path.write_text(json.dumps(cfg), encoding="utf-8")
+        proc = script(repo, "ledger.py", "next", "--stream", "A")
+        self.assertIn("No candidate path matched", proc.stdout)
+        self.assertNotIn("No eligible targets remain", proc.stdout)
+
+    def test_the_dart_example_config_resolves_the_companion(self) -> None:
+        """The shipped example must map a source file to a test that exists."""
+        repo, _ = self.make()
+        # a repo laid out the way the Dart example describes
+        write(repo / "lib" / "src" / "view" / "x.dart", "def f():\n    return 1\n")
+        write(repo / "test" / "view" / "x_test.dart", "def test_x():\n    assert True\n")
+        commit(repo)
+        example = load_example("config.dart.json")
+        write_config(repo, example)
+        proc = script(repo, "ledger.py", "next", "--stream", "A", "--limit", "1")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("test/view/x_test.dart", proc.stdout)
+        self.assertNotIn("No candidate path matched", proc.stdout)
+
+
+class WorkerLifecycleContractTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.unattended = _flat(
+            (SKILL_ROOT / "references" / "05-unattended-operation.md").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.protocol = _flat(
+            (SKILL_ROOT / "references" / "04-workflow-and-roles.md").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.watchdog = (SKILL_ROOT / "assets" / "watchdog.sh").read_text(
+            encoding="utf-8"
+        )
+
+    def test_three_failure_classes_are_named(self) -> None:
+        self.assertIn("quota", self.unattended.lower())
+        self.assertIn("outage", self.unattended.lower())
+        self.assertIn("task failure", self.unattended.lower())
+
+    def test_an_outage_does_not_rotate_or_park_a_pool(self) -> None:
+        self.assertIn("do not rotate, do not park a pool", self.unattended.lower())
+        self.assertIn("OUTAGE_RE", self.watchdog)
+        # "overloaded" is an outage word, not a quota word
+        self.assertNotIn("overloaded", _flat(self.watchdog).split("QUOTA_RE=")[1].split("'")[0])
+
+    def test_a_dead_model_is_its_own_failure_class(self) -> None:
+        # Verified 2026-10-23: `Model unavailable` matched neither the quota
+        # nor the outage list, so the tick was logged "done" and the ladder
+        # was never tried for seven hours.
+        self.assertIn("dead model", self.unattended.lower())
+        self.assertIn("DEAD_MODEL_RE", self.watchdog)
+
+    def test_an_unclassified_non_zero_exit_still_rotates(self) -> None:
+        # The classifier decides HOW to record a failure, never WHETHER it is
+        # one: a new error string must not become a silent success.
+        self.assertIn("exit status is the contract", self.unattended.lower())
+        self.assertIn('if [ "$RC" -ne 0 ]', self.watchdog)
+
+    def test_a_timeout_is_judged_by_the_heartbeat(self) -> None:
+        # A preempted turn and a long turn look identical in the output; the
+        # session's own heartbeat is the witness.
+        self.assertIn("judged by the heartbeat", self.unattended.lower())
+        self.assertIn('"$RC" -eq 124', self.watchdog)
+
+    def test_exhaustion_leaves_an_out_of_band_alert(self) -> None:
+        self.assertIn("alert.md", self.unattended.lower())
+        self.assertIn("ALERT_FILE", self.watchdog)
+
+    def test_the_ladder_is_owner_scoped(self) -> None:
+        self.assertIn("ORCH_AUTHORIZED_PROVIDERS", self.unattended)
+        self.assertIn("ORCH_AUTHORIZED_PROVIDERS", self.watchdog)
+        self.assertIn("throwaway session", self.unattended.lower())
+
+    def test_rotation_switches_the_session_model(self) -> None:
+        self.assertIn("ORCH_SWITCH_SESSION_MODEL", self.unattended)
+        self.assertIn("switch_session_model", self.watchdog)
+
+    def test_the_install_is_checked_for_drift(self) -> None:
+        self.assertIn("installing is a copy", self.unattended.lower())
+        installer = (ASSETS / "install-watchdog.sh").read_text(encoding="utf-8")
+        self.assertIn("--check", installer)
+
+    def test_an_exhausted_tick_does_not_flood_the_session(self) -> None:
+        # Each attempt delivers its message before the model call fails, so a
+        # dead ladder at a 20-minute timer would queue four questions a tick.
+        self.assertIn("must not flood the session", self.unattended.lower())
+        self.assertIn("ORCH_RETRY_AFTER_EXHAUSTION", self.watchdog)
+
+    def test_the_checkpoint_covers_new_files(self) -> None:
+        self.assertIn("stage new files by name", self.unattended.lower())
+
+    def test_a_dead_tabs_untracked_work_is_preserved(self) -> None:
+        self.assertIn("dirty and untracked", self.unattended.lower())
+        self.assertIn("before touching its worktree", self.unattended.lower())
+
+    def test_the_dispatch_brief_carries_the_precheck(self) -> None:
+        self.assertIn("ledger.py check --target", self.unattended)
+        self.assertIn("correcting the brief's premise", self.unattended.lower())
+        self.assertIn("keeps the dispatch brief short", self.protocol.lower())
+
+
+class ValidateTests(RepoTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.repo, _ = python_repo(self.tmp)
+        commit(self.repo)
+
+    def _validate(self, *extra):
+        return script(self.repo, "ledger.py", "validate", *extra)
+
+    def test_decorated_status_makes_a_row_invisible(self) -> None:
+        """A Status cell with extra text is skipped by the parser - report it."""
+        ledger = self.repo / "docs" / "AUTONOMOUS_WORK_LEDGER.md"
+        write(
+            ledger,
+            ledger_text(
+                "| 2026-01-01 | A (Mutation) | `src/app.py` | `abc123456` | "
+                "COMPLETED (second round: 98 candidates) | #1 | did the work | trigger |",
+                row("src/app.py", "abc123456"),
+            ),
+        )
+        proc = self._validate()
+        self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("invisible", proc.stdout)
+        self.assertIn("COMPLETED (second round", proc.stdout)
+
+    def test_compound_target_and_hash_cells_are_invisible(self) -> None:
+        ledger = self.repo / "docs" / "AUTONOMOUS_WORK_LEDGER.md"
+        write(
+            ledger,
+            ledger_text(
+                "| 2026-01-01 | A (Mutation) | `src/app.py`, `tests/test_app.py` | "
+                "`abc123456`, `def789012` | COMPLETED | #1 | did the work | trigger |",
+            ),
+        )
+        proc = self._validate()
+        self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("more than one path", proc.stdout)
+        self.assertIn("more than one hash", proc.stdout)
+
+    def test_stale_hash_is_reported(self) -> None:
+        """A row whose hash is not the blob at HEAD is a stale audit."""
+        ledger = self.repo / "docs" / "AUTONOMOUS_WORK_LEDGER.md"
+        write(ledger, ledger_text(row("src/app.py", "000000000")))
+        proc = self._validate()
+        self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("stale", proc.stdout)
+
+    def test_a_well_formed_ledger_validates_clean(self) -> None:
+        ledger = self.repo / "docs" / "AUTONOMOUS_WORK_LEDGER.md"
+        source = script(self.repo, "ledger.py", "check", "--target", "src/app.py")
+        self.assertNotEqual(source.returncode, 0)
+        # record a proper row, then validate
+        recorded = script(
+            self.repo,
+            "ledger.py",
+            "record",
+            "--stream",
+            "A",
+            "--target",
+            "src/app.py",
+            "--status",
+            "SOUND",
+            "--summary",
+            "no gaps",
+        )
+        self.assertEqual(recorded.returncode, 0, recorded.stdout + recorded.stderr)
+        proc = self._validate()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("every row is visible", proc.stdout)
+
+    def test_json_output_lists_the_problems(self) -> None:
+        ledger = self.repo / "docs" / "AUTONOMOUS_WORK_LEDGER.md"
+        write(
+            ledger,
+            ledger_text(
+                "| 2026-01-01 | A (Mutation) | `src/app.py` | `abc123456` | "
+                "COMPLETED (with a parenthetical) | #1 | did the work | trigger |",
+            ),
+        )
+        proc = self._validate("--json")
+        self.assertNotEqual(proc.returncode, 0)
+        report = json.loads(proc.stdout)
+        self.assertEqual(report["rows_total"], 1)
+        self.assertEqual(report["rows_visible"], 0)
+        self.assertEqual(len(report["invisible"]), 1)
+
+    def test_recorded_rows_are_visible(self) -> None:
+        """A row the tool writes must be a row the parser can see."""
+        recorded = script(
+            self.repo,
+            "ledger.py",
+            "record",
+            "--stream",
+            "A",
+            "--target",
+            "src/app.py",
+            "--status",
+            "SOUND",
+            "--summary",
+            "no gaps",
+        )
+        self.assertEqual(recorded.returncode, 0, recorded.stdout + recorded.stderr)
+        proc = self._validate("--json")
+        report = json.loads(proc.stdout)
+        self.assertEqual(report["rows_total"], 1)
+        self.assertEqual(report["rows_visible"], 1)
+        self.assertEqual(report["invisible"], [])
 
 
 class LedgerTests(RepoTestCase):
@@ -1038,6 +1408,177 @@ class MutationEngineTests(RepoTestCase):
         self.assertFalse(keys[0] & keys[1])
         self.assertEqual(keys[0] | keys[1], { (item["line"], item["column"]) for item in all_mutants })
 
+    def test_timeout_state_and_missing_executable(self):
+        repo, _ = python_repo(self.tmp)
+        write(repo / "src" / "app.py", "def f(a, b):\n    return a == b\n")
+        commit(repo)
+        (repo / "orig.txt").write_text((repo / "src" / "app.py").read_text())
+        stub = write(
+            repo / "slow.py",
+            "import pathlib, sys, time\n"
+            "orig = pathlib.Path('orig.txt').read_text()\n"
+            "actual = pathlib.Path('src/app.py').read_text()\n"
+            "if actual != orig:\n"
+            "    for _ in range(300):\n"
+            "        if pathlib.Path('stop').exists():\n"
+            "            sys.exit(0)\n"
+            "        time.sleep(0.1)\n"
+            "sys.exit(0)\n",
+        )
+        output = self.tmp / "timeout.json"
+        result = script(
+            repo, "mutation_engine.py", "--source", "src/app.py",
+            "--test-cmd", f"{PYTHON} {stub}", "--max-mutants", "1",
+            "--timeout", "0.3", "--output-json", str(output),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = json.loads(output.read_text())
+        self.assertEqual(data["counts"]["timeout"], 1)
+        self.assertEqual(data["counts"]["survived"], 0)
+
+        missing = script(
+            repo, "mutation_engine.py", "--source", "src/app.py",
+            "--test-cmd", "definitely-not-a-real-tool-xyz", "--max-mutants", "1",
+        )
+        self.assertEqual(missing.returncode, 3)
+
+    def test_exit_codes(self):
+        repo, _ = python_repo(self.tmp)
+        commit(repo)
+        completed = script(
+            repo, "mutation_engine.py", "--source", "src/app.py",
+            "--test-cmd", f"{PYTHON} -c pass", "--max-mutants", "10",
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        failed = script(
+            repo, "mutation_engine.py", "--source", "src/app.py",
+            "--test-cmd", f"{PYTHON} -c pass", "--max-mutants", "10",
+            "--fail-on-survivors",
+        )
+        self.assertEqual(failed.returncode, 1)
+        unknown = write(self.tmp / "x.txt", "x == y\n")
+        usage = script(
+            repo, "mutation_engine.py", "--source", str(unknown),
+            "--test-cmd", f"{PYTHON} -c pass",
+        )
+        self.assertEqual(usage.returncode, 2)
+        self.assertIn("unsupported source extension", usage.stderr)
+
+    def test_sigterm_restores_source(self):
+        repo, _ = python_repo(self.tmp)
+        write(repo / "src" / "app.py", "def f(a, b):\n    return a == b\n")
+        commit(repo)
+        original = (repo / "src" / "app.py").read_bytes()
+        (repo / "orig.txt").write_text(original.decode())
+        write(
+            repo / "slow.py",
+            "import pathlib, sys, time\n"
+            "orig = pathlib.Path('orig.txt').read_text()\n"
+            "actual = pathlib.Path('src/app.py').read_text()\n"
+            "if actual != orig:\n"
+            "    for _ in range(300):\n"
+            "        if pathlib.Path('stop').exists():\n"
+            "            sys.exit(0)\n"
+            "        time.sleep(0.1)\n"
+            "sys.exit(0)\n",
+        )
+        engine = repo / "scripts" / "autonomous" / "mutation_engine.py"
+        process = subprocess.Popen(
+            [PYTHON, str(engine), "--source", "src/app.py",
+             "--test-cmd", f"{PYTHON} slow.py", "--max-mutants", "1"],
+            cwd=repo, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        backup = repo / "src" / "app.py.mutbak"
+        for _ in range(100):
+            if backup.exists():
+                break
+            time.sleep(0.05)
+        self.assertTrue(backup.exists())
+        process.send_signal(signal.SIGTERM)
+        process.communicate(timeout=15)
+        self.assertEqual((repo / "src" / "app.py").read_bytes(), original)
+        self.assertFalse(backup.exists())
+        self.assertFalse((repo / "src" / "app.py.mutlock").exists())
+
+    def test_sigkill_recovery(self):
+        repo, _ = python_repo(self.tmp)
+        write(repo / "src" / "app.py", "def f(a, b):\n    return a == b\n")
+        commit(repo)
+        original = (repo / "src" / "app.py").read_bytes()
+        (repo / "orig.txt").write_text(original.decode())
+        write(
+            repo / "slow.py",
+            "import pathlib, sys, time\n"
+            "orig = pathlib.Path('orig.txt').read_text()\n"
+            "actual = pathlib.Path('src/app.py').read_text()\n"
+            "if actual != orig:\n"
+            "    for _ in range(300):\n"
+            "        if pathlib.Path('stop').exists():\n"
+            "            sys.exit(0)\n"
+            "        time.sleep(0.1)\n"
+            "sys.exit(0)\n",
+        )
+        engine = repo / "scripts" / "autonomous" / "mutation_engine.py"
+        process = subprocess.Popen(
+            [PYTHON, str(engine), "--source", "src/app.py",
+             "--test-cmd", f"{PYTHON} slow.py", "--max-mutants", "1"],
+            cwd=repo, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        backup = repo / "src" / "app.py.mutbak"
+        for _ in range(100):
+            if backup.exists():
+                break
+            time.sleep(0.05)
+        self.assertTrue(backup.exists())
+        process.kill()
+        process.communicate()
+        (repo / "stop").write_text("stop")
+        self.assertNotEqual((repo / "src" / "app.py").read_bytes(), original)
+        self.assertTrue(backup.exists())
+
+        recovered = script(
+            repo, "mutation_engine.py", "--source", "src/app.py",
+            "--test-cmd", f"{PYTHON} -c pass", "--max-mutants", "0",
+        )
+        self.assertEqual(recovered.returncode, 0, recovered.stderr)
+        self.assertIn("restored", recovered.stderr)
+        self.assertEqual((repo / "src" / "app.py").read_bytes(), original)
+        self.assertFalse(backup.exists())
+        self.assertFalse((repo / "src" / "app.py.mutlock").exists())
+
+    def test_live_lock_aborts(self):
+        repo, _ = python_repo(self.tmp)
+        commit(repo)
+        backup = repo / "src" / "app.py.mutbak"
+        lock = repo / "src" / "app.py.mutlock"
+        backup.write_bytes((repo / "src" / "app.py").read_bytes())
+        lock.write_text(str(os.getpid()))
+        result = script(
+            repo, "mutation_engine.py", "--source", "src/app.py",
+            "--test-cmd", f"{PYTHON} -c pass", "--max-mutants", "0",
+        )
+        self.assertEqual(result.returncode, 3)
+        self.assertIn("another mutation run owns", result.stderr)
+        backup.unlink()
+        lock.unlink()
+
+    def test_dirty_source_refused(self):
+        repo, _ = python_repo(self.tmp)
+        commit(repo)
+        write(repo / "src" / "app.py", "# dirty\n")
+        refused = script(
+            repo, "mutation_engine.py", "--source", "src/app.py",
+            "--test-cmd", f"{PYTHON} -c pass", "--max-mutants", "0",
+        )
+        self.assertEqual(refused.returncode, 1)
+        self.assertIn("uncommitted changes", refused.stderr)
+        allowed = script(
+            repo, "mutation_engine.py", "--source", "src/app.py",
+            "--test-cmd", f"{PYTHON} -c pass", "--max-mutants", "0", "--allow-dirty",
+        )
+        self.assertEqual(allowed.returncode, 0, allowed.stderr)
+
+
     def test_same_size_mutant_not_masked_by_bytecode_cache(self):
         # Regression: `==` -> `!=` keeps size and, within one second, the
         # mtime a .pyc validates against; the engine must not execute stale
@@ -1220,177 +1761,6 @@ class MutationEngineTests(RepoTestCase):
         self.assertEqual(data["survived"][0]["mutated"], "  return a !== b;")
         self.assertEqual(data["survived"][0]["line"], 2)
 
-    def test_timeout_state_and_missing_executable(self):
-        repo, _ = python_repo(self.tmp)
-        write(repo / "src" / "app.py", "def f(a, b):\n    return a == b\n")
-        commit(repo)
-        (repo / "orig.txt").write_text((repo / "src" / "app.py").read_text())
-        stub = write(
-            repo / "slow.py",
-            "import pathlib, sys, time\n"
-            "orig = pathlib.Path('orig.txt').read_text()\n"
-            "actual = pathlib.Path('src/app.py').read_text()\n"
-            "if actual != orig:\n"
-            "    for _ in range(300):\n"
-            "        if pathlib.Path('stop').exists():\n"
-            "            sys.exit(0)\n"
-            "        time.sleep(0.1)\n"
-            "sys.exit(0)\n",
-        )
-        output = self.tmp / "timeout.json"
-        result = script(
-            repo, "mutation_engine.py", "--source", "src/app.py",
-            "--test-cmd", f"{PYTHON} {stub}", "--max-mutants", "1",
-            "--timeout", "0.3", "--output-json", str(output),
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        data = json.loads(output.read_text())
-        self.assertEqual(data["counts"]["timeout"], 1)
-        self.assertEqual(data["counts"]["survived"], 0)
-
-        missing = script(
-            repo, "mutation_engine.py", "--source", "src/app.py",
-            "--test-cmd", "definitely-not-a-real-tool-xyz", "--max-mutants", "1",
-        )
-        self.assertEqual(missing.returncode, 3)
-
-    def test_exit_codes(self):
-        repo, _ = python_repo(self.tmp)
-        commit(repo)
-        completed = script(
-            repo, "mutation_engine.py", "--source", "src/app.py",
-            "--test-cmd", f"{PYTHON} -c pass", "--max-mutants", "10",
-        )
-        self.assertEqual(completed.returncode, 0, completed.stderr)
-        failed = script(
-            repo, "mutation_engine.py", "--source", "src/app.py",
-            "--test-cmd", f"{PYTHON} -c pass", "--max-mutants", "10",
-            "--fail-on-survivors",
-        )
-        self.assertEqual(failed.returncode, 1)
-        unknown = write(self.tmp / "x.txt", "x == y\n")
-        usage = script(
-            repo, "mutation_engine.py", "--source", str(unknown),
-            "--test-cmd", f"{PYTHON} -c pass",
-        )
-        self.assertEqual(usage.returncode, 2)
-        self.assertIn("unsupported source extension", usage.stderr)
-
-    def test_sigterm_restores_source(self):
-        repo, _ = python_repo(self.tmp)
-        write(repo / "src" / "app.py", "def f(a, b):\n    return a == b\n")
-        commit(repo)
-        original = (repo / "src" / "app.py").read_bytes()
-        (repo / "orig.txt").write_text(original.decode())
-        write(
-            repo / "slow.py",
-            "import pathlib, sys, time\n"
-            "orig = pathlib.Path('orig.txt').read_text()\n"
-            "actual = pathlib.Path('src/app.py').read_text()\n"
-            "if actual != orig:\n"
-            "    for _ in range(300):\n"
-            "        if pathlib.Path('stop').exists():\n"
-            "            sys.exit(0)\n"
-            "        time.sleep(0.1)\n"
-            "sys.exit(0)\n",
-        )
-        engine = repo / "scripts" / "autonomous" / "mutation_engine.py"
-        process = subprocess.Popen(
-            [PYTHON, str(engine), "--source", "src/app.py",
-             "--test-cmd", f"{PYTHON} slow.py", "--max-mutants", "1"],
-            cwd=repo, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-        )
-        backup = repo / "src" / "app.py.mutbak"
-        for _ in range(100):
-            if backup.exists():
-                break
-            time.sleep(0.05)
-        self.assertTrue(backup.exists())
-        process.send_signal(signal.SIGTERM)
-        process.communicate(timeout=15)
-        self.assertEqual((repo / "src" / "app.py").read_bytes(), original)
-        self.assertFalse(backup.exists())
-        self.assertFalse((repo / "src" / "app.py.mutlock").exists())
-
-    def test_sigkill_recovery(self):
-        repo, _ = python_repo(self.tmp)
-        write(repo / "src" / "app.py", "def f(a, b):\n    return a == b\n")
-        commit(repo)
-        original = (repo / "src" / "app.py").read_bytes()
-        (repo / "orig.txt").write_text(original.decode())
-        write(
-            repo / "slow.py",
-            "import pathlib, sys, time\n"
-            "orig = pathlib.Path('orig.txt').read_text()\n"
-            "actual = pathlib.Path('src/app.py').read_text()\n"
-            "if actual != orig:\n"
-            "    for _ in range(300):\n"
-            "        if pathlib.Path('stop').exists():\n"
-            "            sys.exit(0)\n"
-            "        time.sleep(0.1)\n"
-            "sys.exit(0)\n",
-        )
-        engine = repo / "scripts" / "autonomous" / "mutation_engine.py"
-        process = subprocess.Popen(
-            [PYTHON, str(engine), "--source", "src/app.py",
-             "--test-cmd", f"{PYTHON} slow.py", "--max-mutants", "1"],
-            cwd=repo, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-        )
-        backup = repo / "src" / "app.py.mutbak"
-        for _ in range(100):
-            if backup.exists():
-                break
-            time.sleep(0.05)
-        self.assertTrue(backup.exists())
-        process.kill()
-        process.communicate()
-        (repo / "stop").write_text("stop")
-        self.assertNotEqual((repo / "src" / "app.py").read_bytes(), original)
-        self.assertTrue(backup.exists())
-
-        recovered = script(
-            repo, "mutation_engine.py", "--source", "src/app.py",
-            "--test-cmd", f"{PYTHON} -c pass", "--max-mutants", "0",
-        )
-        self.assertEqual(recovered.returncode, 0, recovered.stderr)
-        self.assertIn("restored", recovered.stderr)
-        self.assertEqual((repo / "src" / "app.py").read_bytes(), original)
-        self.assertFalse(backup.exists())
-        self.assertFalse((repo / "src" / "app.py.mutlock").exists())
-
-    def test_live_lock_aborts(self):
-        repo, _ = python_repo(self.tmp)
-        commit(repo)
-        backup = repo / "src" / "app.py.mutbak"
-        lock = repo / "src" / "app.py.mutlock"
-        backup.write_bytes((repo / "src" / "app.py").read_bytes())
-        lock.write_text(str(os.getpid()))
-        result = script(
-            repo, "mutation_engine.py", "--source", "src/app.py",
-            "--test-cmd", f"{PYTHON} -c pass", "--max-mutants", "0",
-        )
-        self.assertEqual(result.returncode, 3)
-        self.assertIn("another mutation run owns", result.stderr)
-        backup.unlink()
-        lock.unlink()
-
-    def test_dirty_source_refused(self):
-        repo, _ = python_repo(self.tmp)
-        commit(repo)
-        write(repo / "src" / "app.py", "# dirty\n")
-        refused = script(
-            repo, "mutation_engine.py", "--source", "src/app.py",
-            "--test-cmd", f"{PYTHON} -c pass", "--max-mutants", "0",
-        )
-        self.assertEqual(refused.returncode, 1)
-        self.assertIn("uncommitted changes", refused.stderr)
-        allowed = script(
-            repo, "mutation_engine.py", "--source", "src/app.py",
-            "--test-cmd", f"{PYTHON} -c pass", "--max-mutants", "0", "--allow-dirty",
-        )
-        self.assertEqual(allowed.returncode, 0, allowed.stderr)
-
-
 class TestWeakeningTests(RepoTestCase):
     def test_removed_assertion_and_added_skip(self):
         repo, _ = init_repo(self.tmp)
@@ -1424,6 +1794,12 @@ class TestWeakeningTests(RepoTestCase):
         commit(repo, "stronger")
         result = script(repo, "test_weakening_check.py", "--base", "main")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
+@unittest.skipUnless(
+    all(shutil.which(tool) for tool in ("bash", "flock", "timeout", "stat", "date")),
+    "watchdog shell dependencies are not installed",
+)
 
 
 class EvidenceTests(RepoTestCase):
@@ -1554,6 +1930,8 @@ class EvidenceTests(RepoTestCase):
     all(shutil.which(tool) for tool in ("bash", "flock", "timeout", "stat", "date")),
     "watchdog shell dependencies are not installed",
 )
+
+
 class WatchdogTests(RepoTestCase):
     def test_fresh_heartbeat_skips_and_stale_runs_nudge(self):
         state = self.tmp / "state"
@@ -1601,6 +1979,11 @@ class WatchdogTests(RepoTestCase):
         env = dict(os.environ)
         env.update(HOME=str(home), PATH=f"{bin_dir}:{os.environ['PATH']}")
         env.pop("XDG_CONFIG_HOME", None)
+        # The installer reads ORCH_STATE_DIR from the environment. A machine
+        # that runs the watchdog (a fleet host) exports it, and the test then
+        # writes the env file into the REAL state dir instead of its temp
+        # home - a failure that depends on the machine, not on the code.
+        env.pop("ORCH_STATE_DIR", None)
         result = run([str(ASSETS / "install-watchdog.sh")], cwd=self.tmp, env=env)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         unit = home / ".config/systemd/user/orchestrator-watchdog.service"
@@ -1833,52 +2216,6 @@ class FleetTests(RepoTestCase):
         self.assertFalse(data_kill["dispatch"])
         self.assertIn("kill switch", data_kill["reason"].lower())
 
-    def test_govern_enforces_acceptance_floor(self):
-        repo, _ = self.make()
-        bin_dir = path_with_only(self.tmp, ("git",))
-        open_path = self.tmp / "gov-open.json"
-        all_path = self.tmp / "gov-all.json"
-        gh = write(
-            bin_dir / "gh",
-            f"#!{PYTHON}\n"
-            "import json, os, sys\n"
-            "args = sys.argv[1:]\n"
-            "state = args[args.index('--state') + 1] if '--state' in args else 'open'\n"
-            "path = os.environ['GH_ALL'] if state == 'all' else os.environ['GH_OPEN']\n"
-            "print(open(path).read())\n",
-        )
-        gh.chmod(0o755)
-        env = env_with_path(bin_dir, GH_OPEN=str(open_path), GH_ALL=str(all_path))
-        open_path.write_text("[]\n")
-        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
-
-        def decided(merged: int, closed: int):
-            prs = [
-                {"number": i + 1, "headRefName": f"m{i}", "headRefOid": "x",
-                 "mergedAt": now, "closedAt": now, "createdAt": now}
-                for i in range(merged)
-            ] + [
-                {"number": 100 + i, "headRefName": f"c{i}", "headRefOid": "y",
-                 "mergedAt": None, "closedAt": now, "createdAt": now}
-                for i in range(closed)
-            ]
-            all_path.write_text(json.dumps(prs) + "\n")
-
-        # 4/10 accepted over 14d is below the 0.5 floor with enough decisions.
-        decided(merged=4, closed=6)
-        blocked = script(repo, "fleet.py", "govern", "--json", env=env)
-        self.assertEqual(blocked.returncode, 1, blocked.stdout + blocked.stderr)
-        data = json.loads(blocked.stdout)
-        self.assertFalse(data["dispatch"])
-        self.assertIn("acceptance", data["reason"])
-        self.assertEqual(data["acceptance"]["decided"], 10)
-
-        # Too few decisions to judge: the floor does not engage.
-        decided(merged=0, closed=4)
-        allowed = script(repo, "fleet.py", "govern", "--json", env=env)
-        self.assertEqual(allowed.returncode, 0, allowed.stdout + allowed.stderr)
-        self.assertTrue(json.loads(allowed.stdout)["dispatch"])
-
     def test_stats_computes_acceptance_rate(self):
         repo, _ = self.make()
         bin_dir = path_with_only(self.tmp, ("git",))
@@ -1939,201 +2276,6 @@ class FleetTests(RepoTestCase):
         self.assertEqual(stats["acceptance_rate"], 0.8)
         self.assertIn("A (Mutation)", stats["by_stream"])
         self.assertIn("TestModel-A", stats["by_model"])
-
-
-class FleetWakeTests(RepoTestCase):
-    """Issue #18: stateless wakes — files in, fresh run, files out."""
-
-    def _pr(self, number: int, conclusion: str = "", status: str = "COMPLETED"):
-        return {
-            "number": number,
-            "title": f"pr {number}",
-            "headRefName": f"b{number}",
-            "headRefOid": f"sha{number}",
-            "statusCheckRollup": [
-                {"name": "test", "status": status, "conclusion": conclusion}
-            ],
-            "labels": [],
-            "commits": [{"oid": f"sha{number}"}],
-        }
-
-    def _setup(self, payload):
-        repo, _ = python_repo(self.tmp)
-        commit(repo)
-        json_path = self.tmp / "prs.json"
-        json_path.write_text(json.dumps(payload) + "\n")
-        bin_dir = path_with_only(self.tmp, ("git",))
-        gh = write(
-            bin_dir / "gh",
-            "#!/bin/sh\nwhile IFS= read -r line; do printf '%s\\n' \"$line\"; done < \"$GH_JSON\"\n",
-        )
-        gh.chmod(0o755)
-        return repo, env_with_path(bin_dir, GH_JSON=str(json_path)), json_path
-
-    def test_needs_brain_quiet_at_cap_and_loud_when_red(self):
-        repo, env, json_path = self._setup(
-            [self._pr(i, status="IN_PROGRESS") for i in range(1, 6)]
-        )
-        quiet = script(repo, "fleet.py", "needs-brain", "--json", env=env)
-        self.assertEqual(quiet.returncode, 1, quiet.stdout + quiet.stderr)
-        self.assertFalse(json.loads(quiet.stdout)["needs_brain"])
-
-        json_path.write_text(json.dumps([self._pr(7, conclusion="FAILURE")]) + "\n")
-        loud = script(repo, "fleet.py", "needs-brain", "--json", env=env)
-        self.assertEqual(loud.returncode, 0, loud.stdout + loud.stderr)
-        data = json.loads(loud.stdout)
-        self.assertTrue(data["needs_brain"])
-        self.assertEqual(data["tend"], [7])
-        self.assertIn("red-pr:#7", data["reasons"])
-
-    def test_wake_launches_fresh_harness_and_second_wake_continues(self):
-        repo, env, _ = self._setup([self._pr(7, conclusion="FAILURE")])
-        state_dir = self.tmp / "state"
-        marker = self.tmp / "harness-marker.json"
-        harness = write(
-            self.tmp / "harness_stub.py",
-            "import json, pathlib, sys\n"
-            "args = sys.argv[1:]\n"
-            "prompt = ''\n"
-            "for a in args:\n"
-            "    if a.endswith('last-wake-prompt.md'):\n"
-            "        prompt = pathlib.Path(a).read_text()\n"
-            f"pathlib.Path({str(marker)!r}).write_text(json.dumps({{'args': args, 'prompt': prompt}}))\n",
-        )
-        cmd = ("fleet.py", "wake", "--state-dir", str(state_dir),
-               "--harness-cmd", f"{PYTHON} {harness} {{prompt_file}}")
-        first = script(repo, *cmd, env=env)
-        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
-        launched = json.loads(marker.read_text())
-        self.assertIn("PR #7", launched["prompt"])
-        self.assertIn("fleet.py doctor", launched["prompt"])
-        self.assertTrue((state_dir / "snapshot.json").exists())
-        self.assertTrue((state_dir / "last-wake-prompt.md").exists())
-        wakes = (state_dir / "wakes.jsonl").read_text().splitlines()
-        self.assertEqual(len(wakes), 1)
-        self.assertEqual(json.loads(wakes[0])["action"], "launched")
-
-        second = script(repo, *cmd, env=env)
-        self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
-        self.assertEqual(
-            len((state_dir / "wakes.jsonl").read_text().splitlines()), 2
-        )
-        # The stateless shape has no session to immortalize.
-        self.assertEqual(list(state_dir.rglob("*session*")), [])
-
-    def test_wake_quiet_never_launches(self):
-        repo, env, _ = self._setup(
-            [self._pr(i, status="IN_PROGRESS") for i in range(1, 6)]
-        )
-        state_dir = self.tmp / "state"
-        marker = self.tmp / "should-not-exist"
-        harness = write(
-            self.tmp / "harness_stub.py",
-            f"import pathlib\npathlib.Path({str(marker)!r}).write_text('ran')\n",
-        )
-        result = script(
-            repo, "fleet.py", "wake", "--state-dir", str(state_dir),
-            "--harness-cmd", f"{PYTHON} {harness}", env=env,
-        )
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertFalse(marker.exists())
-        record = json.loads((state_dir / "wakes.jsonl").read_text().splitlines()[0])
-        self.assertEqual(record["action"], "quiet")
-
-
-class DoctorTests(RepoTestCase):
-    """Issue #19: blast-radius advice becomes checks, not hope."""
-
-    def _env(self, scenario: Dict[str, Any], linger: str = "yes") -> Dict[str, str]:
-        repo = self._repo
-        scenario_path = self.tmp / "doctor-scenario.json"
-        scenario_path.write_text(json.dumps(scenario))
-        bin_dir = path_with_only(self.tmp, ("git",))
-        gh = write(
-            bin_dir / "gh",
-            f"#!{PYTHON}\n"
-            "import datetime, email.utils, json, os, sys\n"
-            "args = sys.argv[1:]\n"
-            "sc = json.loads(open(os.environ['DOCTOR_SCENARIO']).read())\n"
-            "if args[:2] == ['auth', 'status']:\n"
-            "    print('github.com', file=sys.stderr)\n"
-            "    print(f\"  - Token scopes: {sc['scopes']}\", file=sys.stderr)\n"
-            "    sys.exit(0)\n"
-            "if args[:2] == ['repo', 'view']:\n"
-            "    print(json.dumps({'nameWithOwner': 'o/r', 'viewerPermission': sc.get('permission', 'WRITE')}))\n"
-            "    sys.exit(0)\n"
-            "if args and args[0] == 'api':\n"
-            "    joined = ' '.join(args)\n"
-            "    if 'protection' in joined:\n"
-            "        if sc.get('protection'):\n"
-            "            print(json.dumps({'required_status_checks': {'contexts': ['check']}}))\n"
-            "            sys.exit(0)\n"
-            "        print('Branch not protected', file=sys.stderr)\n"
-            "        sys.exit(1)\n"
-            "    if '-i' in args:\n"
-            "        print('HTTP/2 200')\n"
-            "        print('Date: ' + email.utils.format_datetime(datetime.datetime.now(datetime.timezone.utc)))\n"
-            "        print('{}')\n"
-            "        sys.exit(0)\n"
-            "    print('{}')\n"
-            "    sys.exit(0)\n"
-            "sys.exit(1)\n",
-        )
-        gh.chmod(0o755)
-        loginctl = write(bin_dir / "loginctl", "#!/bin/sh\nprintf '%s\\n' \"$LINGER_VALUE\"\n")
-        loginctl.chmod(0o755)
-        systemctl = write(
-            bin_dir / "systemctl",
-            "#!/bin/sh\ncase \"$*\" in *orchestrator-wake*) printf 'active\\n' ;; *) printf 'inactive\\n'; exit 1 ;; esac\n",
-        )
-        systemctl.chmod(0o755)
-        return env_with_path(
-            bin_dir,
-            DOCTOR_SCENARIO=str(scenario_path),
-            LINGER_VALUE=linger,
-            ORCH_MODEL_LADDER="provider/a provider/b",
-        )
-
-    @property
-    def _repo(self) -> Path:
-        if not hasattr(self, "_cached_repo"):
-            repo, _ = python_repo(self.tmp)
-            commit(repo)
-            self._cached_repo = repo
-        return self._cached_repo
-
-    def _doctor(self, scenario, linger="yes"):
-        state_dir = self.tmp / "state"
-        state_dir.mkdir(exist_ok=True)
-        result = script(
-            self._repo, "fleet.py", "doctor", "--json",
-            "--state-dir", str(state_dir), env=self._env(scenario, linger),
-        )
-        checks = {}
-        if result.stdout.strip():
-            data = json.loads(result.stdout)
-            checks = {item["name"]: item for item in data["checks"]}
-        return result, checks
-
-    GOOD = {"scopes": "'repo:status'", "protection": True, "permission": "WRITE"}
-
-    def test_all_good_fixture_exits_zero(self):
-        result, checks = self._doctor(self.GOOD)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(checks["linger"]["status"], "ok")
-        self.assertEqual(checks["token-scopes"]["status"], "ok")
-
-    def test_missing_linger_is_named_hard_failure(self):
-        result, checks = self._doctor(self.GOOD, linger="no")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(checks["linger"]["status"], "fail")
-
-    def test_overscoped_token_is_named_hard_failure(self):
-        scenario = dict(self.GOOD, scopes="'repo', 'read:org'")
-        result, checks = self._doctor(scenario)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(checks["token-scopes"]["status"], "fail")
-        self.assertIn("repo", checks["token-scopes"]["detail"])
 
 
 class FleetClaimPublishTests(RepoTestCase):
@@ -2408,6 +2550,8 @@ class DocumentationInvariantTests(unittest.TestCase):
             "references/04-workflow-and-roles.md",
             "references/05-unattended-operation.md",
             "references/07-moving-main.md",
+            "references/08-recursive-self-improvement.md",
+            "references/09-session-history-review.md",
             "references/gates-and-vocabulary.md",
             "references/stack-adapters.md",
             "references/examples.md",
@@ -2427,6 +2571,254 @@ class DocumentationInvariantTests(unittest.TestCase):
         ):
             self.assertTrue((SKILL_ROOT / relative).exists(), relative)
 
+
+class MutationMeasurementContractTests(unittest.TestCase):
+    """The measurement contract: the engine's blind shapes, the two flags that
+    silently change a number, and the oracle set the kill criterion names.
+
+    Red before this change: none of it was written down, so a round could
+    report a clean kill rate while a third of the real gaps sat untouched.
+    """
+
+    def setUp(self) -> None:
+        self.engine = _flat(
+            (SKILL_ROOT / "references" / "01-mutation-engine.md").read_text(encoding="utf-8")
+        )
+        self.protocol = _flat(
+            (SKILL_ROOT / "references" / "04-workflow-and-roles.md").read_text(
+                encoding="utf-8"
+            )
+        )
+
+    def test_the_blind_shapes_are_named(self) -> None:
+        for shape in (
+            "a plain field copy",
+            "a dropped argument",
+            "a swapped branch",
+            "a changed literal",
+            "a different separator",
+        ):
+            self.assertIn(shape, self.engine, shape)
+
+    def test_a_hand_curated_supplement_is_required(self) -> None:
+        self.assertIn("hand-curated supplement", self.engine)
+        self.assertIn("kill criterion", self.engine)
+
+    def test_the_timeout_flag_is_a_reporting_hazard(self) -> None:
+        self.assertIn("counted as a kill", self.engine)
+        self.assertIn("timeout-counts-as excluded", self.engine)
+
+    def test_the_sampling_flag_is_a_reporting_hazard(self) -> None:
+        self.assertIn("samples", self.engine)
+        self.assertIn("max-mutants", self.engine)
+
+    def test_the_protocol_names_every_oracle_file(self) -> None:
+        self.assertIn("every oracle file", self.protocol.lower())
+        # the phrase lives in a shell comment, so assert on the part after it
+        self.assertIn("a second oracle may already kill it", self.protocol)
+
+
+class LandingSeveralOwnPRsTests(unittest.TestCase):
+    """The recipe for landing several of the orchestrator's own PRs that touch
+    the same file.
+
+    Red before this change: the recipe existed nowhere, and the session it
+    came from produced a conflict resolution that did not even parse.
+    """
+
+    def setUp(self) -> None:
+        self.protocol = _flat_landing(
+            (SKILL_ROOT / "references" / "04-workflow-and-roles.md").read_text(
+                encoding="utf-8"
+            )
+        )
+
+    def test_the_rule_is_stated_in_its_general_form(self) -> None:
+        self.assertIn("preserve the file's structure", self.protocol.lower())
+        self.assertIn("in any repo", self.protocol.lower())
+
+    def test_the_rebuild_rule_is_stated(self) -> None:
+        self.assertIn("by rebuilding the file", self.protocol.lower())
+        self.assertIn("rather than to keep both", self.protocol.lower())
+
+    def test_the_trailing_construct_rule_is_stated(self) -> None:
+        self.assertIn("single trailing construct exactly once", self.protocol.lower())
+
+    def test_the_line_oriented_exception_is_stated(self) -> None:
+        self.assertIn("concatenation is", self.protocol.lower())
+
+    def test_the_verification_step_is_stated(self) -> None:
+        self.assertIn("verify the merged tree before pushing", self.protocol.lower())
+
+    def test_the_conflict_marker_check_is_stated(self) -> None:
+        self.assertIn("git grep", self.protocol)
+        self.assertIn("conflict markers", self.protocol.lower())
+
+
+class EnvironmentIndependenceTests(unittest.TestCase):
+    """The suite must give the same result on every host.
+
+    Red before this change: the installer test inherited ORCH_STATE_DIR from
+    the runner's environment, wrote into the real state directory on a fleet
+    host, and failed there while passing in CI.
+    """
+
+    def setUp(self) -> None:
+        self.streams = _flat_landing(
+            (SKILL_ROOT / "references" / "03-streams-and-triage.md").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.unattended = _flat_landing(
+            (SKILL_ROOT / "references" / "05-unattended-operation.md").read_text(
+                encoding="utf-8"
+            )
+        )
+
+    def test_the_stream_b_question_exists(self) -> None:
+        self.assertIn("depend on the machine's environment", self.streams.lower())
+
+    def test_the_controlled_environment_rule_is_stated(self) -> None:
+        self.assertIn("controlled environment", self.streams.lower())
+        self.assertIn("cleared explicitly", self.streams.lower())
+
+    def test_the_host_evidence_rule_is_stated(self) -> None:
+        self.assertIn("evidence about the host", self.streams.lower())
+
+    def test_the_fleet_suite_rule_is_stated(self) -> None:
+        self.assertIn("same result everywhere", self.unattended.lower())
+        self.assertIn("temporary tree", self.unattended.lower())
+
+
+class SkillImprovementCadenceTests(unittest.TestCase):
+    """The cadence: idle capacity improves the skill, from the fleet's own
+    session history — and the method that turns a session's history into a
+    proposal.
+
+    Red before this change: nothing in the skill said when to look at the
+    fleet's own history, what a proposal has to carry, or what the cadence
+    does not authorise. The one session that produced a long list of rule
+    misfires found them by hand, at the end — and missed three it had
+    already written down and addressed to the skill.
+    """
+
+    def setUp(self) -> None:
+        self.unattended = _flat_landing(
+            (SKILL_ROOT / "references" / "05-unattended-operation.md").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.protocol = _flat_landing(
+            (SKILL_ROOT / "references" / "04-workflow-and-roles.md").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.review = _flat_landing(
+            (SKILL_ROOT / "references" / "09-session-history-review.md").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.skill = _flat_landing((SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8"))
+
+    def test_the_cadence_is_stated(self) -> None:
+        self.assertIn("spare capacity improves the skill", self.unattended.lower())
+        self.assertIn("10% of the remaining time", self.unattended)
+        self.assertIn("at least once a week", self.unattended)
+
+    def test_the_cadence_is_bound_to_an_empty_queue(self) -> None:
+        self.assertIn("nothing meaningful left", self.unattended)
+        self.assertIn("spare capacity", self.unattended.lower())
+
+    def test_the_cadence_authorises_no_merge(self) -> None:
+        # the rule must not be readable as permission to land something
+        self.assertIn("does not authorise a merge", self.unattended.lower())
+        self.assertIn("never produces a merge", self.protocol.lower())
+
+    def test_the_cadence_excludes_the_referee(self) -> None:
+        for surface in ("five laws", "stream contract", "eval sets", "tier floors"):
+            self.assertIn(surface, self.unattended.lower(), surface)
+        self.assertIn("merge policy", self.unattended.lower())
+
+    def test_the_cadence_is_not_the_skill_rounds_on_itself(self) -> None:
+        self.assertIn(
+            "running this skill's rounds against this skill's own code",
+            self.review.lower(),
+        )
+        self.assertIn("not a second stream l", self.review.lower())
+
+    def test_the_evidence_surface_is_named(self) -> None:
+        for source in (
+            "journal",
+            "compaction-proof state file",
+            "nudge transcripts",
+            "watchdog log",
+            "snapshot accumulator",
+            "ledger",
+            "pr and issue timeline",
+        ):
+            self.assertIn(source, self.review.lower(), source)
+
+    def test_a_proposal_carries_evidence_scope_and_the_rule(self) -> None:
+        self.assertIn("evidence", self.review.lower())
+        self.assertIn("scope", self.review.lower())
+        self.assertIn("the rule it would have prevented", self.review.lower())
+
+    def test_the_already_covered_case_is_required(self) -> None:
+        # "the rule existed and was not followed" is a different finding from
+        # "no rule existed", and the review has to be able to say which.
+        self.assertIn("already covered?", self.review.lower())
+        self.assertIn("the rule existed and was not followed", self.review.lower())
+
+    def test_a_referee_change_is_an_issue_not_a_pr(self) -> None:
+        self.assertIn("never a pr the fleet can merge", self.review.lower())
+
+    def test_the_orchestrator_duty_is_in_the_protocol(self) -> None:
+        self.assertIn("spends idle capacity on the skill itself", self.protocol.lower())
+        self.assertIn("references/09-session-history-review.md", self.protocol)
+
+    def test_the_summary_reaches_the_cadence(self) -> None:
+        # SKILL.md is the injected summary: a duty that lives only in a
+        # reference file is a duty that never fires.
+        self.assertIn(
+            "idle capacity turns the fleet's own history into skill proposals",
+            self.skill.lower(),
+        )
+
+
+class FleetStateDurabilityTests(unittest.TestCase):
+    """The disk, the journal write, and where the state directory lives.
+
+    Red before this change: the fleet's journal carried a lesson addressed
+    to the skill — a worktree is ~400 MB, twenty of them fill a disk, and
+    cleanup is part of the round — and it never reached the skill. The same
+    session lost two journal appends that reported success, and the skill's
+    rule covered only failed *reads*.
+    """
+
+    def setUp(self) -> None:
+        self.unattended = _flat_landing(
+            (SKILL_ROOT / "references" / "05-unattended-operation.md").read_text(
+                encoding="utf-8"
+            )
+        )
+
+    def test_the_disk_is_part_of_the_machine_budget(self) -> None:
+        self.assertIn("the disk is part of the machine budget", self.unattended.lower())
+        self.assertIn("budget the worktrees", self.unattended.lower())
+
+    def test_the_cleanup_is_part_of_the_round(self) -> None:
+        self.assertIn("clean up as part of the round", self.unattended.lower())
+
+    def test_the_journal_write_is_atomic_and_verified(self) -> None:
+        self.assertIn("write the entry to a temp file", self.unattended.lower())
+        self.assertIn("read the tail back", self.unattended.lower())
+
+    def test_the_state_dir_is_outside_the_harness_tree(self) -> None:
+        self.assertIn("outside any tree the harness manages", self.unattended.lower())
+
+
+if __name__ == "__main__":
+    unittest.main()
 
 class StreamSimplifyTests(RepoTestCase):
     """Stream J (#25): finder candidates only; mutation-score oracle decides."""
@@ -2661,3 +3053,4 @@ class StreamSimplifyTests(RepoTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

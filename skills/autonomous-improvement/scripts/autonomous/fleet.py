@@ -4,7 +4,7 @@
 Deterministic state spine for autonomous-improvement runs:
   * snapshot: records main SHA, open PR statuses, and worktree dirty counts to disk (0 tokens);
   * pr-state: emits references/04 state line per PR with head-sha-vs-run-sha verification;
-  * govern: checks kill-switch, WIP PR caps, and acceptance rate floors before dispatch;
+  * govern: checks kill-switch and WIP PR caps before dispatch;
   * stats: computes acceptance rates, CI iterations, and renders weekly owner digest.
 
 Usage:
@@ -156,6 +156,54 @@ def fetch_gh_prs(
     return [item for item in data if isinstance(item, dict)], None
 
 
+def _rollup_item_sha(item: Dict[str, Any]) -> Optional[str]:
+    oid = item.get("oid") or item.get("commit_sha") or item.get("headSha")
+    if not oid and isinstance(item.get("commit"), dict):
+        oid = item["commit"].get("oid")
+    return str(oid) if oid else None
+
+
+def _rollup_sort_key(index: int, item: Dict[str, Any]) -> Tuple[str, int, int]:
+    """Order two runs of one context: newest first, and a verdict over a cancellation."""
+    stamp = str(
+        item.get("completedAt")
+        or item.get("startedAt")
+        or item.get("createdAt")
+        or item.get("updatedAt")
+        or ""
+    )
+    cancelled = str(item.get("conclusion") or "").upper() == "CANCELLED"
+    return (stamp, 0 if cancelled else 1, index)
+
+
+def latest_per_context(
+    rollup: List[Dict[str, Any]], head_sha: str
+) -> List[Dict[str, Any]]:
+    """Collapse re-runs to one entry per check context for the PR head.
+
+    ``gh`` keeps a superseded run in the rollup after a re-run, so judging every
+    entry lets a CANCELLED attempt override the verdict that replaced it (the
+    fleet called green PRs red on #376 and #398). Entries that name another
+    commit are dropped: they are another commit's verdict.
+    """
+    chosen: Dict[str, Tuple[Tuple[str, int, int], Dict[str, Any]]] = {}
+    anonymous: List[Dict[str, Any]] = []
+    for index, item in enumerate(rollup or []):
+        if not isinstance(item, dict):
+            continue
+        oid = _rollup_item_sha(item)
+        if oid and head_sha and oid != head_sha:
+            continue
+        context = str(item.get("name") or item.get("context") or "").strip()
+        if not context:
+            anonymous.append(item)
+            continue
+        key = _rollup_sort_key(index, item)
+        if context not in chosen or key > chosen[context][0]:
+            chosen[context] = (key, item)
+    return [entry[1] for entry in chosen.values()] + anonymous
+
+
 def evaluate_pr_checks(pr: Dict[str, Any]) -> Dict[str, Any]:
     """Evaluate checks and enforce: 'green for an older sha is another commit's verdict'."""
     head_sha = str(pr.get("headRefOid") or pr.get("head_sha") or "")
@@ -189,25 +237,28 @@ def evaluate_pr_checks(pr: Dict[str, Any]) -> Dict[str, Any]:
     checks = "none"
     red_kind = None
 
-    if rollup:
+    entries = latest_per_context(rollup, head_sha)
+    if entries:
         has_failure = False
         has_pending = False
         failing_checks: List[Dict[str, Any]] = []
 
-        for item in rollup:
-            if not isinstance(item, dict):
-                continue
+        for item in entries:
             status = str(item.get("status") or "").upper()
             conclusion = str(item.get("conclusion") or "").upper()
             state = str(item.get("state") or "").lower()
 
             if (
-                conclusion in ("FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED")
+                conclusion in ("FAILURE", "TIMED_OUT", "ACTION_REQUIRED")
                 or state in ("fail", "error", "failure")
             ):
                 has_failure = True
                 failing_checks.append(item)
-            elif status in ("IN_PROGRESS", "QUEUED", "PENDING") or state == "pending" or conclusion == "STALE":
+            elif (
+                status in ("IN_PROGRESS", "QUEUED", "PENDING")
+                or state == "pending"
+                or conclusion in ("STALE", "CANCELLED")
+            ):
                 has_pending = True
 
         if has_failure:
@@ -223,7 +274,7 @@ def evaluate_pr_checks(pr: Dict[str, Any]) -> Dict[str, Any]:
                 if "referee" in text or "protected" in text or "gate" in text:
                     red_kind = "referee"
                     break
-                if conc in ("TIMED_OUT", "CANCELLED") or "infra" in text or "runner" in text:
+                if conc == "TIMED_OUT" or "infra" in text or "runner" in text:
                     red_kind = "infra"
                     break
                 if any(k in text for k in ("test", "check", "lint", "analyze", "format", "unit")):
@@ -233,6 +284,9 @@ def evaluate_pr_checks(pr: Dict[str, Any]) -> Dict[str, Any]:
             checks = "pending"
         else:
             checks = "green"
+    elif rollup:
+        # Every run belongs to another commit: nothing judges this head yet.
+        checks = "pending"
 
     # Law: "green for an older sha is another commit's verdict"
     if checks_sha and head_sha and checks_sha != head_sha:
@@ -399,40 +453,6 @@ def cmd_snapshot(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-def _acceptance_window(
-    root: Path, require_gh: bool, days: int = 14
-) -> Tuple[Optional[float], int]:
-    """(Merged share, decided count) over the window; rate None if unknown.
-
-    A PR is *decided* in the window when it merged (``mergedAt``) or closed
-    unmerged (``closedAt`` without ``mergedAt``) inside it.
-    """
-    prs_data, gh_warn = fetch_gh_prs(root, state="all", limit=200, require_gh=require_gh)
-    if gh_warn:
-        eprint(f"[warn] {gh_warn}; acceptance floor skipped")
-        return None, 0
-    now = datetime.datetime.now(datetime.timezone.utc)
-    merged = closed = 0
-    for pr in prs_data:
-        stamp = pr.get("mergedAt") or pr.get("closedAt")
-        if not stamp:
-            continue
-        try:
-            decided_at = datetime.datetime.fromisoformat(
-                str(stamp).replace("Z", "+00:00")
-            )
-        except ValueError:
-            continue
-        if (now - decided_at).total_seconds() > days * 86400:
-            continue
-        if pr.get("mergedAt"):
-            merged += 1
-        else:
-            closed += 1
-    decided = merged + closed
-    return (merged / decided if decided else None), decided
-
-
 def cmd_govern(args: argparse.Namespace) -> int:
     root = main_repo_root()
     cfg = load_config(root, args.config)
@@ -440,7 +460,6 @@ def cmd_govern(args: argparse.Namespace) -> int:
 
     max_open_prs = int(fleet_cfg.get("max_open_prs", 5))
     max_new_prs_per_day = int(fleet_cfg.get("max_new_prs_per_day", 6))
-    min_acceptance_rate_14d = float(fleet_cfg.get("min_acceptance_rate_14d", 0.5))
     kill_switch_file = str(fleet_cfg.get("kill_switch_file") or ".autonomous/STOP")
 
     # 1. Kill-switch check
@@ -519,47 +538,16 @@ def cmd_govern(args: argparse.Namespace) -> int:
             eprint(f"[!] Governor: DISPATCH BLOCKED ({payload['reason']})")
         return EXIT_NEGATIVE
 
-    # 5. Acceptance floor: below-floor yield means tend/repair, not generate.
-    min_decided = int(fleet_cfg.get("acceptance_floor_min_decided", 5))
-    rate, decided = _acceptance_window(root, args.require_gh, days=14)
-    acceptance = {
-        "rate": rate,
-        "decided": decided,
-        "window_days": 14,
-        "floor": min_acceptance_rate_14d,
-    }
-    if rate is not None and decided >= min_decided and rate < min_acceptance_rate_14d:
-        payload = {
-            "dispatch": False,
-            "reason": (
-                f"acceptance below floor ({rate:.0%} over {decided} decided "
-                f"in 14d < {min_acceptance_rate_14d:.0%})"
-            ),
-            "open_prs": open_count,
-            "tend": tend,
-            "acceptance": acceptance,
-        }
-        if args.json:
-            print(json.dumps(payload, indent=2))
-        else:
-            eprint(f"[!] Governor: DISPATCH BLOCKED ({payload['reason']})")
-            if tend:
-                eprint(f"    Tend queue: {', '.join(f'PR #{n}' for n in tend)}")
-        return EXIT_NEGATIVE
-
     payload = {
         "dispatch": True,
         "reason": "within limits",
         "open_prs": open_count,
         "tend": tend,
-        "acceptance": acceptance,
     }
     if args.json:
         print(json.dumps(payload, indent=2))
     else:
         print(f"[+] Governor: DISPATCH ALLOWED (open PRs: {open_count}/{max_open_prs})")
-        if rate is not None:
-            print(f"    Acceptance (14d): {rate:.0%} over {decided} decided")
         if tend:
             print(f"    Tend queue: {', '.join(f'PR #{n}' for n in tend)}")
     return EXIT_OK

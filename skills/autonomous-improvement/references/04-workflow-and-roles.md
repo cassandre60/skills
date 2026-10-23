@@ -19,8 +19,14 @@ cd ../<repo>-<slug>
 # 3. Baseline: one targeted test, on the mapped test file.
 <test_cmd> <test_file>                  # must pass on the base
 
+# 3b. Name EVERY oracle file, not only the mapped one: grep the test tree for
+#     the class/function being mutated and put every file that asserts on it
+#     in the test command. A survivor under a single-file criterion is not yet
+#     a gap - a second oracle may already kill it.
+
 # 4. Find the gap. For Stream A, run the engine; for Stream B, read the file.
-python3 scripts/autonomous/mutation_engine.py --source <target> --test-cmd "<targeted test cmd>" \
+python3 scripts/autonomous/mutation_engine.py --source <target> --test-cmd "<every oracle file>" \
+  --timeout-counts-as excluded --max-mutants 100 \
   --output-json .autonomous-last-run.json
 python3 scripts/autonomous/mutants.py ingest --report .autonomous-last-run.json
 
@@ -57,7 +63,7 @@ step 7. Another agent may have claimed the same target since step 1.
 | Class | What the PR body must attach |
 |---|---|
 | bugfix | Failing test on `origin/main` (red) + passing on the branch (green), with the full base sha |
-| test-only (Stream A) | Named mutant; test red **with the mutant applied**, green on clean source; seed/scope if generated |
+| test-only (Stream A) | Named mutant; test red **with the mutant applied**, green on clean source; seed/scope if generated; **which oracle files the kill criterion named**, and the hand-curated supplement for the shapes the engine cannot reach |
 | test-only (Stream B) | The vacuous/flaky behavior, the stronger assertion, and a before/after run |
 | perf | Before/after numbers on a pinned harness, spread not just median, differential test vs the old implementation |
 | refactor | No test files edited; same behavior proven by existing tests; mutation score not lower in the touched area |
@@ -121,6 +127,21 @@ The Orchestrator:
 - **re-derives the queue from the codebase**: when the tracked targets are
   exhausted, the next candidates are the files with no ledger row yet. An
   exhausted list is a signal to look wider, not to idle;
+- **spends idle capacity on the skill itself**: when the queue has nothing
+  meaningful left and the machine has spare capacity, a slice of that
+  capacity — at least 10% of the time left, and at least once a week — goes
+  to reviewing the fleet's own session history for the rules that misfired.
+  The duty is in `05`; the method, and what a proposal has to carry, are in
+  `references/09-session-history-review.md`. It produces a proposal; it never
+  produces a merge;
+- **keeps the dispatch brief short and carries its pre-checks**: the brief
+  states the task, the evidence contract, the machine budget and that task's
+  traps, and it includes the ledger pre-check plus the instruction that
+  correcting a wrong premise is the expected outcome. A brief that restates
+  the reference text can exhaust a context window before the work starts
+  (verified 2026-10-22: three workers died with no output at all, every one
+  after a 150-line brief, while the pool was healthy and every short-brief
+  worker succeeded);
 - **owns every PR from creation to merge**: it reads that PR's checks on every
   wake, drives a red check that sits inside the diff back to green (re-dispatch
   the fix to the same worker session, or to a fresh worker on a live model),
@@ -173,6 +194,55 @@ sit red and the fleet looks busy while nothing converges.
 6. **Nothing red goes quiet.** If a PR has been red for two wakes without an
    owner answer, say so in the owner report — in plain terms, with what the
    red check is and what the owner is being asked to accept.
+9. **An instrument that reports false negatives must be fixed before its
+   output is trusted.** Two failures in one day had the same shape: the
+   *measurement* was wrong, not the code. A metrics query silently fell back
+   to a field set without `mergedAt` and reported "200 PRs opened, 0 merged,
+   0% acceptance" for a fleet that had merged twenty; and the shared test
+   scope measured every string about twice as wide as the app draws it, so
+   22 of 24 reported layout overflows were artefacts. Before you act on an
+   instrument's output, ask what it would report if the instrument were
+   wrong — and when it *is* wrong, fix it before drawing conclusions from
+   it. A green run of a broken instrument is worse than a red one, because
+   it is trusted.
+
+8b. **Landing several of your own branches that touch the same file.** The
+   general lesson, which applies in any repo and to any file kind:
+
+   > **When two branches append to the same file, the conflict resolution must
+   > preserve the file's structure — concatenating the two sides does not.**
+   > "Keep both" is a text operation. A file that ends in a single trailing
+   > construct — a `main` block, a closing marker, one top-level key, one
+   > trailing guard — ends up with two of them, and the result may not even
+   > load.
+
+   This generalises the ledger's own rule below, which already said to rebuild
+   rather than to keep both; the recipe below is the general case, and it is
+   git-level, so it holds whatever the repo is written in.
+
+   1. **Land in dependency order** — the branch whose change the others build
+      on first. A change that needs another's code cannot land before it.
+   2. **Re-sync by MERGING the base into the branch**, never by rebasing a
+      pushed branch (a rebase needs a force-push, which the git discipline
+      below forbids), and let the checks re-run on the new head.
+   3. **Resolve an append conflict by REBUILDING the file**: take the base's
+      file, add each branch's own blocks in order, and put the file's single
+      trailing construct exactly once, at the end. For a line-oriented file
+      with no trailing construct — a markdown table, a log — concatenation is
+      safe; for anything with structure, it is not.
+   4. **Verify the merged tree before pushing**: the file loads or validates,
+      the repo's own checks are green, and its tests pass. A conflict
+      resolution is a change like any other, and it needs the same evidence.
+   5. **Check the pushed tree for conflict markers** — `git grep -n -E
+      '^(<<<<<<<|>>>>>>>)'` — and never push a file that carries them.
+
+   (Worked example, 2026-10-22: six branches of one session each appended
+   tests to the same shared test file. Resolving the append conflicts by
+   concatenation interleaved the file's trailing `__main__` block between the
+   branches' code, and the result did not parse; one resolution was also
+   pushed with the conflict markers still in it. The recipe above is what
+   that session should have done.)
+
 8. **Batched ledger rows conflict with each other.** Every ledger row is
    inserted at the top of the same table, so two ledger branches collide on
    the same lines. When the orchestrator's ledger branch merges a base that
@@ -180,6 +250,14 @@ sit red and the fleet looks busy while nothing converges.
    the rows the branch contributes, and commit that — never commit conflict
    markers, and verify the pushed file contains none before moving on. A
    conflicted ledger pushed to a PR is worse than a missing row.
+
+7b. **Batch the fleet's own deliveries when another agent is merging too.**
+   Under strict protection every merge by anyone invalidates the other side's
+   green PR, and each invalidation costs a full CI cycle. When more than one
+   of the orchestrator's own PRs is ready, land them as **one** PR with one
+   commit per change: one CI cycle instead of N, and one protected-path
+   decision instead of N. (Verified 2026-10-22: three green PRs — two audit
+   rounds and a bugfix — landed as one, and the pattern held three times.)
 
 7. **Protected-file bookkeeping is batched, not bundled.** When a repo treats
    an audit ledger as a protected path, a worker's row for it blocks the PR on
@@ -191,10 +269,76 @@ sit red and the fleet looks busy while nothing converges.
    2026-10-20: five audit PRs were each blocked on the same kind of one-line
    append; batching them turned five owner decisions into one.)
 
+## The owner ask: plain terms, and a record
+
+A gate that needs a human is not a technical question, and an ask written in
+gate jargon does not get answered. When the orchestrator needs a label, a
+decision, or a change of policy, the ask states **three things in plain
+language**, with no gate vocabulary in them:
+
+1. **What changes** — what the owner will have, in terms of the product or the
+   repo, not in terms of a protected path.
+2. **What it costs** — the time, the risk, the review burden, whatever is
+   really being asked for.
+3. **What happens if the owner declines** — the default that applies instead,
+   so the answer can be "no" without leaving a hole.
+
+### Consent is per item, and it is recorded
+
+An owner may give a **standing consent for a class of edit** — "apply the label
+to protected-path PRs of this kind, and do the merges". That consent does not
+travel to the next PR: it covers the class it was given for, and every item
+still gets its own record.
+
+**The record goes on the PR**, in plain language, and carries four things:
+
+| Field | What it says |
+|---|---|
+| the **class** | what kind of edit is being authorised (for example: a bookkeeping row in the fleet's own audit registry) |
+| the **authority** | on whose instruction the label was applied, quoted or summarised |
+| the **date** | when |
+| the **withdrawal path** | how the owner revokes it — delete the label, close the PR |
+
+Without that record a label on a PR is indistinguishable from a label applied
+without asking, and a later reader cannot tell consent from assumption. With
+it, the owner can withdraw any single item without undoing the standing
+consent, and a later agent can see the basis.
+
+
+   **A batch has an order and a shape, and both are load-bearing.** Insert the
+   rows **newest first** (a later PR's row above an earlier PR's row for the
+   same target), keep the **Status cell to the bare token** (`COMPLETED`, not
+   `COMPLETED (second round: …)`) with the detail in the Summary cell, and
+   record the **blob as it lands in `main`** — for a round whose PR changed the
+   source, that is the post-change blob, not the one that was audited. Then run
+   the validator over the batched file before opening the PR:
+
+   ```sh
+   python3 scripts/autonomous/ledger.py validate
+   ```
+
+   It reports the rows the parser cannot see and the targets whose row no
+   longer matches HEAD, and exits non-zero when it finds any. A row the parser
+   skips is invisible to the dedup law, so the registry looks complete while
+   every file in it is re-audited. (Verified 2026-10-22 on a live fleet: 54 of
+   85 rows were invisible, and 34 of the 48 audited files would have been
+   re-audited. See `docs/autonomous-improvement-audit-2026-10-22.md`.)
+
 ## Git discipline
 
 - Stage by name, never `git add -A`.
 - Never `push --force` or `reset --hard` outside your own worktree.
+- **Re-sync a pushed branch by merging the base into it**, never by rebasing:
+  a rebase of a published branch needs a force-push, which the rule above
+  forbids. `git merge origin/main --no-edit`, push, wait for a fresh green on
+  the new head. (Under strict protection a green PR that does not contain the
+  base's tip cannot merge at all, and `--admin` does not bypass it — see
+  `07-moving-main.md`.)
+- **A branch created inside an existing worktree inherits that worktree's
+  commits.** Before opening a PR, `git diff origin/main...HEAD --stat` must
+  list only the files the task touched; if it lists a file the task never
+  touched, the branch carries someone else's commit — create it in a fresh
+  worktree instead.
 - Never delete a worktree you did not create. `orchestrator.py
   cleanup-worktree` only removes paths in its registry and refuses dirty or
   unpushed work without `--force`.

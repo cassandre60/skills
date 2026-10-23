@@ -108,6 +108,65 @@ scripts, or CI config and translate the project's own commands into
 `format_check_cmd`, `analyze_cmd`, `test_cmd`, and `gate_cmd` as argv arrays.
 Do not invent a command the project does not use.
 
+## The candidate globs and the source-to-test mapping
+
+Two config keys decide whether the tooling works at all. Both are
+repo-specific, and both fail **silently** when wrong.
+
+### `candidates.<stream>.include` — which files are work
+
+The globs are read from the config; there is no hardcoded target list. An
+**empty list means the fleet is not configured**, and the tool now says so:
+
+```
+$ python3 scripts/autonomous/ledger.py next --stream A
+[!] no candidates configured for stream A: set candidates.A.include in
+    scripts/autonomous/config.json (no config file at ...). An empty list
+    means 'not configured', not 'nothing to do'.
+```
+
+Exit code 2 (usage), not 0. Before this, the same situation printed
+*"No eligible targets remain for this stream at their current hashes"* — a
+confident, green, wrong answer that is indistinguishable from an exhausted
+queue, and the single most expensive thing a fleet can believe.
+
+A list that is non-empty but matches **no file** is reported separately
+(*"No candidate path matched … — the globs are wrong or too narrow"*), because
+that is a different mistake with a different fix.
+
+### `test_for_source` — how a source file maps to its test
+
+The mapping decides the **companion half** of the composite hash, and therefore
+whether a dedup verdict is right at all. The fallback heuristic keeps the
+source tree's prefixes, so in a repo laid out as
+
+```
+lib/src/view/x.dart   <->   test/view/x_test.dart
+```
+
+it resolves `lib/src/view/x.dart` to `test/src/view/x_test.dart` — a path that
+does not exist. The failure is silent: every companion hash is wrong, every
+audit looks stale, and every file is re-audited.
+
+Set the rule for **your** layout:
+
+| Layout | Rule |
+|---|---|
+| `lib/src/<rest>.dart` ↔ `test/<rest>_test.dart` | `^lib/src/(.*)\.dart$` → `test/\1_test.dart` |
+| `lib/<rest>.dart` ↔ `test/<rest>_test.dart` | `^lib/(.*)\.dart$` → `test/\1_test.dart` |
+| `src/<rest>.ts` ↔ `src/<rest>.test.ts` | `^src/(.*)\.ts$` → `src/\1.test.ts` |
+
+**Verify it once, before the first dispatch** — the command prints the mapped
+test for each candidate, so a rule that resolves to nothing is visible
+immediately:
+
+```sh
+python3 scripts/autonomous/ledger.py next --stream A --limit 3
+```
+
+A candidate whose *mapped test does not exist* is a wrong rule, not a missing
+test. `examples/config.dart.json` ships the first row of that table.
+
 ## Command rules
 
 - Every command is an **argv array**, never a shell string.

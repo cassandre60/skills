@@ -9,7 +9,8 @@ Spend tokens on work that can be **mechanically falsified**, not on renames,
 prose, or checkbox tests. Three streams are active:
 
 - **A — mutation testing:** find behavior the suite does not protect.
-- **B — adversarial test audit:** find tests that cannot fail, assert mocks, or sleep instead of synchronizing.
+- **B — adversarial test audit:** find tests that cannot fail, assert mocks,
+  sleep instead of synchronizing, or measure in a harness unlike production.
 - **J — simplification:** delete dead code only when tests stay green and the mutation score does not fall.
 
 Each round produces at most one small, evidence-backed PR. If there is no
@@ -39,10 +40,9 @@ diff back to green, re-asks the owner per item when a protected-path gate
 needs a label, and merges only on green **for the current head sha**. The
 loop is in "The CI green loop" in `04`.
 
-Audit-ledger bookkeeping is batched, not bundled: workers report the row
-text, and the Orchestrator lands the rows in one separate ledger PR per
-wave — so a protected-file gate costs one owner decision per wave, not one
-per PR.
+Audit-ledger bookkeeping is batched, not bundled: workers report the row text,
+and the Orchestrator lands the rows in one separate ledger PR per wave — so a
+protected-file gate costs one owner decision per wave, not one per PR.
 
 A dead pool never parks a task: the task is re-dispatched on a live model —
 the session's own, dispatched unpinned, first — and when the tracked targets
@@ -50,6 +50,7 @@ run out, the next candidates are the files with no ledger row yet.
 
 Tending the queue is work; generating into a full queue is the new parking:
 `scripts/autonomous/fleet.py govern` checks open-PR caps and kill-switches.
+Idle capacity turns the fleet's own history into skill proposals — never a merge (`05`).
 
 ## The five laws
 
@@ -75,7 +76,10 @@ cp <skill>/assets/AUTONOMOUS_WORK_LEDGER.template.md <repo>/docs/AUTONOMOUS_WORK
 
 Edit the `config.json` copy to name the repo's real test, format, analyze, and
 gate commands. Every command is an **argv array**; a missing key is
-skipped with `[skip] <step> not configured`. See `references/stack-adapters.md`
+skipped with `[skip] <step> not configured`. Set also the candidate globs and
+the source-to-test mapping — both repo-specific, and an empty candidate list
+now means *not configured* rather than an empty queue. Verify the mapping once
+with `ledger.py next --stream A --limit 3`. See `references/stack-adapters.md`
 for Python, Dart/Flutter, TypeScript/JavaScript, and Go examples.
 
 ## Quick start (one round)
@@ -115,7 +119,7 @@ recovers a stale backup after SIGKILL. Add these patterns to `.gitignore`; see
 
 ## Stream B — adversarial test audit
 
-Read a test file and ask:
+Read a test file and ask (harness questions: `references/03-streams-and-triage.md`):
 
 1. **Can it actually fail?** Does it assert real state, or only that a call did
    not throw? Would it pass if the implementation did the opposite?
@@ -140,9 +144,8 @@ The ledger is a git-tracked markdown table:
   via `fleet.py claim` (draft PR at minute 1); `sync-rejections` records closed PRs.
 - Cells are escaped (`\|`, `\\`); rows must stay append-only. Add the
   `merge=union` fragment from `assets/gitattributes.fragment.txt` so parallel
-  appends merge without conflicts.
-- The hash is the blob at HEAD. `record` warns if the target is dirty;
-  `--strict` makes that fatal.
+  appends merge without conflicts, and the Status cell must be the bare token.
+- The hash is the blob at HEAD; `record` warns if the target is dirty.
 
 ## Beyond testing (expansion streams C–L)
 
@@ -173,10 +176,10 @@ carry quota independent of the others — and must actually be free.
 | File | Read when |
 |---|---|
 | `references/01-mutation-engine.md` | Rule packs, statuses, seeds/shards, diff scoping, triage |
-| `references/02-ledger-and-dedup.md` | Schema, newest-wins, composite hash, escaping, merge driver, draft-PR claims |
+| `references/02-ledger-and-dedup.md` | Schema, newest-wins, composite hash, escaping, merge driver, the validator, draft-PR claims |
 | `references/03-streams-and-triage.md` | Deeper Stream A/B/J checklists and planned streams |
 | `references/04-workflow-and-roles.md` | The one canonical per-task protocol and evidence contract |
-| `references/05-unattended-operation.md` | Heartbeats, watchdog, quotas, fleet coordination (advanced) |
+| `references/05-unattended-operation.md` | Heartbeats, watchdog, quotas, fleet coordination, the improvement cadence (advanced) |
 | `references/07-moving-main.md` | Working on a repo that keeps merging; stale-base traps |
 | `references/gates-and-vocabulary.md` | Gate ids, optional vocabulary, and the "no gates yet" fallback |
 | `references/stack-adapters.md` | Concrete commands per stack |
@@ -190,10 +193,9 @@ carry quota independent of the others — and must actually be free.
   make a gate pass. `scripts/autonomous/test_weakening_check.py` is the local
   tripwire when the repo has no gate system.
 - Delete a gate that stops paying; do not accumulate ceremony.
-- If the repo has no gates, run the project's own CI commands locally on touched
-  files only and use the tripwire. Never block on a `gates.sh` that does not
-  exist.
+- If the repo has no gates, run the project's CI commands locally on touched files
+  only and use the tripwire. Never block on a `gates.sh` that does not exist.
 
 *Honest limit: gates verify conformance to the spec, not the truth of the spec.
-Mutation here does not replace AST-based tools (Stryker, PIT, mutmut,
-cargo-mutants); it is the zero-dependency fallback.*
+Mutation here does not replace AST-based tools (Stryker, PIT, mutmut, cargo-mutants);
+it is the zero-dependency fallback.*

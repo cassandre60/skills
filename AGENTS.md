@@ -214,6 +214,26 @@ training, or wanting a second opinion on an already-correct solution.
   2. Local: launch the application/service locally when visual or interactive validation is needed.
   3. Remote: delegate compute-heavy, resource-intensive, or full regression tests to GitHub Actions CI after pushing.
 
+## Cross-Repo Changes
+
+When work in the current repository exposes a defect, drift, or required
+change in another of the user's repositories — a shared tool, a vendored copy,
+a skill, a dependency — do not strand the finding in the current repo:
+
+- Open an issue in the affected repository directly, without waiting for a
+  separate request. Say what is wrong, the evidence, and the smallest scope
+  that fixes it.
+- If you are confident you can fix it there, open the PR as well: its own
+  branch, the same evidence bar as here (a test that fails before and passes
+  after), and the attribution footer below.
+- This is standing permission to file issues and open PRs across the user's
+  repositories. It is not permission to merge there, rewrite shared history,
+  or push to a branch you do not own; those still follow that repository's
+  rules and the user's explicit consent.
+- Keep the ownership straight: fix the repository that owns the code first,
+  then bring the change here with a sync or version bump. Do not patch a
+  vendored copy and leave its source wrong.
+
 ## HARD RULE: Never Melt The User's Machine
 **Never run a full/wide test suite, whole-workspace test run, or any
 multi-worker test command on the user's machine.** This is not a guideline

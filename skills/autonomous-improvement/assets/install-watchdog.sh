@@ -2,6 +2,7 @@
 # Install or uninstall the out-of-session orchestrator watchdog.
 #
 #   ./install-watchdog.sh            # install + enable + start the timer
+#   ./install-watchdog.sh --check    # compare the installed copy with the asset
 #   ./install-watchdog.sh --uninstall
 #
 # Idempotent. The state directory (ORCH_STATE_DIR, default
@@ -114,7 +115,35 @@ do_install() {
   echo "Logs: journalctl --user -u $SERVICE   (or ${ORCH_STATE_DIR:-$HOME/.local/share/orchestrator}/watchdog.log)"
 }
 
+# The installed script is a COPY, so a fix in assets/ is invisible to a running
+# fleet until it is reinstalled. Verified 2026-10-23: the fleet ran a copy one
+# day older than the asset (it still poisoned the heartbeat and had no outage
+# class), and the watchdog log looked like the old bug for seven hours after
+# the fix existed. Run this at every cold start and after every skill update.
+do_check() {
+  local rc=0 asset installed
+  for asset in watchdog.sh snapshot.sh; do
+    installed="$INSTALL_DIR/$asset"
+    if [ ! -f "$installed" ]; then
+      echo "[!] $installed is missing; run ./install-watchdog.sh"
+      rc=1
+    elif ! cmp -s "$ASSET_DIR/$asset" "$installed"; then
+      echo "[!] $installed differs from the skill asset — the installed watchdog is stale"
+      echo "    reinstall: ./install-watchdog.sh"
+      diff -u "$installed" "$ASSET_DIR/$asset" | head -20
+      rc=1
+    fi
+  done
+  if [ "$rc" -eq 0 ]; then
+    echo "[+] installed watchdog and snapshot match the skill assets"
+  fi
+  return "$rc"
+}
+
 case "${1:-}" in
+  --check)
+    do_check
+    ;;
   --uninstall)
     do_uninstall
     ;;
