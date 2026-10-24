@@ -1,59 +1,54 @@
 ---
 name: autonomous-improvement
-description: Run falsifiable, high-signal improvement cycles on a codebase instead of cosmetic churn — mutation testing to find tests that don't actually protect behavior, adversarial audits of existing tests (vacuous assertions, flaky sleeps, over-mocking), and oracle-guarded removal of proven dead code. Use when asked to "improve the repo", "audit the tests", "find weak or flaky tests", "improve test quality, not just coverage", "run mutation testing", "remove dead code safely", or when "tests pass but I don't trust them" — or when an agent has spare budget and needs work that can be proven real (fails without the fix, not already done at this file's content, cheap enough to run locally). Given as a session's only prompt, it turns that session into an orchestrator that dispatches worker subagents instead of building itself (references/04-workflow-and-roles.md). Do not use for feature work, unguarded refactors, or one-off bugfixes.
+description: A toolbox of falsifiable improvement passes for a codebase — docs reconciliation, spec-vs-code audit, mutation testing, adversarial test audits, flake hunting, defect repair, fuzzing, measured performance, security scans, and oracle-guarded simplification. The first cycle adapts to the repo (cheap foundation passes, then a ranked menu the owner picks from) instead of applying a prebuilt formula; mutation testing is one tool among many. Use when asked to "improve the repo", "audit the tests", "find weak or flaky tests", "reconcile docs with the code", "remove dead code safely", or when "tests pass but I don't trust them". Keep-alive fleet machinery is elective (vm/ci environments or an explicit owner ask). Do not use for feature work, unguarded refactors, or one-off bugfixes.
 ---
 
 # Autonomous Improvement
 
 Spend tokens on work that can be **mechanically falsified**, not on renames,
-prose, or checkbox tests. Eleven streams are active:
+prose, or checkbox tests. This skill is a **toolbox of passes**, not a
+pipeline: read the repo's state first, adapt the plan to what it shows, and
+never run a pass the repo does not need. Every pass produces at most one
+small, evidence-backed PR; no gap is a valid result.
 
-- **A — mutation testing:** behavior the suite does not protect.
-- **B — adversarial test audit:** tests that cannot fail, assert mocks, or sleep instead of syncing.
-- **C — property / fuzz:** recorded seeds, shrunk counterexamples retained (`fuzz_shrink.py`).
-- **E — defect repair:** issue intake, a repro that must be red on main (`repair.py`).
-- **F — flake & determinism:** CI-history finder plus an N-run oracle.
-- **G — performance:** bench delta **and** output equivalence, both mandatory (`perf_gate.py`).
-- **H+K — security & dependency:** stub-advisory audits, redacting secret scan, oracle-first bumps (`advisory.py`).
-- **I — docs & spec truth:** runnable examples, symbol/spec drift (`docs_truth.py`).
-- **J — simplification:** delete dead code only when tests stay green and the mutation score does not fall (`simplify_gate.py`).
-- **L — meta (gated):** own kill switch, replay-gated claims, L4 issue-only (`meta.py`).
+## The first cycle: foundations, then a menu
 
-Each round produces at most one small, evidence-backed PR; no gap is a valid result.
+On a fresh invocation, before reaching for any heavy tool:
 
-## Who runs the round
+1. **Reconcile docs with reality** (`docs_truth.py check`, stream I): the
+   README, specs, plans, and the code must agree, and every rule must name
+   one authoritative place. Wrong docs cause wrong work in every later pass.
+2. **Audit spec against code**: for every rule the repo claims, find the code
+   that enforces it and the test that would fail if it broke. Rules with no
+   code, no test, or a test that cannot fail are the first findings.
+3. **Derive a ranked menu** — ledger `next --rank risk`, open issues, red CI —
+   and **ask the owner what to improve**. The answer picks the tool; the menu
+   comes from evidence, not from a fixed order.
 
-An explicit task ask runs the per-task protocol directly (`04`). When this
-skill is a session's **only** instruction, that session is the Orchestrator
-instead: it dispatches and supervises worker subagents — at most 3 at a
-time — and merges their PRs on green CI, building nothing in its own turns.
-See "Roles" in `04`; the unattended stack is in `05`, whose primary shape
-is stateless — `fleet.py wake` (snapshot → needs-brain → one fresh run) —
-with the session-id/wake-grid boot kept as the long-lived-session fallback.
+## Modes: adapt, don't assume
 
-When a worker or the session itself dies with a quota error, the Orchestrator
-**rotates the model**, it does not retry the same one: enumerate the live
-models, re-dispatch on a different one, and record the dead model on the
-journal's dead-pool list; a resumed frozen session must wake on a live model
-too (the freeze record is in `05`). See "Model rotation" in `05`.
+- **Single session (default).** You run the per-task protocol (`04`) yourself.
+  This is the mode for personal machines and ordinary engagements.
+- **Fleet mode (opt-in).** Worker dispatch, beats, watchdogs, and unattended
+  wake loops are for an explicit owner ask or a `vm`/`ci` environment
+  (`session.environment` in config) — never a personal-laptop default. The
+  orchestrator duties live in "Roles" in `04`; the unattended stack is in
+  `05`, whose primary shape is stateless — `fleet.py wake` (snapshot →
+  needs-brain → one fresh run) — with the session-id/wake-grid boot kept as
+  the long-lived-session fallback.
 
-A PR is not done when it is created. The Orchestrator owns each PR to merge:
-it reads the checks on every wake, drives a red check that sits inside the
-diff back to green, re-asks the owner per item when a protected-path gate
-needs a label, and merges only on green **for the current head sha** — the
-authority to merge is config `fleet.merge_policy` ("The CI green loop", `04`).
-
-Audit-ledger bookkeeping follows config `fleet.ledger_mode` (`batched`):
-workers report the row text, and the Orchestrator lands the rows in one
-separate ledger PR per wave — one owner decision per wave, not one per PR.
-
-A dead pool never parks a task: the task is re-dispatched on a live model —
-the session's own, dispatched unpinned, first — and when the tracked targets
-run out, the next candidates are the files with no ledger row yet.
-
-Tending the queue is work; generating into a full queue is the new parking:
-`scripts/autonomous/fleet.py govern` checks open-PR caps, kill-switches, and the `fleet.py doctor` preflight (report, don't dispatch).
-Idle capacity turns the fleet's own history into skill proposals — never a merge (`05`).
+Fleet rules that bind once fleet mode is on: on a quota error **rotate the
+model**, never retry the same pool ("Model rotation", `05`); a PR is not done
+when created — merge only on green **for the current head sha**, with the
+authority set by config `fleet.merge_policy`; ledger rows follow config
+`fleet.ledger_mode` (`batched`: one owner decision per wave, not per PR); a
+dead pool never parks a task — the session's own model, dispatched unpinned,
+is tried first, and exhausted tracked targets give way to files with no
+ledger row. Tending the queue is work; generating into a full queue is the
+new parking: `scripts/autonomous/fleet.py govern` checks open-PR caps,
+kill-switches, and the `fleet.py doctor` preflight (report, don't dispatch).
+Idle capacity turns the fleet's own history into skill proposals — never a
+merge (`05`).
 
 ## The five laws
 
@@ -64,6 +59,33 @@ Idle capacity turns the fleet's own history into skill proposals — never a mer
 | **3. Worktree isolation** | Every task runs in an isolated worktree branched from the configured base (`origin/main` by default). Stage by name; never run destructive git commands outside your own worktree. |
 | **4. Machine budget** | One targeted test per mutant, one full-file run at the end of the task. Never run the whole suite locally — that is CI's job. One analyze/lint pass per task, on touched files, after the last edit. |
 | **5. Pool rotation** | A quota error changes the model; it is never retried on the model that just failed. The dead model is recorded, the next live model takes the task, and the wake that revives a frozen session names a live model. A gateway reporting "$0 balance" is a paid pool with no credit, not a free fallback. |
+
+## The toolbox
+
+One pass at a time, picked by evidence. Per-tool contracts (trigger, finder,
+oracle, evidence, output format): `references/10-toolbox.md`. Deep
+checklists: `references/03-streams-and-triage.md`. Passes marked *audit* are
+model reads with a fixed output format and a mandatory **refutation pass** —
+a second call tries to disprove each finding; only survivors count.
+
+| Tool (stream) | Reach for it when | Finder → oracle |
+|---|---|---|
+| docs-reconcile (I) | docs or plans may drift from code | `docs_truth.py check` → spec-trace diff |
+| spec-audit (I) | rules may lack enforcement or tests | `docs_truth.py --spec` → rule/proof table |
+| mutation testing (A) | the suite's kill rate is unknown | `mutation_engine.py` → red-with-mutant, green-clean |
+| adversarial audit (B) | tests may be vacuous, mock-bound, sleepy | `stream_b_scan.py` shortlist → harness checklist (`03`) |
+| defect repair (E) | an issue or red CI claims a bug | `repair.py intake / verify-red / verify-green` → repro red on main |
+| flake & determinism (F) | tests flake or inherit the host | `flakes.py finder / oracle` → N-run contract |
+| performance (G) | a hot path has numbers to beat | `perf_gate.py` → bench delta **and** output equivalence |
+| security & deps (H+K) | secrets, advisories, risky bumps | `advisory.py secrets / deps / bump` → scan diff, oracle-first bump |
+| simplification (J) | dead code is suspected | `simplify_gate.py finder / oracle` → green tests, non-falling mutation score |
+| fuzz (C) | a parser or consumer needs crashing | `fuzz_shrink.py run / replay` → shrunk counterexample |
+| lens pass (B-shaped) | one risk class needs one focused read | the lens menu (`10`) → refuted findings only |
+| meta (L, gated) | the fleet reviews its own rules | `meta.py replay / lessons` → replay-gated, issue-only |
+
+Two rules bind every tool: a finding counts only when it carries the **file,
+line, a concrete trigger, and a failing test**; and one call carries **one
+lens and one output format** — open-ended asks get generic advice.
 
 ## Install into a repo
 
@@ -81,55 +103,24 @@ now means *not configured* rather than an empty queue. Verify the mapping once
 with `ledger.py next --stream A --limit 3`. See `references/stack-adapters.md`
 for Python, Dart/Flutter, TypeScript/JavaScript, and Go examples.
 
-## Quick start (one round)
+## Quick start (a round)
 
-1. `python3 scripts/autonomous/ledger.py next --stream A` selects the next unaudited target (`--rank risk` for git-churn/issue-intake ordering — see `references/02-ledger-and-dedup.md`).
-2. `python3 scripts/autonomous/orchestrator.py create-worktree --slug <slug> --type test` isolates it.
-3. `python3 scripts/autonomous/mutation_engine.py --source <target> --test-cmd "<targeted cmd>"` finds survivors.
-4. For one triaged survivor, prove the new test is red with the mutant and green on clean source.
-5. Generate the evidence artifact (`evidence.py mutant|defect` — it runs red/green/pass-to-pass itself), commit, then run `python3 scripts/autonomous/orchestrator.py verify-gate --worktree .`.
-6. Push the branch and open the PR; then record the audit on that branch — or, if the ledger is a protected path, report the row text for the wave's batched ledger PR (see `04`).
+1. Pick the tool from the menu above (a first cycle runs the foundation
+   passes before anything heavier).
+2. `python3 scripts/autonomous/ledger.py next --stream <X>` selects the
+   target (`--rank risk` for churn/issue-intake ordering — see
+   `references/02-ledger-and-dedup.md`); `orchestrator.py create-worktree`
+   isolates it.
+3. Run the tool's finder, triage, prove red/green (Law 1), generate the
+   evidence artifact (`evidence.py mutant|defect` — it runs red, green, and
+   pass-to-pass itself), commit, then `orchestrator.py verify-gate --worktree .`
+4. Push, open the PR, record the audit on that branch — or, if the ledger is
+   a protected path, report the row text for the wave's batched ledger PR
+   (see `04`).
 
-Full commands, worktree cleanup, and the evidence contract: `references/04-workflow-and-roles.md`.
-
-## Stream A — mutation testing
-
-The engine is regex-based (`scripts/autonomous/mutation_rules/`): one mutant
-line at a time, one targeted test run per mutant, a timeout scaled off the
-measured baseline, clean-source confirm passes, and a persisted verdict
-cache — stryker reports normalize via `--backend stryker` (`auto` → regex).
-
-- `KILLED`: the suite noticed. No work.
-- `SURVIVED`: a candidate gap. **Triage first** — equivalent mutants, string or
-  comment noise, and regex false positives are real. Record it with `mutants.py
-  record`; open survivors keep the file in `next`.
-- `UNCOMPILABLE`: an anchored compiler-error pattern matched; excluded from the
-  kill rate. Never "fix" these with tests.
-- `TIMEOUT`: reported separately; counted as killed by default. Change with
-  `--timeout-counts-as`.
-
-A survivor becomes work only when you can state the behavior it breaks and write
-a test that is red with the mutant and green without it (it passes on
-`origin/main` by construction — that is expected: Law 1).
-
-Safety: the engine refuses a dirty source unless `--allow-dirty`, writes
-`<file>.mutbak` + `<file>.mutlock` (restores on SIGTERM/SIGINT/SIGHUP, recovers
-a stale backup after SIGKILL), and needs these patterns in `.gitignore`
-(`assets/gitignore.fragment.txt`). Shards need separate worktrees.
-
-## Stream B — adversarial test audit
-
-Read a test file and ask (harness questions: `references/03-streams-and-triage.md`):
-
-1. **Can it actually fail?** Does it assert real state, or only that a call did
-   not throw? Would it pass if the implementation did the opposite?
-2. **Does it assert behavior or the mock?** If the mock returns X and the test
-   asserts X, no domain logic ran.
-3. **Is it a timing bomb?** Fixed sleeps are flakes under load. Poll a condition
-   or use a virtual clock; never add a sleep to "stabilize" anything.
-
-Every finding needs evidence (a line, a counterexample, or a proposed
-assertion). Cosmetic edits are not Stream B work.
+Full commands, worktree cleanup, and the evidence contract:
+`references/04-workflow-and-roles.md`. Stream A specifics (statuses, safety,
+backends): `references/01-mutation-engine.md`.
 
 ## The ledger
 
@@ -147,28 +138,24 @@ The ledger is a git-tracked markdown table:
   appends merge without conflicts, and the Status cell must be the bare token.
 - The hash is the blob at HEAD; `record` warns if the target is dirty.
 
-## Beyond testing (planned stream D; L is gated)
+## Planned and gated
 
-Testing is the bootstrap, not the ceiling. Streams C–I and K generalize the
-five laws to fuzzing, defect repair, flakiness, performance, security, docs
-truth, simplification, and dependency evolution — each behind its shipped
-finder + oracle + eval fixture (reference 08). **L** (the fleet improving
-itself) is its own kill-switched, replay-gated stream with T2 caps; **D**
-(migration safety) is still planned. While a stream's tooling is absent,
-`ledger.py` rejects its letter: offer an unlocked stream (J is first-wave
-T1 — issue/proposal only), or file the finding as an evidence-backed issue.
+**D** (migration safety) is still planned; **L** (the fleet improving itself)
+is its own kill-switched, replay-gated stream with T2 caps. While a stream's
+tooling is absent, `ledger.py` rejects its letter: offer an unlocked stream
+(J is first-wave T1 — issue/proposal only), or file the finding as an
+evidence-backed issue. The stream contract and catalog are in reference 08.
 
-## Unattended operation (advanced)
+## Unattended operation (elective)
 
-Multi-day, owner-away fleets are a separate concern from the core loop. If you
-need them, read `references/05-unattended-operation.md` and treat the
-opencode/systemd material there as **harness-specific**: it does not transfer
-to Claude Code or another agent without adapting the resume command.
-
-The installed watchdog walks a **model ladder** (`ORCH_MODEL_LADDER`): on a
-quota/balance error it marks that model and retries the same tick on the next
-one, instead of waiting out the heartbeat threshold. Every ladder entry must
-carry quota independent of the others — and must actually be free.
+Nothing in this skill runs outside your session unless the owner asked for a
+fleet or config names a `vm`/`ci` environment. When that is the case,
+`references/05-unattended-operation.md` is the manual: heartbeats, the
+watchdog's model ladder (`ORCH_MODEL_LADDER` — on a quota/balance error it
+marks that model and retries the next in the same tick; every ladder entry
+must carry quota independent of the others, and must actually be free), fleet
+coordination, and the improvement cadence. Harness-specific commands live in
+the adapter material there, not in this file.
 
 ## References
 
@@ -180,6 +167,9 @@ carry quota independent of the others — and must actually be free.
 | `references/04-workflow-and-roles.md` | The one canonical per-task protocol and evidence contract |
 | `references/05-unattended-operation.md` | Heartbeats, watchdog, quotas, fleet coordination, the improvement cadence (advanced) |
 | `references/07-moving-main.md` | Working on a repo that keeps merging; stale-base traps |
+| `references/08-recursive-self-improvement.md` | The stream contract, autonomy tiers, and the stream catalog |
+| `references/09-session-history-review.md` | The method and evidence bar for skill-improvement proposals |
+| `references/10-toolbox.md` | Per-tool contracts and the lens menu |
 | `references/gates-and-vocabulary.md` | Gate ids, optional vocabulary, and the "no gates yet" fallback |
 | `references/stack-adapters.md` | Concrete commands per stack |
 | `references/examples.md` | One end-to-end Stream A example and a good/bad Stream B finding |
