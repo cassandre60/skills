@@ -4,6 +4,13 @@ This reference is for multi-day, owner-away fleets and for every session
 running as the Orchestrator (`04`) — its cold start lives here. A single
 session doing an explicit Stream A/B task does not need it.
 
+**This whole reference is elective.** Nothing here runs on its own unless the
+owner asked for a fleet, or config `session.environment` is `vm` or `ci`
+(`laptop` is the default and means: no beats, no watchdog, no timers —
+everything happens inside the session's own turns). `fleet.py doctor` names
+a live timer on a `laptop` profile as the `environment-profile` warning;
+uninstall the timers or set the profile deliberately instead of ignoring it.
+
 **Two shapes exist, and the order matters (issue #18):** the *stateless
 wake* (§Stateless wake) is the primary unattended shape — a fresh headless
 run per wake whose state is `state/*.json` + ledger + journal, with no
