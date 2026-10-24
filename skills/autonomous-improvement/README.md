@@ -47,6 +47,7 @@ assets/               ledger template, gitattributes/protected-path fragments,
 examples/             ready-to-copy Dart and Python configs
 tests/                stdlib unittest suite (no network or toolchains)
 evals/                behavioral eval cases for an agent using the skill
+docs/history/         design records kept as history (not skill instructions)
 ```
 
 ## Verify
