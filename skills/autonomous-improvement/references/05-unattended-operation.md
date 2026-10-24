@@ -634,6 +634,29 @@ repeats that all day. After an exhausted tick the watchdog backs off for
 already carries the news. Verified 2026-10-22: six stale nudges queued in a
 session that could not answer one.
 
+**Tier two of the flood: the nudge that "succeeds".** A nudge whose model call
+returns exit 0 but whose tick leaves the heartbeat unmoved woke nothing — the
+harness queued the prompt into the conversation and no turn ran. Repeating it
+is a quota bonfire: verified 2026-10-23/24, 84 such nudges over one night,
+each delivered, none answered, one free pool burned to its limit. The
+watchdog therefore counts *unblessed* nudges (heartbeat older than the last
+nudge): the first two back off under the exhaustion timer and the second
+writes the alert; the third pauses nudging until the heartbeat moves, which
+is the only proof the session can run turns again. This is why the watchdog
+must **never touch the session's heartbeat itself**: a pre-attempt freshness
+marker fakes exactly the state the counter is trying to detect, and blinding
+it turns the counter off for a whole `ORCH_HB_MAX_AGE` window per nudge.
+
+**A quota failure of the session's own model parks a real model.** The
+session default has no name to park (verified 2026-10-23/24: an unnamed
+default was retried three times per tick because `""` could not enter the
+cooldown list), and glm's free pool phrased it as "Free usage limit reached.
+Subscribe to OpenCode Go", which matched none of the earlier quota terms. The
+quota family now carries `usage limit` and `subscribe to opencode`; under the
+error-line anchored signature this stays safe (the terms count only on an
+ERROR-shaped line), and a failed default attempt parks the model the session
+actually runs, read via the session API.
+
 **The ladder is owner-scoped.** `ORCH_AUTHORIZED_PROVIDERS` (default
 `opencode`) is the owner's approved pool; a ladder entry from any other
 provider is refused and logged, never tried. The same rule governs ad-hoc
