@@ -2882,6 +2882,24 @@ class DocumentationInvariantTests(unittest.TestCase):
         lines = (SKILL_ROOT / "SKILL.md").read_text().splitlines()
         self.assertLessEqual(len(lines), 200, f"SKILL.md has {len(lines)} lines")
 
+    def test_skill_routes_a_toolbox_not_a_formula(self):
+        text = (SKILL_ROOT / "SKILL.md").read_text()
+        flat = _flat(text)
+        # The invocation bug this skill had: opening the file made the agent
+        # jump straight into mutation testing. The router must present the
+        # toolbox, adapt the plan, and ask the owner instead.
+        self.assertNotIn("Two streams are active", flat)
+        self.assertIn("toolbox of passes", flat)
+        self.assertIn("ask the owner what to improve", flat)
+        self.assertIn("Single session (default)", flat)
+        self.assertIn("Fleet mode (opt-in)", flat)
+        # Every tool row in the table must name its module or its lens home.
+        for module in ("docs_truth.py", "mutation_engine.py", "stream_b_scan.py",
+                       "repair.py", "flakes.py", "perf_gate.py", "advisory.py",
+                       "simplify_gate.py", "fuzz_shrink.py", "meta.py"):
+            self.assertIn(module, text, module)
+        self.assertIn("references/10-toolbox.md", text)
+
     def test_no_removed_terms(self):
         files = [SKILL_ROOT / "SKILL.md", SKILL_ROOT / "README.md"]
         files += sorted((SKILL_ROOT / "references").glob("*.md"))
@@ -2910,6 +2928,7 @@ class DocumentationInvariantTests(unittest.TestCase):
             "references/07-moving-main.md",
             "references/08-recursive-self-improvement.md",
             "references/09-session-history-review.md",
+            "references/10-toolbox.md",
             "references/gates-and-vocabulary.md",
             "references/stack-adapters.md",
             "references/examples.md",
