@@ -40,12 +40,12 @@ too (the freeze record is in `05`). See "Model rotation" in `05`.
 A PR is not done when it is created. The Orchestrator owns each PR to merge:
 it reads the checks on every wake, drives a red check that sits inside the
 diff back to green, re-asks the owner per item when a protected-path gate
-needs a label, and merges only on green **for the current head sha**. The
-loop is in "The CI green loop" in `04`.
+needs a label, and merges only on green **for the current head sha** — the
+authority to merge is config `fleet.merge_policy` ("The CI green loop", `04`).
 
-Audit-ledger bookkeeping is batched, not bundled: workers report the row text,
-and the Orchestrator lands the rows in one separate ledger PR per wave — so a
-protected-file gate costs one owner decision per wave, not one per PR.
+Audit-ledger bookkeeping follows config `fleet.ledger_mode` (`batched`):
+workers report the row text, and the Orchestrator lands the rows in one
+separate ledger PR per wave — one owner decision per wave, not one per PR.
 
 A dead pool never parks a task: the task is re-dispatched on a live model —
 the session's own, dispatched unpinned, first — and when the tracked targets

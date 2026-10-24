@@ -2712,6 +2712,115 @@ class FleetClaimPublishTests(RepoTestCase):
         self.assertNotEqual(refused.returncode, 0)
         self.assertTrue(self._state(state)["prs"][0]["draft"])
 
+    def test_claim_cleans_up_worktree_when_push_fails(self):
+        repo, origin = python_repo(self.tmp, name="claim-push-fail", with_origin=True)
+        commit(repo)
+        push(repo)
+        hook = origin / "hooks" / "pre-receive"
+        write(hook, "#!/bin/sh\nexit 1\n")
+        hook.chmod(0o755)
+        state = self.tmp / "gh-state.json"
+        env = self._gh_stub(state)
+        result = script(
+            repo, "fleet.py", "claim", "--target", "src/app.py",
+            "--stream", "A", "--json", env=env,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        calls = self._state(state)["calls"]
+        self.assertEqual([c for c in calls if c[:2] == ["pr", "create"]], [])
+        self.assertFalse((self.tmp / "claim-push-fail-a-app").exists())
+        registry = repo / ".git" / "autonomous-worktrees.json"
+        if registry.exists():
+            self.assertNotIn("a-app", registry.read_text())
+        self.assertEqual(git(repo, "branch", "--list", "*a-app*").stdout.strip(), "")
+
+    def test_publish_issue_mode_links_claim_pr(self):
+        repo = self._repo()
+        state = self.tmp / "gh-state.json"
+        env = self._gh_stub(state)
+        seeded = self._state(state)
+        seeded["prs"].append({
+            "number": 7, "title": "WIP: A (Mutation) claim src/app.py",
+            "headRefName": "test/a-app", "files": [], "state": "OPEN",
+            "draft": True,
+            "body": "## Claim (WIP)\n\nTarget: `src/app.py` · Stream: A (Mutation) · "
+                    "Composite: `abc:def`\n",
+        })
+        state.write_text(json.dumps(seeded))
+        report = repo / "engine.json"
+        report.write_text(json.dumps({
+            "source": "src/app.py",
+            "survived": [{
+                "file": "src/app.py", "line": 2, "column": 11,
+                "original": "    return a == b", "mutated": "    return a != b",
+                "description": "equality flip",
+            }],
+        }))
+        result = script(
+            repo, "fleet.py", "publish", "--issues-from", str(report), "--json", env=env,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        current = self._state(state)
+        self.assertEqual(len(current["issues"]), 1)
+        self.assertIn("#7", current["issues"][0]["body"])
+        outcomes = json.loads(result.stdout.strip().splitlines()[-1])
+        self.assertEqual(outcomes[0].get("linked_pr"), 7)
+
+    def test_publish_pr_mode_references_survivor_issue(self):
+        repo = self._repo()
+        state = self.tmp / "gh-state.json"
+        env = self._gh_stub(state)
+        seeded = self._state(state)
+        seeded["prs"].append({
+            "number": 7, "title": "WIP", "headRefName": "test/a-app",
+            "files": [], "state": "OPEN", "draft": True, "body": "stub",
+        })
+        state.write_text(json.dumps(seeded))
+        report = repo / "engine.json"
+        report.write_text(json.dumps({
+            "source": "src/app.py",
+            "survived": [{
+                "file": "src/app.py", "line": 2, "column": 11,
+                "original": "    return a == b", "mutated": "    return a != b",
+                "description": "equality flip",
+            }],
+        }))
+        filed = script(repo, "fleet.py", "publish", "--issues-from", str(report),
+                       "--json", env=env)
+        self.assertEqual(filed.returncode, 0, filed.stdout + filed.stderr)
+        issue_number = self._state(state)["issues"][0]["number"]
+
+        import hashlib
+
+        artifact = {
+            "schema": 1, "kind": "mutant", "verdict": "killed",
+            "base_ref": "origin/main",
+            "base_sha": git(repo, "rev-parse", "HEAD").stdout.strip(),
+            "test_cmd": "pytest -q", "pass_to_pass_cmd": "pytest -q",
+            "mutant": {
+                "file": "src/app.py", "line": 2,
+                "original": "    return a == b", "mutated": "    return a != b",
+                "description": "equality flip",
+                "source_sha256": hashlib.sha256(
+                    (repo / "src" / "app.py").read_bytes()
+                ).hexdigest(),
+            },
+            "runs": {
+                "red": {"exit": 1, "summary": "1 failed"},
+                "green": {"exit": 0, "summary": "1 passed"},
+                "pass_to_pass": {"exit": 0, "summary": "1 passed"},
+            },
+        }
+        write(repo / ".autonomous" / "evidence.json", json.dumps(artifact))
+        result = script(
+            repo, "fleet.py", "publish", "--pr", "7",
+            "--title", "test: kill equality mutant in app.py", env=env,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        pr = self._state(state)["prs"][0]
+        self.assertFalse(pr["draft"])
+        self.assertIn(f"#{issue_number}", pr["body"])
+
 
 class StreamBScanTests(RepoTestCase):
     """Issue #17: Stream B gets a 0-token shortlist, not a full file read."""
