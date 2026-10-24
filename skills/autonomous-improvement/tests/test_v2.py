@@ -2946,8 +2946,70 @@ class DocumentationInvariantTests(unittest.TestCase):
             "assets/gitattributes.fragment.txt",
             "assets/gitignore.fragment.txt",
             "scripts/autonomous/fleet.py",
+            "SPEC.md",
         ):
             self.assertTrue((SKILL_ROOT / relative).exists(), relative)
+
+    def test_skill_references_its_spec(self):
+        text = (SKILL_ROOT / "SKILL.md").read_text()
+        self.assertIn("`SPEC.md`", text)
+
+
+class SpecContractTests(unittest.TestCase):
+    """SPEC.md is the authoritative rule -> enforcement -> proof map.
+
+    Every row must name at least one enforcement point (a real file) and at
+    least one proof (a named test that would fail if the rule broke). A rule
+    with no enforcement or no failing test is exactly the failure mode the
+    spec-audit pass exists to catch — the skill's own spec must not have it.
+    """
+
+    def test_spec_rows_name_real_enforcement_and_proofs(self):
+        import re
+
+        text = (SKILL_ROOT / "SPEC.md").read_text()
+        rows = []
+        for line in text.splitlines():
+            if not line.startswith("| `R-"):
+                continue
+            cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+            if len(cells) >= 3:
+                rows.append((cells[0], cells[1], cells[2]))
+        self.assertGreaterEqual(len(rows), 10, "SPEC.md lost its rule rows")
+        repo_root = SKILL_ROOT.parents[1]
+        tests_blob = "\n".join(
+            p.read_text() for p in sorted((SKILL_ROOT / "tests").glob("test_*.py"))
+        )
+        for rule, enforcement, proof in rows:
+            # A cell names a surface either in backticks (skill-relative) or
+            # as plain text (repo-level paths — check_skills.py resolves
+            # backticked paths against the skill, so repo paths stay plain).
+            def tokens(cell: str) -> list:
+                found = re.findall(r"`([^`]+)`", cell)
+                found += re.findall(r"(?<![\w./`])((?:scripts|\.github)/[\w./-]+)", cell)
+                return found
+
+            enforcement_tokens = tokens(enforcement)
+            proof_tokens = tokens(proof)
+            self.assertTrue(
+                enforcement_tokens, f"{rule}: no enforcement point named"
+            )
+            for token in enforcement_tokens:
+                self.assertTrue(
+                    (SKILL_ROOT / token).exists() or (repo_root / token).exists(),
+                    f"{rule}: enforcement target does not exist: {token}",
+                )
+            self.assertTrue(proof_tokens, f"{rule}: no proof named")
+            for token in proof_tokens:
+                if "/" in token or token.endswith(
+                    (".py", ".sh", ".yml", ".json", ".md", ".txt")
+                ):
+                    self.assertTrue(
+                        (SKILL_ROOT / token).exists() or (repo_root / token).exists(),
+                        f"{rule}: proof file does not exist: {token}",
+                    )
+                else:
+                    self.assertIn(token, tests_blob, f"{rule}: proof test not found: {token}")
 
 
 class MutationMeasurementContractTests(unittest.TestCase):
