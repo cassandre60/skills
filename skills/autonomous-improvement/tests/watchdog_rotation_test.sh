@@ -477,6 +477,66 @@ else
   ok "no switch was issued"
 fi
 
+# --- case 12: a non-opencode harness drives the whole tick via overrides --
+# The watchdog is harness-neutral: every opencode touchpoint is an env
+# override (ORCH_RESUME_CMD, ORCH_SESSION_ID_FILE, ORCH_SESSION_GET_CMD,
+# ORCH_SESSION_SET_CMD). This case runs a full rotation with NO `opencode`
+# binary on PATH: a foreign fake harness carries the nudge, answers the
+# model read, and receives the switch. references/harness-adapters.md is
+# the contract this case proves.
+mkdir -p "$TMP/bin2"
+cat >"$TMP/bin2/myagent" <<EOF
+#!/bin/bash
+case "\$1" in
+  run)
+    msg="\$*"
+    case "\$msg" in
+      *alpha-free*) echo "Error: Rate limit exceeded. Please try again later." ; exit 1 ;;
+      *) echo "wake: housekeeping done" ;;
+    esac ;;
+  get-model)
+    echo "{\\"model\\":{\\"id\\":\\"old-default\\",\\"providerID\\":\\"myprov\\"}}" ;;
+  set-model)
+    printf '%s\n' "\$*" >>"\$ORCH_STATE_DIR/switch_calls" ;;
+esac
+EOF
+chmod +x "$TMP/bin2/myagent"
+rm -f "$TMP/state/watchdog.log" "$TMP/state/model_failures" "$TMP/state/last_nudge" \
+      "$TMP/state/switch_calls" "$TMP/state/exhausted_at" "$TMP/state/ALERT.md"
+printf 'ses_TEST\n' >"$TMP/state/agent_session"
+rm -f "$TMP/state/opencode_session_id"
+touch -d '3 hours ago' "$TMP/state/last_beat"
+PATH="$TMP/bin2:$PATH" ORCH_STATE_DIR="$TMP/state" \
+  ORCH_MODEL_LADDER="myprov/alpha-free myprov/beta-free" \
+  ORCH_AUTHORIZED_PROVIDERS=myprov \
+  ORCH_RESUME_CMD='myagent run -s "$1" ${3:+-m "$3"} "$2"' \
+  ORCH_SESSION_ID_FILE=agent_session \
+  ORCH_SESSION_GET_CMD='myagent get-model "$1"' \
+  ORCH_SESSION_SET_CMD='myagent set-model "$1" "$2"' \
+  ORCH_NUDGE_TIMEOUT=20 ORCH_MIN_INTERVAL=0 ORCH_HB_MAX_AGE=60 \
+  bash "$ASSETS" >/dev/null 2>&1
+if grep -q "nudge attempt 2 on model 'myprov/beta-free'" "$TMP/state/watchdog.log" &&
+  grep -q 'wake: housekeeping done' "$TMP/state/watchdog.log"; then
+  ok "the foreign harness carried the nudge through the overridden resume command"
+else
+  fail "the overridden resume command was not used (no foreign-agent attempt in log)"
+fi
+if grep -q '^myprov/alpha-free ' "$TMP/state/model_failures" 2>/dev/null; then
+  ok "rotation semantics (cooldown on the dead model) hold for the foreign harness"
+else
+  fail "the dead foreign model was not parked in model_failures"
+fi
+if grep -q 'set-model ses_TEST myprov/beta-free' "$TMP/state/switch_calls" 2>/dev/null; then
+  ok "the switch went through the overridden ORCH_SESSION_SET_CMD"
+else
+  fail "the session-model switch did not use the overridden set command"
+fi
+if grep -q 'opencode' "$TMP/state/switch_calls" 2>/dev/null; then
+  fail "the default opencode endpoint was called despite the override"
+else
+  ok "the default opencode endpoint was not touched"
+fi
+
 if [ "$FAILED" -eq 0 ]; then
   echo "PASS: watchdog model rotation"
   exit 0

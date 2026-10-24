@@ -61,9 +61,13 @@
 # bare non-error line is not detected (accepted risk; the retry ladder and
 # the stale-heartbeat path cover it) — see references/05.
 #
-# Harness-specific: the default resume command is for opencode. Read your
-# harness docs for its headless resume-session flags; do not copy these flags
-# to a different harness.
+# Harness-specific: the default resume/session commands are for opencode. Read
+# your harness docs for its headless resume-session flags; do not copy these
+# flags to a different harness. Every harness touchpoint is an env override —
+# ORCH_RESUME_CMD, ORCH_SESSION_ID_FILE, ORCH_SESSION_GET_CMD,
+# ORCH_SESSION_SET_CMD (the latter two run via `bash -c <cmd> _ <sid> [model]`)
+# — so adapting harnesses means setting variables, not editing this file.
+# See references/harness-adapters.md for the per-harness table.
 #
 # Security note: ORCH_RESUME_CMD is passed to bash -c with SID and NUDGE_MSG
 # as positional arguments ($1, $2). Never source ORCH_RESUME_CMD or the
@@ -74,13 +78,20 @@ set -u
 STATE_DIR="${ORCH_STATE_DIR:-$HOME/.local/share/orchestrator}"
 LOG="$STATE_DIR/watchdog.log"
 HB="$STATE_DIR/last_beat"
-SID_FILE="$STATE_DIR/opencode_session_id"
+SESSION_ID_FILE="${ORCH_SESSION_ID_FILE:-opencode_session_id}"
+SID_FILE="$STATE_DIR/$SESSION_ID_FILE"
 FAIL_FILE="$STATE_DIR/model_failures"
 MAX_AGE="${ORCH_HB_MAX_AGE:-2700}"
 NUDGE_TIMEOUT="${ORCH_NUDGE_TIMEOUT:-1800}"
 NUDGE_MSG="${ORCH_NUDGE_MSG:-watchdog nudge: run orchestrator housekeeping per journal protocol, re-arm beats, yield promptly.}"
 RESUME_CMD_DEFAULT='opencode run --auto -s "$1" ${3:+-m "$3"} "$2"'
 RESUME_CMD="${ORCH_RESUME_CMD:-$RESUME_CMD_DEFAULT}"
+# Session-model read/write, same positional contract as the resume command:
+# `bash -c "$SESSION_GET_CMD" _ "$SID"` and `bash -c "$SESSION_SET_CMD" _ "$SID" "$model"`.
+SESSION_GET_CMD_DEFAULT='opencode api get "/api/session/$1"'
+SESSION_GET_CMD="${ORCH_SESSION_GET_CMD:-$SESSION_GET_CMD_DEFAULT}"
+SESSION_SET_CMD_DEFAULT='opencode api post "/api/session/$1/model" -d "{\"model\":{\"id\":\"${2#*/}\",\"providerID\":\"${2%%/*}\"}}"'
+SESSION_SET_CMD="${ORCH_SESSION_SET_CMD:-$SESSION_SET_CMD_DEFAULT}"
 LADDER="${ORCH_MODEL_LADDER:-}"
 COOLDOWN="${ORCH_MODEL_COOLDOWN:-3600}"
 MAX_MODELS="${ORCH_NUDGE_MODELS:-3}"
@@ -189,13 +200,13 @@ authorized_model() { # $1: model id -> 0 when its provider is owner-authorised
 
 current_session_model() {
   command -v jq >/dev/null 2>&1 || return 0
-  opencode api get "/api/session/$SID" 2>/dev/null \
+  bash -c "$SESSION_GET_CMD" _ "$SID" 2>/dev/null \
     | jq -r '.. | objects | select(has("model")) | .model | select(.id != null) | "\(.providerID)/\(.id)"' 2>/dev/null \
     | head -1
 }
 
 switch_session_model() { # $1: model id that just carried a nudge
-  local provider id current
+  local current
   [ -n "${1:-}" ] || return 0
   [ "$SWITCH_MODEL" = "1" ] || return 0
   # Never override a session that is already on a live ladder model: the
@@ -215,12 +226,9 @@ switch_session_model() { # $1: model id that just carried a nudge
       fi
       ;;
   esac
-  provider="${1%%/*}"
-  id="${1#*/}"
-  # 204 No Content on success; the endpoint is documented as
-  # "Switch the model used by subsequent provider turns".
-  if opencode api post "/api/session/$SID/model" \
-      -d "{\"model\":{\"id\":\"$id\",\"providerID\":\"$provider\"}}" >/dev/null 2>&1; then
+  # The set command owns its own JSON; the default (opencode) expects
+  # 204 No Content on success and builds the model object from $2.
+  if bash -c "$SESSION_SET_CMD" _ "$SID" "$1" >/dev/null 2>&1; then
     echo "$(date -Is) session model switched from '$current' to '$1': the current model is not a live ladder model, so the next interactive turn runs on the live pool too" >>"$LOG"
     printf '%s\n' "$1" >"$STATE_DIR/last_good_model"
   else
@@ -246,8 +254,9 @@ alert_exhausted() { # no live model could revive the session this tick
     echo '1. Probe live models **in a throwaway session**, never with the live session id:'
     echo '   `cd /tmp && opencode run -m provider/model "reply OK"` — and only provider models the owner authorises.'
     echo '2. Put the live ones into `ORCH_MODEL_LADDER` in `watchdog.env`, then `systemctl --user restart <watchdog unit>`.'
-    echo '3. If the session default itself is dead, switch it:'
-    echo "   \`opencode api post /api/session/$SID/model -d '{\"model\":{\"id\":\"<id>\",\"providerID\":\"<provider>\"}}'\`"
+    echo '3. If the session default itself is dead, switch it with this harness'"'"'s set command'
+    echo '   (ORCH_SESSION_SET_CMD; the default below is the opencode endpoint):'
+    echo "   \`bash -c \"$SESSION_SET_CMD\" _ \"$SID\" \"<provider>/<id>\"\`"
     echo
     echo "Last attempt output (tail of nudge.out):"
     echo '```'

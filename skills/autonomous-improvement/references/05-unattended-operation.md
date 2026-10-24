@@ -41,25 +41,22 @@ tokens even with live pools. The timer keeps running; the model does not.
 
 ### Harness adapter table
 
-Rows marked **verified** were exercised here; rows marked *unverified* are
-written from the harness' documented surface and must be re-checked against
-your installed version before you trust them (house style: an unverified
-row is a lead, not a fact).
-
-| Harness | One-shot headless run | JSON/usage | Model pin | Resume (optional) |
-|---|---|---|---|---|
-| **opencode** (verified) | `opencode run --auto "<prompt>"` | `--format json`; no turn/budget cap flag exists in `run --help` — keep wake prompts scoped instead of relying on a cap | `-m provider/model#variant` | `-s <session-id>` (or `--continue`); *not required* by this shape |
-| **Claude Code** (*unverified*) | `claude -p "<prompt>"` | `--output-format json`; `--max-turns N`, `--max-budget-usd X` (verify names on your version) | per-harness model flag/env | `--resume <id>` |
-| **Codex** (*unverified*) | `codex exec "<prompt>"` | `--json` (verify schema) | per-harness flag | resume flag if the version has one |
-
-Worker dispatch differs by harness and is stated rather than assumed:
-
-- opencode (verified): worker subagents exist as subagent sessions, so a
-  worker is an in-run dispatch; a worker pinned to a model is a
-  dispatch-time choice.
-- Claude Code / Codex (*unverified*): assume "workers are separate headless
-  runs" until you verify a native subagent with its own context — that is
-  exactly the isolation this shape wants anyway.
+The canonical per-harness table — every touchpoint (resume, wake,
+session-model read/switch, session-id file, model enumeration, worker
+dispatch, verified/unverified status, and how a row graduates) — lives in
+`references/harness-adapters.md`; the watchdog and wake launcher read all of
+it from environment overrides (`ORCH_RESUME_CMD`, `ORCH_WAKE_CMD`,
+`ORCH_SESSION_ID_FILE`, `ORCH_SESSION_GET_CMD`, `ORCH_SESSION_SET_CMD`,
+`ORCH_AUTHORIZED_PROVIDERS`), so adapting a harness means setting variables,
+never editing the scripts. Summary of the status rows: **opencode is
+verified** (the defaults implement it); **Claude Code and Codex rows are
+unverified** — written from their documented surface, re-check against your
+installed version before trusting them (house style: an unverified row is a
+lead, not a fact). Worker dispatch differs by harness and is stated rather
+than assumed: opencode workers are in-run subagent sessions; for Claude
+Code / Codex assume separate headless runs until a native subagent with its
+own context is verified — that is exactly the isolation this shape wants
+anyway.
 
 **The watchdog's role after the switch** (one paragraph, no archaeology):
 with stateless wakes, the timer *starts* a run instead of *resuming* a
@@ -561,21 +558,20 @@ Adopt it per-deployment: on a single-owner VM the user boundary is often
 enough, but once the fleet reads issue text from strangers, container-per-
 worker stops being optional polish.
 
-## Harness-specific notes (opencode)
+## Harness notes
 
-- Get the session id from a no-op session operation (for example renaming the
-  session to a stable title) and write it to
-  `<state>/opencode_session_id`.
-- `opencode run --auto -s <sessionID> "<message>"` continues a specific session
-  headlessly. It is the only verified injection point here.
-- Free-model pooling and `tools.opencode.models` are opencode features. Another
-  harness needs its own model enumeration.
-- An opencode server restart preserves sessions and background subagents but
-  kills background sleep beats. First action after a restart: re-arm the beat
-  grid, then continue. Verified twice (2026-10-19, 2026-10-20).
+The per-harness commands and their verification status moved to
+`references/harness-adapters.md` (one table, one place; the watchdog reads
+them from environment overrides). Two facts kept here because they are
+policy, not commands:
+
 - Attribution footers are a **policy convention**, not a skill requirement. If a
   repo asks for them, append them to PR/issue **bodies** only, never titles or
   repo files.
+- The opencode server restart behavior (sessions and background subagents
+  survive; background sleep beats do not — re-arm the beat grid first) is
+  recorded in the opencode row of the adapter table. Verified twice
+  (2026-10-19, 2026-10-20).
 
 ## Quota-aware worker protocol
 

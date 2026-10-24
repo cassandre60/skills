@@ -2929,6 +2929,7 @@ class DocumentationInvariantTests(unittest.TestCase):
             "references/08-recursive-self-improvement.md",
             "references/09-session-history-review.md",
             "references/10-toolbox.md",
+            "references/harness-adapters.md",
             "references/gates-and-vocabulary.md",
             "references/stack-adapters.md",
             "references/examples.md",

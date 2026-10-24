@@ -170,6 +170,7 @@ the adapter material there, not in this file.
 | `references/08-recursive-self-improvement.md` | The stream contract, autonomy tiers, and the stream catalog |
 | `references/09-session-history-review.md` | The method and evidence bar for skill-improvement proposals |
 | `references/10-toolbox.md` | Per-tool contracts and the lens menu |
+| `references/harness-adapters.md` | Per-harness command table (resume, wake, session model) and verification status |
 | `references/gates-and-vocabulary.md` | Gate ids, optional vocabulary, and the "no gates yet" fallback |
 | `references/stack-adapters.md` | Concrete commands per stack |
 | `references/examples.md` | One end-to-end Stream A example and a good/bad Stream B finding |
