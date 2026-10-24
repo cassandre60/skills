@@ -139,6 +139,42 @@ class GitRealityContractTests(unittest.TestCase):
         self.assertIn("rev-parse --abbrev-ref HEAD", self.unattended)
 
 
+class WatchdogAssetContractTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.watchdog = (SKILL_ROOT / "assets" / "watchdog.sh").read_text(
+            encoding="utf-8"
+        )
+
+    def test_the_free_pool_phrase_is_a_quota_failure(self) -> None:
+        # Verified 2026-10-23/24: glm's free pool said "Free usage limit
+        # reached. Subscribe to OpenCode Go" and none of the earlier terms
+        # matched, so the tick retried the deadness instead of parking it.
+        self.assertIn("usage limit|subscribe to opencode", self.watchdog)
+
+    def test_the_unnamed_default_parks_the_session_model(self) -> None:
+        # An unnamed default cannot enter the cooldown list on its own; the
+        # model the session actually runs must be read and parked instead.
+        for needle in ("unnamed=\"$(current_session_model)\"",):
+            self.assertIn(needle, self.watchdog)
+        self.assertGreaterEqual(self.watchdog.count("unnamed="), 2)
+
+    def test_an_exit_0_nudge_without_a_wake_is_counted(self) -> None:
+        self.assertIn("unblessed", self.watchdog)
+        self.assertIn("pausing until the heartbeat moves", self.watchdog)
+
+    def test_the_watchdog_never_fakes_the_heartbeat(self) -> None:
+        # A pre-attempt touch would blind the unblessed counter for a whole
+        # MAX_AGE window per nudge.
+        self.assertNotIn("Mark the attempt before running", self.watchdog)
+
+    def test_the_alert_survives_an_attempt_less_tick(self) -> None:
+        # alert_exhausted can be reached before any attempt ran (the unblessed
+        # path), so TRIED must exist under set -u and the nudge.out tail must
+        # tolerate a missing file.
+        self.assertIn('TRIED=""', self.watchdog)
+        self.assertIn('tail -c 600 "$OUT" 2>/dev/null || true', self.watchdog)
+
+
 class OwnerAskContractTests(unittest.TestCase):
     def setUp(self) -> None:
         self.protocol = _flat_ask(

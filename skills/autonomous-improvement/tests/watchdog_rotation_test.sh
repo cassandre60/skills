@@ -62,6 +62,33 @@ EOF
   chmod +x "$TMP/bin/opencode"
 }
 
+write_fake_usage_limit() { # the exact free-pool wording glm gave 2026-10-23/24
+  cat >"$TMP/bin/opencode" <<'EOF'
+#!/bin/bash
+if [ "${1:-}" = "api" ]; then
+  if [ "${2:-}" = "get" ]; then
+    echo "{\"model\":{\"id\":\"$(cat "$ORCH_STATE_DIR/current_model" 2>/dev/null || echo old-model)\",\"providerID\":\"opencode\"}}"
+    exit 0
+  fi
+  printf '%s\n' "$*" >>"$ORCH_STATE_DIR/switch_calls"
+  exit 0
+fi
+echo "ARGS: $*"
+echo "Error: Free usage limit reached. Subscribe to OpenCode Go to keep going: https://opencode.ai/go"
+exit 1
+EOF
+  chmod +x "$TMP/bin/opencode"
+}
+
+write_fake_success() { # every nudge succeeds; the session never touches the heartbeat
+  cat >"$TMP/bin/opencode" <<'EOF'
+#!/bin/bash
+echo "wake: housekeeping done"
+exit 0
+EOF
+  chmod +x "$TMP/bin/opencode"
+}
+
 write_fake_unknown_error() { # exit 1 with a signature nobody has taught the script
   cat >"$TMP/bin/opencode" <<'EOF'
 #!/bin/bash
@@ -475,6 +502,106 @@ if [ -s "$TMP/state/switch_calls" ]; then
   fail "a switch was issued while the session was on a live ladder model"
 else
   ok "no switch was issued"
+fi
+
+# --- case 12: the free-pool quota phrase is a quota failure -------------
+# "Free usage limit reached. Subscribe to OpenCode Go" carried quota on an
+# Error-shaped line none of the earlier terms matched, so a quota-dead
+# session default rotated through the whole ladder per tick (verified
+# 2026-10-23/24: 84 delivered prompts in one night, one pool burned).
+write_fake_usage_limit
+rm -rf "$TMP/state"; mkdir -p "$TMP/state"
+printf 'ses_TEST\n' >"$TMP/state/opencode_session_id"
+printf 'glm-5.3-flash-free\n' >"$TMP/state/current_model"
+touch -d '3 hours ago' "$TMP/state/last_beat"
+PATH="$TMP/bin:$PATH" ORCH_STATE_DIR="$TMP/state" ORCH_MODEL_LADDER="" \
+  ORCH_NUDGE_TIMEOUT=20 ORCH_MIN_INTERVAL=0 ORCH_HB_MAX_AGE=60 \
+  bash "$ASSETS" >/dev/null 2>&1
+if grep -q 'answered with a quota/balance failure' "$TMP/state/watchdog.log"; then
+  ok "the free-pool text is classified as quota"
+else
+  fail "the free-pool text was not classified as quota"
+fi
+if grep -q '^opencode/glm-5.3-flash-free ' "$TMP/state/model_failures" 2>/dev/null; then
+  ok "the session's actual model was parked for the unnamed default"
+else
+  fail "the unnamed default's real model was not parked"
+fi
+if [ "$(grep -c 'nudge attempt' "$TMP/state/watchdog.log")" = "1" ]; then
+  ok "an unnamed default is tried at most once per tick"
+else
+  fail "the unnamed default was retried within one tick"
+fi
+
+# --- case 13: a nudge that exits 0 without moving the heartbeat ----------
+# The harness queued the message but no turn ran. Back off; alert at two;
+# pause at three; reset when the heartbeat moves.
+write_fake_success
+rm -rf "$TMP/state"; mkdir -p "$TMP/state"
+printf 'ses_TEST\n' >"$TMP/state/opencode_session_id"
+touch -d '3 hours ago' "$TMP/state/last_beat"
+touch -d '30 minutes ago' "$TMP/state/last_nudge"
+one_run() {
+  PATH="$TMP/bin:$PATH" ORCH_STATE_DIR="$TMP/state" \
+    ORCH_MODEL_LADDER="opencode/alpha-free opencode/beta-free" \
+    ORCH_NUDGE_TIMEOUT=20 ORCH_MIN_INTERVAL=0 ORCH_HB_MAX_AGE=60 \
+    bash "$ASSETS" >/dev/null 2>&1
+}
+one_run
+if grep -q 'left the heartbeat unmoved (unblessed #1)' "$TMP/state/watchdog.log" && ! grep -q 'nudge attempt' "$TMP/state/watchdog.log"; then
+  ok "an answered-but-unblessed nudge backs off instead of nudging again"
+else
+  fail "an unblessed nudge did not back off"
+fi
+rm -f "$TMP/state/exhausted_at"   # a later tick: the backoff window passed
+one_run
+if grep -q 'unblessed #2' "$TMP/state/watchdog.log" && grep -q 'ALERT:' "$TMP/state/watchdog.log"; then
+  ok "a second unanswered nudge writes the alert"
+else
+  fail "a second unanswered nudge neither alerted nor backed off"
+fi
+rm -f "$TMP/state/exhausted_at"
+one_run
+if grep -q 'went unanswered; pausing' "$TMP/state/watchdog.log" && ! grep -q 'nudge attempt' "$TMP/state/watchdog.log"; then
+  ok "a third unanswered nudge pauses instead of nudging"
+else
+  fail "a third unanswered nudge kept nudging"
+fi
+touch "$TMP/state/last_beat"    # the session actually woke
+one_run
+if grep -q 'heartbeat fresh' "$TMP/state/watchdog.log" && [ ! -f "$TMP/state/unblessed_count" ]; then
+  ok "a moved heartbeat resumes normal nudging"
+else
+  fail "a moved heartbeat did not clear the pause"
+fi
+
+# --- case 14: the watchdog must not fake the heartbeat before an attempt -
+# Touching last_beat pre-attempt (the old storm guard) made every nudge look
+# blessed for a whole MAX_AGE window and blinded the unblessed counter.
+write_fake_success
+rm -rf "$TMP/state"; mkdir -p "$TMP/state"
+printf 'ses_TEST\n' >"$TMP/state/opencode_session_id"
+touch -d '3 hours ago' "$TMP/state/last_beat"
+PRESET=$(stat -c %Y "$TMP/state/last_beat")
+PATH="$TMP/bin:$PATH" ORCH_STATE_DIR="$TMP/state" \
+  ORCH_MODEL_LADDER="opencode/alpha-free opencode/beta-free" \
+  ORCH_NUDGE_TIMEOUT=20 ORCH_MIN_INTERVAL=0 ORCH_HB_MAX_AGE=60 \
+  bash "$ASSETS" >/dev/null 2>&1
+NOW=$(stat -c %Y "$TMP/state/last_beat")
+if [ $(( NOW - PRESET )) -lt 60 ] && grep -q 'finished with exit 0' "$TMP/state/watchdog.log"; then
+  ok "a successful nudge did not touch the session's heartbeat"
+else
+  fail "the watchdog faked the heartbeat around its nudge attempt"
+fi
+touch -d '60 minutes ago' "$TMP/state/last_nudge"   # the tick moved on
+PATH="$TMP/bin:$PATH" ORCH_STATE_DIR="$TMP/state" \
+  ORCH_MODEL_LADDER="opencode/alpha-free opencode/beta-free" \
+  ORCH_NUDGE_TIMEOUT=20 ORCH_MIN_INTERVAL=0 ORCH_HB_MAX_AGE=60 \
+  bash "$ASSETS" >/dev/null 2>&1
+if grep -q 'unblessed #1' "$TMP/state/watchdog.log" && [ "$(grep -c 'nudge attempt' "$TMP/state/watchdog.log")" = "1" ]; then
+  ok "an aged but unblessed nudge is counted on the next tick"
+else
+  fail "unblessed counting did not fire on the tick after a successful nudge"
 fi
 
 if [ "$FAILED" -eq 0 ]; then
