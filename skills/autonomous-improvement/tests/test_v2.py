@@ -4649,6 +4649,32 @@ class DoctorTests(RepoTestCase):
         self.assertFalse(payload["dispatch"])
         self.assertIn("doctor", payload["reason"].lower())
 
+    def test_laptop_profile_with_live_timer_warns_about_elective_machinery(self):
+        # The keep-alive stack (watchdog/wake timers, beats) is elective: on a
+        # personal machine (session.environment: laptop, the default) a live
+        # timer means it was installed without — or beyond — an owner ask.
+        repo = self.stage()
+        write_config(repo, {"fleet": {"merge_policy": "never"},
+                            "session": {"environment": "laptop"}})
+        res = self.doctor(repo)
+        payload = json.loads(res.stdout)
+        profile = next(c for c in payload["checks"]
+                       if c["name"] == "environment-profile")
+        self.assertEqual(profile["severity"], "soft")
+        self.assertFalse(profile["ok"])
+        self.assertIn("elective", profile["detail"])
+        # A warning names the condition; it does not block dispatch.
+        self.assertTrue(payload["dispatch_ok"], payload["hard_failures"])
+
+    def test_vm_profile_with_live_timer_is_clean(self):
+        repo = self.stage()
+        write_config(repo, {"fleet": {"merge_policy": "never"},
+                            "session": {"environment": "vm"}})
+        res = self.doctor(repo)
+        payload = json.loads(res.stdout)
+        self.assertNotIn("environment-profile",
+                         {c["name"] for c in payload["checks"]})
+
 
 class StatelessWakeTests(RepoTestCase):
     """Issue #18 (state half): a fresh wake reads only files and leaves

@@ -35,6 +35,11 @@ DEFAULT_CONFIG = {
     "mutant_ledger_path": "docs/AUTONOMOUS_MUTANTS.md",
     "origin_url": None,
     "setup_cmds": [],
+    # Where this skill runs. "laptop" (the default) keeps every keep-alive
+    # mechanism (beats, watchdog, wake timers) off unless the owner installed
+    # it deliberately — the doctor names a live timer on a laptop as a
+    # warning; "vm"/"ci" are the unattended profiles (references/05).
+    "session": {"environment": "laptop"},
     "format_check_cmd": None,
     "analyze_cmd": None,
     "analyze_extensions": [],

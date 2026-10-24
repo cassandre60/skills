@@ -592,6 +592,24 @@ def run_doctor_checks(root: Path, cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
         )
     )
 
+    # 5b. Environment profile vs live keep-alive machinery. The fleet stack
+    #     (beats, watchdog, wake timers) is elective: on a laptop — the
+    #     default profile — a running timer means it was installed without,
+    #     or beyond, an explicit owner ask. Name it; do not block on it.
+    environment = str((cfg.get("session") or {}).get("environment") or "laptop")
+    if environment == "laptop" and timer_state == "active":
+        checks.append(
+            _doctor_check(
+                "environment-profile",
+                "soft",
+                False,
+                "session.environment is laptop but orchestrator-watchdog.timer is "
+                "active: keep-alive machinery is elective on a personal machine — "
+                "uninstall it (install-watchdog.sh --uninstall) or set "
+                "session.environment to vm/ci deliberately",
+            )
+        )
+
     # 6. State-dir consistency (or stateless wake configured)
     if bool(fleet_cfg.get("stateless_wake")):
         checks.append(_doctor_check("state-dir", "soft", True, "stateless wake configured; no session state required"))

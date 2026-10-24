@@ -4,6 +4,9 @@
   "mutant_ledger_path": "docs/AUTONOMOUS_MUTANTS.md",
   "origin_url": null,
   "setup_cmds": [],
+  "session": {
+    "environment": "laptop"
+  },
   "format_check_cmd": null,
   "analyze_cmd": null,
   "analyze_extensions": [".py"],
