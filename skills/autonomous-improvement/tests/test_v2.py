@@ -11848,6 +11848,24 @@ class WorkerLifecycleContractTests(unittest.TestCase):
         installer = (ASSETS / "install-watchdog.sh").read_text(encoding="utf-8")
         self.assertIn("has no EnvironmentFile=", installer)
 
+    def test_the_nudge_that_succeeds_without_a_wake_is_counted(self) -> None:
+        # An exit 0 whose tick leaves the heartbeat unmoved queued the prompt
+        # and ran no turn; repeating it burned one free pool overnight.
+        self.assertIn("tier two of the flood", self.unattended.lower())
+        self.assertIn("unblessed_count", self.watchdog)
+
+    def test_the_free_pool_quota_phrase_is_a_quota_failure(self) -> None:
+        # "Free usage limit reached. Subscribe to OpenCode Go" matched no
+        # earlier quota word, so a quota-dead default rotated instead of
+        # parking and its model burned to the limit.
+        self.assertIn("usage limit|subscribe to opencode", self.watchdog)
+        self.assertIn("current_session_model", self.watchdog)
+
+    def test_the_alert_must_not_depend_on_the_attempt_loop(self) -> None:
+        # alert_exhausted reads TRIED; the unblessed path can alert before any
+        # attempt happened, so the variable must exist (set -u).
+        self.assertIn('TRIED=""', self.watchdog)
+
     def test_the_checkpoint_covers_new_files(self) -> None:
         self.assertIn("stage new files by name", self.unattended.lower())
 

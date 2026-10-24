@@ -469,6 +469,24 @@ repeats that all day. After an exhausted tick the watchdog backs off for
 already carries the news. Verified 2026-10-22: six stale nudges queued in a
 session that could not answer one.
 
+**Tier two of the flood: the nudge that "succeeds".** A nudge whose model call
+returns exit 0 but whose tick left the heartbeat unmoved woke nothing — the
+harness queued the prompt into the conversation and no turn ran. Repeating it
+every tick is a quota bonfire: verified 2026-10-23/24, 84 such nudges over one
+night, each delivered, none answered, one free pool burned to its limit. The
+watchdog therefore counts *unblessed* nudges (heartbeat still older than the
+last nudge): #1 and #2 back off with the exhaustion timer and the second
+writes the alert; #3 pauses nudging entirely until the heartbeat moves, which
+is the only signal that the session can run turns again.
+
+**A quota failure of the session's own model parks a real model.** The
+session default has no name to park (verified 2026-10-23/24: an unnamed
+default was retried three times per tick because `""` could not enter the
+cooldown list), and "Free usage limit reached. Subscribe to OpenCode Go"
+matched none of the earlier quota words, so the quota phrases now include
+`usage limit|subscribe to opencode` and a failed default attempt parks the
+model the session actually runs (read via the session API).
+
 **The ladder is owner-scoped.** `ORCH_AUTHORIZED_PROVIDERS` (default
 `opencode`) is the owner's approved pool; a ladder entry from any other
 provider is refused and logged, never tried. The same rule governs ad-hoc

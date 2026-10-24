@@ -65,6 +65,8 @@ SID_FILE="$STATE_DIR/opencode_session_id"
 FAIL_FILE="$STATE_DIR/model_failures"
 MAX_AGE="${ORCH_HB_MAX_AGE:-2700}"
 NUDGE_TIMEOUT="${ORCH_NUDGE_TIMEOUT:-1800}"
+TRIED=""; # the models the tick tried, for the alert
+OUT="$STATE_DIR/nudge.out"
 NUDGE_MSG="${ORCH_NUDGE_MSG:-watchdog nudge: run orchestrator housekeeping per journal protocol, re-arm beats, yield promptly.}"
 RESUME_CMD_DEFAULT='opencode run --auto -s "$1" ${3:+-m "$3"} "$2"'
 RESUME_CMD="${ORCH_RESUME_CMD:-$RESUME_CMD_DEFAULT}"
@@ -77,6 +79,7 @@ SWITCH_MODEL="${ORCH_SWITCH_SESSION_MODEL:-1}"
 ALERT_FILE="$STATE_DIR/ALERT.md"
 ALERT_INTERVAL="${ORCH_ALERT_INTERVAL:-21600}"
 EXHAUSTED_FILE="$STATE_DIR/exhausted_at"
+UNBLESSED_FILE="$STATE_DIR/unblessed_count"
 RETRY_AFTER_EXHAUSTION="${ORCH_RETRY_AFTER_EXHAUSTION:-1800}"
 
 mkdir -p "$STATE_DIR"
@@ -96,7 +99,7 @@ fi
 
 # A quota error is a stronger wake signal than a stale heartbeat: rotate the
 # model immediately, do not wait for the age threshold.
-QUOTA_RE='rate limit|rate_limit|429|quota|too many requests|insufficient balance|balance is at|exceeded your current'
+QUOTA_RE='rate limit|rate_limit|429|quota|too many requests|insufficient balance|balance is at|exceeded your current|usage limit|subscribe to opencode'
 
 # An INFRASTRUCTURE outage is not a quota failure. The model is not exhausted:
 # rotating the ladder would burn every pool against the same broken endpoint,
@@ -179,8 +182,9 @@ switch_session_model() { # $1: model id that just carried a nudge
   fi
 }
 
-alert_exhausted() { # no live model could revive the session this tick
-  local now
+alert_exhausted() { # $1: optional headline for why the session did not wake
+  local now title
+  title="${1:-no live model could revive the session this tick}"
   now=$(date +%s)
   if [ -f "$ALERT_FILE" ] && [ $(( now - $(stat -c %Y "$ALERT_FILE") )) -lt "$ALERT_INTERVAL" ]; then
     return 0
@@ -188,7 +192,7 @@ alert_exhausted() { # no live model could revive the session this tick
   {
     echo "# Watchdog alert — $(date -Is)"
     echo
-    echo "Session \`$SID\` did not wake: every model tried this tick failed."
+    echo "Session \`$SID\`: $title."
     echo
     echo "Tried: $TRIED"
     echo
@@ -202,7 +206,7 @@ alert_exhausted() { # no live model could revive the session this tick
     echo
     echo "Last attempt output (tail of nudge.out):"
     echo '```'
-    tail -c 600 "$OUT" 2>/dev/null
+    tail -c 600 "$OUT" 2>/dev/null || true
     echo '```'
   } >"$ALERT_FILE"
   echo "$(date -Is) ALERT: no model could wake the session; wrote $ALERT_FILE" >>"$LOG"
@@ -233,6 +237,7 @@ if [ -f "$HB" ]; then
   AGE=$(( $(date +%s) - $(stat -c %Y "$HB") ))
   if [ "$AGE" -le "$MAX_AGE" ]; then
     echo "$(date -Is) heartbeat fresh (${AGE}s <= ${MAX_AGE}s); nothing to do" >>"$LOG"
+    rm -f "$UNBLESSED_FILE"
     exit 0
   fi
   echo "$(date -Is) stale heartbeat (${AGE}s > ${MAX_AGE}s) -> foreground nudge to $SID" >>"$LOG"
@@ -260,15 +265,40 @@ if [ -f "$EXHAUSTED_FILE" ]; then
     exit 0
   fi
 fi
+# A previous nudge finished without the heartbeat moving: the harness queued
+# its message but the turn never ran, so the prompt is in the conversation
+# while the session stays frozen. Repeating it every tick floods the
+# conversation and models (verified 2026-10-23/24: 84 nudges, each burning
+# free-pool quota, none blessed). Back off; after the second one, leave the
+# alert to speak until the heartbeat actually moves.
+if [ -f "$STATE_DIR/last_nudge" ]; then
+  NUDGE_TS="$(stat -c %Y "$STATE_DIR/last_nudge")"
+  if [ "$(stat -c %Y "$HB" 2>/dev/null || echo 0)" -lt "$NUDGE_TS" ]; then
+    count="$(cat "$UNBLESSED_FILE" 2>/dev/null || echo 0)"
+    count=$(( count + 1 ))
+    printf '%s\n' "$count" >"$UNBLESSED_FILE"
+    touch "$EXHAUSTED_FILE"
+    if [ "$count" -ge 3 ]; then
+      echo "$(date -Is) $count nudges in a row went unanswered; pausing until the heartbeat moves instead of queueing more" >>"$LOG"
+      exit 0
+    fi
+    echo "$(date -Is) the nudge from $(stat -c %y "$STATE_DIR/last_nudge" | cut -c1-19) left the heartbeat unmoved (unblessed #$count); backing off instead of delivering another one" >>"$LOG"
+    if [ "$count" -ge 2 ]; then
+      echo "$(date -Is) two nudges in a row were not answered; the session may not be able to run turns at all" >>"$LOG"
+      TRIED="the nudges listed in this log (the turn never ran, so no model probe happened this tick)"
+      alert_exhausted "nudges were delivered but the heartbeat never moves - the turn is not running; inspect the session by hand"
+    fi
+    exit 0
+  fi
+fi
+rm -f "$UNBLESSED_FILE"
 touch "$STATE_DIR/last_nudge"
 
 # Mark the attempt before running so a crash does not cause a nudge storm.
 touch "$HB"
 ATTEMPT_TS=$(date +%s)
 
-OUT="$STATE_DIR/nudge.out"
 attempt=0
-TRIED=""
 for model in "${candidates[@]}"; do
   attempt=$(( attempt + 1 ))
   label="${model:-session-default}"
@@ -284,12 +314,25 @@ for model in "${candidates[@]}"; do
   fi
   if grep -Eiq "$QUOTA_RE" "$OUT"; then
     echo "$(date -Is) model '$label' answered with a quota/balance failure; rotating" >>"$LOG"
-    [ -n "$model" ] && mark_failed "$model"
+    if [ -n "$model" ]; then
+      mark_failed "$model"
+    else
+      # The session default has no name to park; park the model it actually
+      # runs (verified 2026-10-24: three quota-failed attempts per tick on a
+      # dead default because "" could not be parked).
+      unnamed="$(current_session_model)"
+      [ -n "$unnamed" ] && mark_failed "$unnamed"
+    fi
     continue
   fi
   if grep -Eiq "$DEAD_MODEL_RE" "$OUT"; then
     echo "$(date -Is) model '$label' is dead (not quota, not outage); rotating and parking it" >>"$LOG"
-    [ -n "$model" ] && mark_failed "$model"
+    if [ -n "$model" ]; then
+      mark_failed "$model"
+    else
+      unnamed="$(current_session_model)"
+      [ -n "$unnamed" ] && mark_failed "$unnamed"
+    fi
     continue
   fi
   if [ "$RC" -eq 124 ]; then
