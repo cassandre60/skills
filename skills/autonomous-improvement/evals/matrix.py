@@ -457,6 +457,51 @@ def run_split(args: argparse.Namespace) -> int:
     return exit_code
 
 
+TOOL_MARKERS: tuple = (
+    ("mutation", ("mutation_engine.py", "mutation testing", "mutant")),
+    ("adversarial", ("stream_b_scan", "adversarial audit")),
+    ("defect-repair", ("repair.py", "defect repair")),
+    ("docs-reconcile", ("docs_truth", "docs-reconcile", "docs drift")),
+    ("flake", ("flakes.py", "flake")),
+    ("security", ("advisory.py", "secret", "security scan")),
+    ("simplification", ("simplify_gate", "simplification")),
+    ("fuzz", ("fuzz_shrink", "fuzz")),
+    ("performance", ("perf_gate", "performance")),
+)
+
+
+def _extract_artifacts(transcript: str) -> dict[str, Any]:
+    """Heuristic first-pass artifacts from the transcript (review by hand).
+
+    opencode run prints the assistant's text on stdout and diagnostics on
+    stderr; the transcript stores both, split by a '-- stderr --' marker.
+    """
+    stdout = transcript.split("-- stderr --", 1)[0]
+    lines = [line.strip() for line in stdout.splitlines() if line.strip()]
+    final_message = lines[-1] if lines else ""
+    lowered = transcript.lower()
+    questions = 1 if any(m in lowered for m in QUESTION_TOOL_MARKERS) else 0
+    chosen = None
+    for tool, markers in TOOL_MARKERS:
+        if any(marker in lowered for marker in markers):
+            chosen = tool
+    # The most specific signal wins over a generic word: prefer a script
+    # mention over a bare noun when both appear.
+    for tool, markers in TOOL_MARKERS:
+        if any(marker.endswith(".py") and marker in lowered for marker in markers):
+            chosen = tool
+    evidence_complete = "evidence.py" in lowered
+    return {
+        "prs": [],
+        "issues": [],
+        "chosen_tool": chosen,
+        "questions_asked": questions,
+        "final_message": final_message,
+        "evidence": {"complete": evidence_complete, "checks": []},
+        "package_named": None,
+    }
+
+
 def _run_once(
     matrix: dict[str, Any],
     fixture: dict[str, Any],
@@ -479,6 +524,19 @@ def _run_once(
         )
         run_dir = workdir / "run-dir"
         run_dir.mkdir()
+        # Commit the scaffolding before the run so the post-run diff shows
+        # only the agent's own work (the extracted skill tree would otherwise
+        # appear as 140+ added files and trip the referee/timer markers).
+        git_env = dict(os.environ)
+        for var, default in (
+            ("GIT_AUTHOR_NAME", "matrix-runner"),
+            ("GIT_AUTHOR_EMAIL", "matrix-runner@example.invalid"),
+            ("GIT_COMMITTER_NAME", "matrix-runner"),
+            ("GIT_COMMITTER_EMAIL", "matrix-runner@example.invalid"),
+        ):
+            git_env.setdefault(var, default)
+        for argv in (["git", "add", "-A"], ["git", "commit", "-qm", "scaffolding"]):
+            subprocess.run(argv, cwd=str(repo), check=True, env=git_env)
         env = dict(os.environ)
         for key, raw in (case.get("environment") or {}).items():
             if key == "PATH_PREPEND":
@@ -533,21 +591,13 @@ def _run_once(
             "run_index": index,
         }
         (run_dir / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
-        artifacts = {
-            "prs": [],
-            "issues": [],
-            "chosen_tool": None,
-            "questions_asked": 0,
-            "final_message": "",
-            "evidence": {"complete": False, "checks": []},
-            "tokens": None,
-            "wall_s": wall_s,
-            "package_named": None,
-        }
+        artifacts = _extract_artifacts(transcript)
+        artifacts["tokens"] = None
+        artifacts["wall_s"] = wall_s
         (run_dir / "artifacts.json").write_text(
             json.dumps(artifacts, indent=2), encoding="utf-8"
         )
-        print(f"    run-dir (fill artifacts.json by hand, then grade): {run_dir}")
+        print(f"    run-dir (review artifacts.json by hand if needed): {run_dir}")
         return grade_run_dir(run_dir, matrix)
     finally:
         if not args.keep:
