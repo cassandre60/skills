@@ -193,7 +193,9 @@ sit red and the fleet looks busy while nothing converges.
    - Red on a protected-path gate → ask the owner per item **and re-ask on
      every subsequent wake until answered**. An ask that is never repeated is
      an ask that never lands.
-   - Green → Sentinel (evidence, ownership, no weakening) → merge.
+   - Green → Sentinel (evidence, ownership, no weakening) → merge — where the
+     merge authority is `fleet.merge_policy` from config; with `never` (the
+     default) a green PR goes to the owner for the merge instead.
 3. **Green means green on the head sha.** Compare the sha the run reported with
    `gh pr view <n> --json headRefOid`. A green run for an *older* sha, or a
    head sha that never received a run, is not a verdict — it is a different
@@ -274,7 +276,8 @@ sit red and the fleet looks busy while nothing converges.
    decision instead of N. (Verified 2026-10-22: three green PRs — two audit
    rounds and a bugfix — landed as one, and the pattern held three times.)
 
-7. **Protected-file bookkeeping is batched, not bundled.** When a repo treats
+7. **Protected-file bookkeeping follows `fleet.ledger_mode` (`batched`, the
+   default).** When a repo treats
    an audit ledger as a protected path, a worker's row for it blocks the PR on
    a gate label — and the gate's own message says such an edit "must be a
    separate PR, not bundled with product code". So workers must not touch that

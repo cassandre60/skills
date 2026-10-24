@@ -1448,9 +1448,18 @@ def cmd_claim(args: argparse.Namespace) -> int:
     test_hash = hash_at_head(root, test) if test and path_at_head(root, test) else None
     composite = composite_hash(source_hash, test_hash)
 
-    git(["commit", "--allow-empty", "-m", f"wip(autonomous): claim {target}"],
-        cwd=worktree, check=True, quiet=True)
-    git(["push", "-u", "origin", branch], cwd=worktree, check=True, quiet=True)
+    try:
+        git(["commit", "--allow-empty", "-m", f"wip(autonomous): claim {target}"],
+            cwd=worktree, check=True, quiet=True)
+        git(["push", "-u", "origin", branch], cwd=worktree, check=True, quiet=True)
+    except Fatal as exc:
+        run([sys.executable, str(orchestrator), "cleanup-worktree",
+             "--slug", slug, "--force", "--delete-branch"], cwd=root, check=False)
+        eprint(
+            "[!] claim failed before opening the draft; removed the worktree "
+            f"and branch it created: {exc}"
+        )
+        return EXIT_NEGATIVE
 
     body = (
         "## Claim (WIP)\n\n"
@@ -1528,9 +1537,10 @@ def _render_evidence_body(data: Dict[str, Any]) -> str:
 
 
 def _list_all(root: Path, kind: str) -> List[Dict[str, Any]]:
+    fields = "number,title,body" + (",state" if kind == "pr" else "")
     output = _gh(
         root,
-        [kind, "list", "--state", "all", "--json", "number,title,body",
+        [kind, "list", "--state", "all", "--json", fields,
          "--limit", "200"],
         f"{kind} list",
     )
@@ -1547,6 +1557,29 @@ def _find_key(items: List[Dict[str, Any]], key: str) -> Optional[int]:
         if key in text and isinstance(item.get("number"), int):
             return item["number"]
     return None
+
+
+def _open_claim_pr(prs: List[Dict[str, Any]], target: str) -> Optional[int]:
+    """The first open PR whose body claims this target (the `fleet.py claim` stub)."""
+    marker = f"Target: `{target}`"
+    for item in prs:
+        if str(item.get("state") or "").upper() != "OPEN":
+            continue
+        if marker in str(item.get("body") or "") and isinstance(item.get("number"), int):
+            return int(item["number"])
+    return None
+
+
+def _survivor_issue_link(root: Path, data: Dict[str, Any]) -> Optional[int]:
+    """The issue filed for the evidence's mutant, so the published PR can reference it."""
+    if data.get("kind") != "mutant":
+        return None
+    from mutants import mutant_id
+
+    mutant = data.get("mutant") or {}
+    file_rel = rel_path(root, str(mutant.get("file") or ""))
+    key = mutant_id(file_rel, int(mutant.get("line") or 0), str(mutant.get("mutated") or ""))
+    return _find_key(_list_all(root, "issue"), key)
 
 
 def _publish_issues(root: Path, args: argparse.Namespace) -> int:
@@ -1580,6 +1613,7 @@ def _publish_issues(root: Path, args: argparse.Namespace) -> int:
             outcomes.append({"key": key, "action": "existing", "kind": kind, "number": number})
             continue
         description = str(entry.get("description") or "surviving mutant")
+        claim = _open_claim_pr(prs, file_rel)
         body = (
             f"Mutant-Key: `{key}`\n\n"
             f"A mutant survived the test suite at `{file_rel}:{line}` "
@@ -1592,6 +1626,8 @@ def _publish_issues(root: Path, args: argparse.Namespace) -> int:
             "on clean source (`evidence.py mutant`), or record a triage "
             "disposition with `mutants.py record`. Filed by `fleet.py publish`.\n"
         )
+        if claim is not None:
+            body += f"\nClaim in progress: #{claim} (`fleet.py claim` draft).\n"
         output = _gh(
             root,
             ["issue", "create", "--title", f"[mutant] {file_rel}:{line} — {description}",
@@ -1600,7 +1636,10 @@ def _publish_issues(root: Path, args: argparse.Namespace) -> int:
         )
         number = _pr_number_from_url(output)
         issues.append({"number": number, "title": "", "body": body})
-        outcomes.append({"key": key, "action": "created", "kind": "issue", "number": number})
+        outcome = {"key": key, "action": "created", "kind": "issue", "number": number}
+        if claim is not None:
+            outcome["linked_pr"] = claim
+        outcomes.append(outcome)
 
     if args.json:
         print(json.dumps(outcomes))
@@ -1629,6 +1668,9 @@ def cmd_publish(args: argparse.Namespace) -> int:
             "evidence artifact is not publishable; the draft stays draft:\n  " + listing
         )
     body = _render_evidence_body(data)
+    link = _survivor_issue_link(root, data)
+    if link is not None:
+        body = body.rstrip("\n") + f"\n\nTracks the survivor issue #{link}.\n"
     if args.dry_run:
         print(body, end="")
         return EXIT_OK
