@@ -50,7 +50,15 @@ from typing import Any
 
 EVALS_DIR = Path(__file__).resolve().parent
 SKILL_ROOT = EVALS_DIR.parent
-REPO_ROOT = SKILL_ROOT.parent
+REPO_ROOT = Path(
+    subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        cwd=str(SKILL_ROOT),
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+)
 MATRIX_JSON = EVALS_DIR / "matrix.json"
 HELDOUT_LOCAL = EVALS_DIR / "heldout.local.json"
 RESULTS_DIR = EVALS_DIR / "results"
@@ -419,6 +427,11 @@ def run_split(args: argparse.Namespace) -> int:
             todo.append(fixture)
     for fixture_id, missing in skipped:
         print(f"[skip] {fixture_id}: toolchain missing: {', '.join(missing)}")
+    if args.only:
+        todo = [f for f in todo if f["id"] == args.only]
+        if not todo:
+            print(f"no runnable fixture with id {args.only!r}")
+            return 2
     if not todo:
         print("nothing to run (all fixtures skipped)")
         return 0
@@ -472,7 +485,7 @@ def _run_once(
                 env["PATH"] = f"{repo / 'bin'}{os.pathsep}{env.get('PATH', '')}"
             elif key.isupper():
                 env[key] = str(raw)
-        argv = ["opencode", "run", "--model", args.model, prompt]
+        argv = ["opencode", "run", "--auto", "--model", args.model, prompt]
         started = time.monotonic()
         try:
             proc = subprocess.run(
@@ -667,6 +680,7 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--harness", default="opencode", choices=["opencode"])
     run.add_argument("--model", required=True)
     run.add_argument("--runs", type=int, default=3)
+    run.add_argument("--only", default=None, help="restrict to one fixture id (smoke runs)")
     run.add_argument("--timeout", type=int, default=900, help="per-run seconds")
     run.add_argument("--out", default=str(RESULTS_DIR))
     run.add_argument("--keep", action="store_true", help="keep temp run dirs")
