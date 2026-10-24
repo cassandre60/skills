@@ -93,6 +93,20 @@ api-keys:
 (`max_tokens`, a `system` block, a specific stream flag). Diff the successful request body
 against yours if headers were ruled out.
 
+**Gateway-injected fields.** If the upstream rejects a 400 naming a deployment, header, or
+tool you never configured, stop diffing your own body — the gateway may have added it.
+CLIProxyAPI injects an `image_generation` tool into non-images requests while
+`multimedia.disable-image-generation` is `false`; an Azure-fronted GPT relay then answers:
+
+```
+400 imagegen deployment must be provided through header: x-ms-oai-image-generation-deployment
+```
+
+Set `multimedia.disable-image-generation: "chat"` (strips the injection, keeps `/v1/images/*`),
+restart, and re-probe both `/v1/responses` and `/v1/chat/completions`. The tell is the same
+for any injected field: the error names something that exists nowhere in your request.
+Symptom table in TROUBLESHOOTING.md.
+
 ## A caution about negative UA results
 
 A result of the form "works without a header, fails with any value for that header" is

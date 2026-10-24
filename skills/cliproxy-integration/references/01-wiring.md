@@ -50,6 +50,34 @@ that removes a model from the picker is **deleting the entry** (back the file up
 restoration is one copy). Do not burn rounds on the other mechanisms; they are documented
 for built-in providers and silently inert here.
 
+## A provider id that exists in models.dev imports its whole catalog
+
+The `models` map is not the whole story when the provider **id** matches a provider that
+models.dev knows. OpenCode merges that provider's catalog into the picker, so the listing
+contains models you never configured:
+
+| Provider id | Entries in config | Entries listed | Why |
+| --- | --- | --- | --- |
+| `nvidia` | 2 | 23 | `nvidia` is a models.dev provider |
+| `agentrouter` | 2 | 7 | `agentrouter` is a models.dev provider |
+| `cliproxy` | 30 | 30 | absent from models.dev |
+
+Measured with `opencode models`, which prints the same merged catalog the picker builds:
+`rg -c '^nvidia/'` returned 23 while the config held 2 entries. `provider.whitelist` does not
+fix this — the built-in `opencode` provider had 10 whitelisted entries and still listed 82.
+
+Check an id before using it:
+
+```bash
+curl -s https://models.dev/api.json | jq 'has("nvidia")'       # true  -> collides
+curl -s https://models.dev/api.json | jq 'has("nvidia-direct")' # false -> safe
+```
+
+Renaming the provider id from `nvidia` to `nvidia-direct` reduced the picker to exactly the
+two configured models. The display `name` and the model keys are untouched by the rename;
+only the client-facing prefix changes (`nvidia-direct/<model>`). Choose the id as deliberately
+as you choose the model keys, and prefer no direct provider at all (see SKILL.md rule 6).
+
 ## Two files, one name, no import between them
 
 Adding a model is always **two independent registrations of the same string**, and neither
@@ -266,3 +294,69 @@ CLIProxyAPI's internal Anthropic-to-OpenAI translator consumes the relay's nativ
 and re-emits a spec-compliant OpenAI SSE stream to OpenCode:
 `content deltas` → `finish_reason` → `usage` → `[DONE]`. OpenCode's client configuration, model
 aliases, and rotation pools remain unchanged.
+
+## Upstream that speaks only the Responses API: a `codex` API-key group
+
+Some relays expose their GPT models only on `/v1/responses` and reject
+`/v1/chat/completions`. The gateway's `codex` executor speaks the Responses protocol upstream
+and translates it for both downstream surfaces, so register the upstream as an `api-keys.codex`
+group instead of a direct client provider:
+
+```yaml
+api-keys:
+  codex:
+    - name: "my-relay-codex"
+      base-url: "https://relay.example/v1"   # API root; the executor appends /responses
+      headers:
+        "User-Agent": "claude-cli/2.1.220 (external, cli)"  # exact value from the working client
+        "X-App": "cli"
+      keys:
+        - api-key: "sk-..."
+          disable-codex-cloaking: true   # keep YOUR headers; the gateway otherwise forces the official Codex UA/Originator
+      models:
+        - name: "<upstream-model>"
+          alias: "relay/<upstream-model>"   # client-visible ID; must match the OpenCode model key
+```
+
+`disable-codex-cloaking` is the field that matters for an identity-allowlisting relay: the
+gateway otherwise replaces the request's `User-Agent` and `Originator` with the official
+Codex values, discarding the headers that got you access.
+
+Verify **both** surfaces through the gateway, because they take different paths:
+
+```bash
+# native Responses surface
+curl -s $GW/v1/responses -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+  -d '{"model":"relay/<upstream-model>","input":"Reply with only: ok","max_output_tokens":30}'
+
+# chat bridge — what an openai-compatible client actually calls
+curl -s $GW/v1/chat/completions -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+  -d '{"model":"relay/<upstream-model>","messages":[{"role":"user","content":"Reply with only: ok"}],"max_tokens":30}'
+```
+
+A passing `/v1/responses` probe alone does not prove the client path: OpenCode's
+openai-compatible provider calls the chat surface, and a field injected by the gateway can
+break one surface without the other. Probe both; see TROUBLESHOOTING.md.
+
+## Editing the v8 gate config without a YAML round-trip
+
+CLIProxyAPI v8 keeps the whole `openai-compatibility` group list as **inline JSON on a single
+YAML line**. A PyYAML load/dump round-trip rewrites the file and deletes its comments — and
+most of that file is comments. Edit the one line:
+
+```python
+import json
+
+lines = open(path).read().splitlines(keepends=True)
+i = next(i for i, line in enumerate(lines)
+         if line.lstrip().startswith("openai-compatibility:"))
+prefix, payload = lines[i].split("openai-compatibility:", 1)
+groups = json.loads(payload.strip())
+groups.append(new_group)
+lines[i] = prefix + "openai-compatibility: " + json.dumps(groups, separators=(",", ": ")) + "\n"
+open(path, "w").write("".join(lines))
+```
+
+Then assert on the artifact, not the write: load the backup and the result with
+`yaml.safe_load`, compare their top-level key sets, and diff the files to confirm only that
+line changed. Restart the service and probe the aliases through the gateway.

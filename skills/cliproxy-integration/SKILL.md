@@ -33,6 +33,12 @@ in the wrong order. Discover, then wire, then attribute, then limit, then verify
    tokens to prove what a ~50-token gateway probe already proved. Reserve in-client tests
    for wiring (does the ID resolve in `/model`), never for model health.
 5. **Back up before every edit**, and keep the backup nameable.
+6. **The client sees one provider: the gateway.** Do not wire an upstream directly into
+   OpenCode when the gateway can serve it. A direct provider bypasses the gateway's quota
+   accounting, retries, and logs — and it hides the real failure: the "gateway is broken"
+   cases seen so far were fixed *inside* the gateway (protocol choice, an injected field,
+   a header), while the direct block kept the symptom out of sight. A direct provider is a
+   temporary, explicitly-owned exception, never the fix.
 
 ## Workflow
 
@@ -80,6 +86,11 @@ overlaid on top and wins on overlap. If your tooling writes both, keep them **id
 - under `providers`: `package: "@opencode-ai/ai/providers/openai-compatible"`, connection under `settings`
 
 Both `options` and `settings` carry `baseURL` + `apiKey`.
+
+**Choose the provider id like it is part of the API.** If the id matches a provider in the
+models.dev catalog, OpenCode merges that provider's entire model list into the picker, no
+matter what your `models` map contains. Pick an id models.dev does not know; the test and the
+evidence are in `references/01-wiring.md`.
 
 ### 2. Attribute models to their upstream (careful — this is a trap)
 
@@ -170,7 +181,9 @@ Work this ladder top-down. Each rung eliminates a class. Do not skip to a fix.
 | Symptom | Class | Go to |
 | --- | --- | --- |
 | Model absent from `/model` | discovery / config shape | `references/01-wiring.md` |
+| Picker lists many models you never configured | provider id collides with a models.dev id, whose catalog is merged in | `references/01-wiring.md` |
 | `unknown provider for model X/Y` | slash read as credential prefix | `references/01-wiring.md` |
+| Upstream 400 names a deployment or header you never set (e.g. `imagegen … image-generation-deployment`) | the gateway injected a field (`image_generation`) the upstream rejects | `references/02-upstream-401.md` |
 | `model_not_found` right after a base-url change, gateway log shows a doubled path (`.../v1beta/openai/v1beta/models/...`) | group `base-url` already contains the path the gateway appends | `references/01-wiring.md` |
 | Every model works, one doesn't | that upstream | `references/02-upstream-401.md` |
 | 429 / "no quota" on some models only | quota semantics | `references/03-quota.md` |
