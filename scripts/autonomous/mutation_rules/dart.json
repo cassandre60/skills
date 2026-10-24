@@ -1,0 +1,104 @@
+{
+  "name": "dart",
+  "extensions": [".dart"],
+  "line_comment": "//",
+  "block_comment": ["/*", "*/"],
+  "string_quotes": ["'", "\""],
+  "triple_quotes": true,
+  "skip_line_prefixes": ["import ", "export ", "part ", "@"],
+  "rules": [
+    {
+      "pattern": "(?P<a>[A-Za-z_][A-Za-z0-9_.]*(?:\\[[^\\[\\]]*\\])?)\\s*==\\s*null\\b",
+      "replacement": "\\g<a> != null",
+      "description": "Invert null check: '== null' -> '!= null'"
+    },
+    {
+      "pattern": "(?P<a>[A-Za-z_][A-Za-z0-9_.]*(?:\\[[^\\[\\]]*\\])?)\\s*!=\\s*null\\b",
+      "replacement": "\\g<a> == null",
+      "description": "Invert null check: '!= null' -> '== null'"
+    },
+    {
+      "pattern": "(?P<a>-?[A-Za-z_][A-Za-z0-9_.]*(?:\\[[^\\[\\]]*\\])?|-?[0-9]+)\\s*==\\s*(?P<b>-?[A-Za-z_][A-Za-z0-9_.]*(?:\\[[^\\[\\]]*\\])?|-?[0-9]+)",
+      "replacement": "\\g<a> != \\g<b>",
+      "description": "Invert equality: '==' -> '!='"
+    },
+    {
+      "pattern": "(?P<a>-?[A-Za-z_][A-Za-z0-9_.]*(?:\\[[^\\[\\]]*\\])?|-?[0-9]+)\\s*!=\\s*(?P<b>-?[A-Za-z_][A-Za-z0-9_.]*(?:\\[[^\\[\\]]*\\])?|-?[0-9]+)",
+      "replacement": "\\g<a> == \\g<b>",
+      "description": "Invert inequality: '!=' -> '=='"
+    },
+    {
+      "pattern": "(?<=\\s)<(?=\\s)",
+      "replacement": "<=",
+      "description": "Loosen strict inequality: '<' -> '<='"
+    },
+    {
+      "pattern": "(?<=\\s)>(?=\\s)",
+      "replacement": ">=",
+      "description": "Loosen strict inequality: '>' -> '>='"
+    },
+    {
+      "pattern": "(?<=\\s)<=(?=\\s)",
+      "replacement": "<",
+      "description": "Tighten inequality: '<=' -> '<'"
+    },
+    {
+      "pattern": "(?<=\\s)>=(?=\\s)",
+      "replacement": ">",
+      "description": "Tighten inequality: '>=' -> '>'"
+    },
+    {
+      "pattern": "&&",
+      "replacement": "||",
+      "description": "Swap logical AND (&&) to OR (||)"
+    },
+    {
+      "pattern": "\\|\\|",
+      "replacement": "&&",
+      "description": "Swap logical OR (||) to AND (&&)"
+    },
+    {
+      "pattern": "\\btrue\\b",
+      "replacement": "false",
+      "description": "Invert boolean literal true -> false"
+    },
+    {
+      "pattern": "\\bfalse\\b",
+      "replacement": "true",
+      "description": "Invert boolean literal false -> true"
+    },
+    {
+      "pattern": "\\.isNotEmpty\\b",
+      "replacement": ".isEmpty",
+      "description": "Invert .isNotEmpty to .isEmpty"
+    },
+    {
+      "pattern": "\\.isEmpty\\b",
+      "replacement": ".isNotEmpty",
+      "description": "Invert .isEmpty to .isNotEmpty"
+    },
+    {
+      "pattern": "\\.first\\b",
+      "replacement": ".last",
+      "description": "Swap .first to .last"
+    },
+    {
+      "pattern": "\\.last\\b",
+      "replacement": ".first",
+      "description": "Swap .last to .first"
+    },
+    {
+      "pattern": "\\+\\s*1\\b",
+      "replacement": "+ 2",
+      "description": "Off-by-one: '+ 1' -> '+ 2'"
+    },
+    {
+      "pattern": "-\\s*1\\b",
+      "replacement": "- 2",
+      "description": "Off-by-one: '- 1' -> '- 2'"
+    }
+  ],
+  "compile_failure_patterns": [
+    "^\\S+\\.dart:\\d+:\\d+: Error: "
+  ]
+}

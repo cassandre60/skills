@@ -1,0 +1,80 @@
+{
+  "name": "javascript",
+  "extensions": [".js", ".jsx", ".mjs", ".cjs"],
+  "line_comment": "//",
+  "block_comment": ["/*", "*/"],
+  "string_quotes": ["'", "\"", "`"],
+  "multiline_single_quotes": ["`"],
+  "triple_quotes": false,
+  "skip_line_prefixes": ["import ", "export ", "@"],
+  "rules": [
+    {
+      "pattern": "(?<![=!])(===)(?!=)",
+      "replacement": "!==",
+      "description": "Invert strict equality: '===' -> '!=='"
+    },
+    {
+      "pattern": "(?<![=!])(!==)(?!=)",
+      "replacement": "===",
+      "description": "Invert strict inequality: '!==' -> '==='"
+    },
+    {
+      "pattern": "(?<![=!])(==)(?!=)",
+      "replacement": "!=",
+      "description": "Invert equality: '==' -> '!='"
+    },
+    {
+      "pattern": "(?<![=!])(!=)(?!=)",
+      "replacement": "==",
+      "description": "Invert inequality: '!=' -> '=='"
+    },
+    {
+      "pattern": "&&",
+      "replacement": "||",
+      "description": "Swap logical AND (&&) to OR (||)"
+    },
+    {
+      "pattern": "\\|\\|",
+      "replacement": "&&",
+      "description": "Swap logical OR (||) to AND (&&)"
+    },
+    {
+      "pattern": "\\btrue\\b",
+      "replacement": "false",
+      "description": "Invert boolean literal true -> false"
+    },
+    {
+      "pattern": "\\bfalse\\b",
+      "replacement": "true",
+      "description": "Invert boolean literal false -> true"
+    },
+    {
+      "pattern": "(?<=\\s)<(?=\\s)",
+      "replacement": "<=",
+      "description": "Loosen strict inequality: '<' -> '<='"
+    },
+    {
+      "pattern": "(?<=\\s)>(?=\\s)",
+      "replacement": ">=",
+      "description": "Loosen strict inequality: '>' -> '>='"
+    },
+    {
+      "pattern": "(?<=\\s)<=(?=\\s)",
+      "replacement": "<",
+      "description": "Tighten inequality: '<=' -> '<'"
+    },
+    {
+      "pattern": "(?<=\\s)>=(?=\\s)",
+      "replacement": ">",
+      "description": "Tighten inequality: '>=' -> '>'"
+    },
+    {
+      "pattern": "(?P<a>[A-Za-z_$][A-Za-z0-9_$.]*)\\s*\\?\\?\\s*(?P<b>[A-Za-z_$][A-Za-z0-9_$.]*)",
+      "replacement": "\\g<a>",
+      "description": "Remove nullish-coalescing fallback: 'a ?? b' -> 'a'"
+    }
+  ],
+  "compile_failure_patterns": [
+    "^\\s*SyntaxError:"
+  ]
+}
