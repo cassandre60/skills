@@ -2887,10 +2887,12 @@ class DocumentationInvariantTests(unittest.TestCase):
         flat = _flat(text)
         # The invocation bug this skill had: opening the file made the agent
         # jump straight into mutation testing. The router must present the
-        # toolbox, adapt the plan, and ask the owner instead.
+        # toolbox, adapt the plan, and resolve autonomy once at the start:
+        # auto for bare/headless invocations, ask only for an explicit task.
         self.assertNotIn("Two streams are active", flat)
         self.assertIn("toolbox of passes", flat)
-        self.assertIn("ask the owner what to improve", flat)
+        self.assertIn("Autonomy resolution", flat)
+        self.assertIn("bare invocation", flat)
         self.assertIn("Single session (default)", flat)
         self.assertIn("Fleet mode (opt-in)", flat)
         # Every tool row in the table must name its module or its lens home.

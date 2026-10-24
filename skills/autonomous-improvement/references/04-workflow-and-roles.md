@@ -94,10 +94,11 @@ Who runs a round depends on why the session exists:
 
 - **Explicit task ask** ("audit this target", "fix this gap"): one session can
   play all three build roles below and run the per-task protocol itself.
-- **Skill as the session's only instruction** (multi-day dispatch, unattended
-  fleet): the receiving session is the **Orchestrator** and must not build;
-  it supervises. This is not optional — a busy orchestrator that burns its
-  whole context on one task leaves the fleet unwatched.
+- **Fleet mode active** (`session.environment` is `vm` or `ci`, or an explicit
+  owner ask — never the skill's presence alone): the receiving session is the
+  **Orchestrator** and must not build; it supervises. This is not optional —
+  a busy orchestrator that burns its whole context on one task leaves the
+  fleet unwatched.
 
 The Orchestrator:
 
@@ -190,6 +191,10 @@ sit red and the fleet looks busy while nothing converges.
    - Red and fixable → dispatch the fix to the same worker session (resume it
      by session id) or to a fresh worker on a live model, with the failing log
      excerpt attached. The fix is a normal task: same worktree, same branch.
+   - In auto mode an owner ask is asynchronous: file it (an issue labeled
+     `owner-ask`, or appended to `.autonomous/owner-asks.md` when `gh` is
+     missing) and continue with work that does not need the answer; per-item
+     consent and the record stay.
    - Red on a protected-path gate → ask the owner per item **and re-ask on
      every subsequent wake until answered**. An ask that is never repeated is
      an ask that never lands.
@@ -290,7 +295,10 @@ sit red and the fleet looks busy while nothing converges.
 ## The owner ask: plain terms, and a record
 
 A gate that needs a human is not a technical question, and an ask written in
-gate jargon does not get answered. When the orchestrator needs a label, a
+gate jargon does not get answered. In `auto` mode, owner asks never block
+execution: file them as an issue labeled `owner-ask` (or append to
+`.autonomous/owner-asks.md` when `gh` is missing) and continue with work
+that does not need the answer. When the orchestrator needs a label, a
 decision, or a change of policy, the ask states **three things in plain
 language**, with no gate vocabulary in them:
 

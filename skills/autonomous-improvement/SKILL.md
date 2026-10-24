@@ -11,19 +11,21 @@ pipeline: read the repo's state first, adapt the plan to what it shows, and
 never run a pass the repo does not need. Every pass produces at most one
 small, evidence-backed PR; no gap is a valid result.
 
-## The first cycle: foundations, then a menu
+## Autonomy resolution
 
-On a fresh invocation, before reaching for any heavy tool:
+Resolve once at the start: on a bare invocation or headless run, choose `auto`;
+on `vm`/`ci` environments (`session.environment`), choose `auto` (fleet allowed);
+on an Explicit task from a person at a keyboard, choose `ask` (at most one question,
+only if survey cannot resolve it, to ask the owner what to improve).
 
-1. **Reconcile docs with reality** (`docs_truth.py check`, stream I): the
-   README, specs, plans, and the code must agree, and every rule must name
-   one authoritative place. Wrong docs cause wrong work in every later pass.
-2. **Audit spec against code**: for every rule the repo claims, find the code
-   that enforces it and the test that would fail if it broke. Rules with no
-   code, no test, or a test that cannot fail are the first findings.
-3. **Derive a ranked menu** — ledger `next --rank risk`, open issues, red CI —
-   and **ask the owner what to improve**. The answer picks the tool; the menu
-   comes from evidence, not from a fixed order.
+In `auto`: run foundation passes (`docs_truth.py check`, spec-audit if SPEC
+exists), run `survey.py`, take `chosen`, run exactly one pass, produce at most
+one PR or issue, record the audit, report, stop. A laptop invocation never loops
+or installs timers; a VM wake repeats at cadence. Respect `.autonomous/STOP`.
+When nothing scores above threshold, the result is `no gap`. Owner asks never
+block in `auto`: file an issue labeled `owner-ask` (or append to
+`.autonomous/owner-asks.md`) and continue. Final report: pass picked and why,
+runner-up, what was filed (links), what needs the owner, not configured skips.
 
 ## Modes: adapt, don't assume
 
