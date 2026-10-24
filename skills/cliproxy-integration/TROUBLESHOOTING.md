@@ -19,6 +19,8 @@ carry the full reasoning.
 | Picker entry shows a raw model ID like `gemini-3.8-flash` | that entry has no `name` field | harmless — the picker falls back to the key; `label-models.py` labels the key |
 | Catalog delta after an edit looks wrong (`+3` for 2 models) | the "before" list was reconstructed, not captured | `curl … /v1/models > before.txt` *before* editing; never retype it from memory |
 | One provider works, sibling provider empty | API-key groups need an explicit `models:` list | enumerate IDs; no auto-discovery exists for them |
+| Picker lists dozens of models you never configured | the provider id matches a models.dev id; that catalog is merged in, ignoring your `models` map | rename the provider id to one absent from models.dev (see wiring ref) |
+| `provider.whitelist` set, catalog still unfiltered | the whitelist does not filter the merged listing (`opencode models` ignores it: 10 whitelisted, 82 listed on the built-in provider) | use a non-colliding provider id; delete the entries you don't want |
 
 ## Streaming assertion / chunk misordering
 
@@ -52,11 +54,30 @@ Read the working client's source for exact header values rather than guessing.
 sending a default UA. Re-verify with a client that truly suppresses it (`curl -H 'User-Agent:'`)
 before concluding anything.
 
+## Upstream 400 names a field you never sent
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| `400` body contains `imagegen deployment must be provided through header: x-ms-oai-image-generation-deployment` (Azure-fronted GPT relays) | the gateway injects an `image_generation` tool/parameter into non-images requests; `multimedia.disable-image-generation` defaults to `false` | set `multimedia.disable-image-generation: "chat"` (strips the injection, keeps `/v1/images/*`; `true` disables those too), restart, retest both `/v1/responses` and `/v1/chat/completions` |
+| Same class, a different field or deployment name | any gateway-injected body field can be the rejected one | find the injection at the gateway and disable or pass it through; never work around it by moving the model to a direct provider |
+
+The tell: the error names a deployment, header, or tool **you never configured** — the
+request the upstream saw is not the request you sent. This exact field broke a Responses-only
+relay's GPT models and sent earlier sessions hunting an auth bug. One `multimedia` value
+fixed both protocol surfaces.
+
+## Request accepted, then silence
+
+| Symptom | Meaning | Action |
+| --- | --- | --- |
+| `/v1/models` answers; invalid/EOL model IDs fail fast (`404 Function not found for account`, `410 Gone`); valid models return **0 bytes for 100–300s** | validation is healthy but the **inference** path is not serving those deployments (queue, cold instance, broken deployment) | run a bare-curl control with the same key. If curl and client both hang while invalid IDs fail fast, the config is fine — wait or switch upstreams. Do not rewrite IDs, limits, or headers, and do not add a direct provider |
+
 ## Quota and pools
 
 | Symptom | Meaning | Action |
 | --- | --- | --- |
 | `429 Individual quota reached` / `RESOURCE_EXHAUSTED` | account allowance spent | wait for reset, or add accounts |
+| `Budget pool quota has been exhausted. Please ask an administrator to increase the limit or select another budget pool.` | the relay's **group budget pool** is spent — not your key's model quota | only the relay operator or a pool reset clears it; rotating keys inside the same pool does nothing. Re-probe later before treating a key as dead — these can recover on their own |
 | Panel says "access available" but requests fail | the **weekly** meter is spent; the short window being green doesn't matter | read both meters |
 | Some models fail, siblings work | quota **groups** — models share an allowance | probe one model per advertised group |
 | `All credentials ... cooling down` | gateway-side state | restart to clear in-memory cooldown, then re-read reality |

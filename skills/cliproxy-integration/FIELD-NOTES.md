@@ -63,6 +63,32 @@ problem immediately.
 Cheap check, high value: before escalating outward, look for a working instance of the same
 integration in your own environment and find out what it does differently.
 
+## The workaround that hid the bug
+
+A relay's GPT models failed through the gateway. The failure was treated as a protocol gap —
+the relay spoke Responses, the client spoke chat — so an earlier session wired the models
+directly into the client instead: its own key copy, limits, and provider block.
+
+It wasn't a protocol gap. The upstream was returning a 400 naming a header nobody had
+configured:
+`imagegen deployment must be provided through header: x-ms-oai-image-generation-deployment`.
+The gateway injects an `image_generation` tool into non-images requests by default, and that
+relay's Azure-backed GPT deployment requires an image deployment for it. One config value
+(`multimedia.disable-image-generation: "chat"`) removed the injection; `/v1/responses` and
+the chat bridge both answered `ok` immediately after.
+
+The bypass cost more than the bug:
+
+- **It hid the evidence.** With the model served outside the gateway, the gateway's error
+  never surfaced again, so the "protocol gap" theory was never contradicted.
+- **It multiplied configuration.** A second key, a second limits table, and a second
+  protocol path — maintained for a fix that turned out to be one line.
+
+**Rules this produced:** a direct client provider is a workaround, never a fix. When a model
+fails through the gateway, fix it at the gateway. If a temporary bypass is unavoidable, name
+its owner and its removal condition so the next session doesn't inherit a silent second
+stack.
+
 ## Probing beats inferring
 
 Several conclusions in this domain are guessable but only measurable with a tiny request. A

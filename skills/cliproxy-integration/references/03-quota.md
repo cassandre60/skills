@@ -43,6 +43,7 @@ Read the failure vocabulary:
 | --- | --- | --- |
 | `429 Individual quota reached` / `RESOURCE_EXHAUSTED` | that account's allowance is spent | wait for reset, or add accounts |
 | an `INSUFFICIENT_*`-style reason with no credits | allowance spent **and** no paid credits to cover overage | credits may help — verify the fallback actually fires |
+| `Budget pool quota has been exhausted. Please ask an administrator to increase the limit or select another budget pool.` | the relay's **group budget pool** is spent — not your key's model quota | only the relay operator or a pool reset clears it; rotating keys inside the same pool does nothing. Re-probe later before treating a key as dead — these can recover on their own |
 | `All credentials for model X are cooling down` | gateway-side state, not upstream truth | restart the service (clears in-memory cooldown) to get an accurate reading |
 | `circuit breaker open` | transient upstream instability | retry with backoff |
 
