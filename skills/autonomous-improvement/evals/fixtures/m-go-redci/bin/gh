@@ -1,0 +1,6 @@
+#!/bin/sh
+# Deterministic stub: one open PR, red in-diff (failure on the head's own sha,
+# not the referee's), so "red_kind" should classify as "in-diff".
+cat <<'JSON'
+[{"number": 7, "title": "Clamp: handle the upper bound", "headRefName": "task/clamp-hi", "headRefOid": "clamp7sha", "checks_sha": "clamp7sha", "statusCheckRollup": [{"name": "go-test", "status": "COMPLETED", "conclusion": "FAILURE"}], "labels": [], "createdAt": "2026-10-24T10:00:00Z"}]
+JSON

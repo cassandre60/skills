@@ -128,6 +128,7 @@ TRIGGER_PROMPTS: typing.Dict[str, typing.List[str]] = {
         "Audit whether our tests could actually fail on a real bug.",
         "Run one improvement round over this repo and show me the weak spots.",
         "Set up an unattended fleet to grind issue triage on free models overnight.",
+        "@autonomous-improvement",
     ],
     "should-not-trigger": [
         "Ship the new login feature.",
@@ -179,6 +180,11 @@ def substitute(text: str, mapping: typing.Dict[str, str]) -> str:
 
 def prepare_repo(fixture: str, work_root: pathlib.Path) -> pathlib.Path:
     src = EVALS_DIR / "fixtures" / fixture
+    if not src.is_dir():
+        # Matrix fixtures split across fixtures/ (dev) and heldout/ (held-out).
+        heldout = EVALS_DIR / "heldout" / fixture
+        if heldout.is_dir():
+            src = heldout
     if not src.is_dir():
         raise SystemExit(f"missing fixture dir: {src}")
     dst = work_root / fixture

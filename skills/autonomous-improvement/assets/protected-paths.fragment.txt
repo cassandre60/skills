@@ -2,3 +2,5 @@
 # A PR touching these edits the referee and needs human approval as a gate-change.
 docs/AUTONOMOUS_WORK_LEDGER.md
 scripts/autonomous/**
+evals/heldout/**
+evals/gates.json

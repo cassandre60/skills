@@ -1,0 +1,11 @@
+{
+  "schema": "matrix-gates/1",
+  "owner_only": true,
+  "note": "Owner-only thresholds. A skill change measured by evals/matrix.py compare passes only if every gate holds: dev mean rises by at least dev_mean_min_delta, zero new hard fails, median tokens at most token_median_max_ratio times baseline, held-out mean not below baseline plus heldout_mean_min_delta.",
+  "gates": {
+    "dev_mean_min_delta": 0.05,
+    "new_hard_fails_max": 0,
+    "token_median_max_ratio": 1.2,
+    "heldout_mean_min_delta": -0.02
+  }
+}

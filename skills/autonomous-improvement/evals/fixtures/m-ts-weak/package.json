@@ -1,0 +1,7 @@
+{
+  "name": "m-ts-weak",
+  "private": true,
+  "scripts": {
+    "test": "node --test test/"
+  }
+}
