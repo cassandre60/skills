@@ -1,0 +1,52 @@
+{
+  "base_ref": "origin/main",
+  "ledger_path": "docs/AUTONOMOUS_WORK_LEDGER.md",
+  "mutant_ledger_path": "docs/AUTONOMOUS_MUTANTS.md",
+  "origin_url": null,
+  "setup_cmds": [],
+  "format_check_cmd": null,
+  "analyze_cmd": null,
+  "analyze_extensions": [".py"],
+  "gate_cmd": ["bash", "-c", "python3 scripts/check_skills.py && scripts/check_discovery.sh && python3 scripts/generate_readme.py --check"],
+  "test_cmd": ["python3", "-m", "unittest", "discover", "-s", "skills/autonomous-improvement/tests", "-p", "test_v2.py"],
+  "mutation_backend": null,
+  "mutation_backends": {},
+  "coverage_report": null,
+  "test_for_source": [
+    {
+      "src": "^skills/autonomous-improvement/scripts/autonomous/([^/]+)\\.py$",
+      "test": "skills/autonomous-improvement/tests/test_v2.py"
+    }
+  ],
+  "candidates": {
+    "A": {
+      "include": ["skills/autonomous-improvement/scripts/autonomous/**/*.py"],
+      "exclude": ["**/__init__.py", "**/__pycache__/**", "**/mutation_rules/**"],
+      "require_test": true,
+      "priority_paths": []
+    },
+    "B": {
+      "include": ["skills/autonomous-improvement/tests/**/*.py"],
+      "exclude": ["**/__pycache__/**"],
+      "priority_paths": []
+    }
+  },
+  "pr_required": {
+    "COMPLETED": true,
+    "SOUND": false
+  },
+  "verify_gate": {
+    "weakening": "fail",
+    "evidence": "warn"
+  },
+  "fleet": {
+    "max_open_prs": 5,
+    "max_new_prs_per_day": 6,
+    "kill_switch_file": ".autonomous/STOP",
+    "harness_cmd": null,
+    "model_ladder": [],
+    "doctor_min_free_gb": 2,
+    "merge_policy": "never",
+    "ledger_mode": "batched"
+  }
+}
