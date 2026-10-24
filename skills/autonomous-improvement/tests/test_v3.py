@@ -50,15 +50,21 @@ class SkillAutonomyTests(unittest.TestCase):
         self.assertIn("not configured", flat)
 
     def test_roles_fleet_conditioned_not_only_instruction(self) -> None:
-        roles = (SKILL_ROOT / "references" / "04-workflow-and-roles.md").read_text(
-            encoding="utf-8"
+        # Flatten so assertions survive markdown re-wrapping ("explicit
+        # \n  owner ask" is the same phrase as "explicit owner ask").
+        roles = " ".join(
+            (SKILL_ROOT / "references" / "04-workflow-and-roles.md")
+            .read_text(encoding="utf-8")
+            .split()
         )
         self.assertNotIn("only instruction", roles)
         self.assertIn("session.environment", roles)
         self.assertIn("explicit owner", roles)
-        unattended = (
-            SKILL_ROOT / "references" / "05-unattended-operation.md"
-        ).read_text(encoding="utf-8")
+        unattended = " ".join(
+            (SKILL_ROOT / "references" / "05-unattended-operation.md")
+            .read_text(encoding="utf-8")
+            .split()
+        )
         self.assertNotIn("only instruction", unattended)
 
 
