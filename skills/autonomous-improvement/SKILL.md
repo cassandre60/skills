@@ -171,6 +171,7 @@ the adapter material there, not in this file.
 | `references/09-session-history-review.md` | The method and evidence bar for skill-improvement proposals |
 | `references/10-toolbox.md` | Per-tool contracts and the lens menu |
 | `references/harness-adapters.md` | Per-harness command table (resume, wake, session model) and verification status |
+| `SPEC.md` | The skill's own rule map: rule, enforcement, failing test; audit it with `docs_truth.py` |
 | `references/gates-and-vocabulary.md` | Gate ids, optional vocabulary, and the "no gates yet" fallback |
 | `references/stack-adapters.md` | Concrete commands per stack |
 | `references/examples.md` | One end-to-end Stream A example and a good/bad Stream B finding |

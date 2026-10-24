@@ -59,6 +59,7 @@ skills/
     CHANGELOG-v2.md
     LICENSE
     README.md
+    SPEC.md
     assets/     # 16 files
     evals/      # 73 files
     examples/   # 2 files
