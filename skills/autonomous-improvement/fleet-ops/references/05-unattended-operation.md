@@ -47,7 +47,7 @@ tokens even with live pools. The timer keeps running; the model does not.
 The canonical per-harness table — every touchpoint (resume, wake,
 session-model read/switch, session-id file, model enumeration, worker
 dispatch, verified/unverified status, and how a row graduates) — lives in
-`references/harness-adapters.md`; the watchdog and wake launcher read all of
+`fleet-ops/references/harness-adapters.md`; the watchdog and wake launcher read all of
 it from environment overrides (`ORCH_RESUME_CMD`, `ORCH_WAKE_CMD`,
 `ORCH_SESSION_ID_FILE`, `ORCH_SESSION_GET_CMD`, `ORCH_SESSION_SET_CMD`,
 `ORCH_AUTHORIZED_PROVIDERS`), so adapting a harness means setting variables,
@@ -63,7 +63,7 @@ anyway.
 
 **The watchdog's role after the switch** (one paragraph, no archaeology):
 with stateless wakes, the timer *starts* a run instead of *resuming* a
-session, so `assets/watchdog.sh`'s session-id file and model ladder become
+session, so `fleet-ops/assets/watchdog.sh`'s session-id file and model ladder become
 optional — keep the script when you run the fallback shape, or when you
 want a wall-clock nudge for a wedged in-run worker. In the stateless shape
 the equivalent liveness check is `fleet.py needs-brain` (did state change?)
@@ -71,7 +71,7 @@ plus the snapshot timer; if you keep the watchdog too, its exit code 3
 (distress) and `OnFailure=` hook remain useful for "every wake is failing",
 and nothing in it reads `wake.json`, so the two cannot fight.
 
-### The launcher: `assets/stateless-wake.sh`
+### The launcher: `fleet-ops/assets/stateless-wake.sh`
 
 The deployable half of this shape. A timer runs it; it starts a **fresh**
 headless run per wake:
@@ -88,7 +88,7 @@ headless run per wake:
 
 Install it next to the timer (e.g. a `systemd --user` timer calling it
 every few minutes) and point `ORCH_WAKE_CMD` at your harness' one-shot form
-from the adapter table above. `tests/stateless_wake_test.sh` exercises it
+from the adapter table above. `fleet-ops/tests/stateless_wake_test.sh` exercises it
 against a stub harness CLI and a stub `gh`.
 
 ## Cold start (fallback: immortal session)
@@ -140,7 +140,7 @@ order:
    tokens and are the only self-wake that needs no helper.
 4. **Watchdog.** If one is deployed but stopped, start it after step 2 —
    it reads the same session-id file. Otherwise install from
-   `assets/install-watchdog.sh`. If neither works, degrade to
+   `fleet-ops/assets/install-watchdog.sh`. If neither works, degrade to
    beats-only and record that in the journal: beats alone keep the loop
    alive; the watchdog is armor, not a requirement.
 4b. **Check the orchestrator's own checkout.** The owner's acceptance runs
@@ -295,7 +295,7 @@ Two counters keep one frozen window cheap:
 
 ## External watchdog: one code path
 
-`assets/watchdog.sh`:
+`fleet-ops/assets/watchdog.sh`:
 
 1. Takes a non-blocking `flock`; if a previous run is active, exits.
 2. Reads `last_beat`; if it is fresh (`ORCH_HB_MAX_AGE`, default 45 min), exits.
@@ -592,7 +592,7 @@ worker stops being optional polish.
 ## Harness notes
 
 The per-harness commands and their verification status moved to
-`references/harness-adapters.md` (one table, one place; the watchdog reads
+`fleet-ops/references/harness-adapters.md` (one table, one place; the watchdog reads
 them from environment overrides). Two facts kept here because they are
 policy, not commands:
 
@@ -775,8 +775,8 @@ commits, no progress for >3h), never by prompting a tab mid-flight.
 ## Snapshot accumulator (no-model evidence)
 
 A second `--user` timer, hourly, that needs no model tokens: run by
-`assets/orchestrator-snapshot.service` and `assets/orchestrator-snapshot.timer`
-(installed automatically alongside the watchdog by `assets/install-watchdog.sh`),
+`fleet-ops/assets/orchestrator-snapshot.service` and `fleet-ops/assets/orchestrator-snapshot.timer`
+(installed automatically alongside the watchdog by `fleet-ops/assets/install-watchdog.sh`),
 invoking `python3 scripts/autonomous/fleet.py snapshot`.
 
 It appends to `snapshots.jsonl` and atomically updates `snapshot.json` with the

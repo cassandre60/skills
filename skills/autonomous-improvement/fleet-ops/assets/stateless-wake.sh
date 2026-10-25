@@ -36,7 +36,7 @@
 # form. Verified for opencode (`opencode run --auto [-m model] "<prompt>"`,
 # `--format json` for machine-readable output; no turn/budget cap flag
 # exists there, so scope the prompt). Claude Code / Codex rows in
-# references/05 are unverified — set ORCH_WAKE_CMD after checking your
+# fleet-ops/references/05 are unverified — set ORCH_WAKE_CMD after checking your
 # installed version, and never pass a resume flag: this shape starts fresh.
 
 set -u
@@ -151,7 +151,7 @@ quota_failure() { grep -E "$ERROR_LINE_RE" "$1" 2>/dev/null | grep -Eiq "$QUOTA_
 
 PROMPT="$(cat "$PROMPT_FILE" 2>/dev/null || true)"
 if [ -z "$PROMPT" ]; then
-  PROMPT="Read references/05-unattended-operation.md §Stateless wake and run one wake: \
+  PROMPT="Read fleet-ops/references/05-unattended-operation.md §Stateless wake and run one wake: \
 read state/*.json + the ledger + the journal tail, act on fleet.py needs-brain's reasons \
 (fix/triage red PRs, drive green PRs to merge), then exit. Do not resume a session."
 fi

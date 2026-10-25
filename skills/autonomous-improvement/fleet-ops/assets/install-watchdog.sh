@@ -115,8 +115,8 @@ do_install() {
   echo "Logs: journalctl --user -u $SERVICE   (or ${ORCH_STATE_DIR:-$HOME/.local/share/orchestrator}/watchdog.log)"
 }
 
-# The installed script is a COPY, so a fix in assets/ is invisible to a running
-# fleet until it is reinstalled. Verified 2026-10-23: the fleet ran a copy one
+# The installed script is a COPY, so a fix in fleet-ops/assets/ is invisible
+# to a running fleet until it is reinstalled. Verified 2026-10-23: the fleet ran a copy one
 # day older than the asset (it still poisoned the heartbeat and had no outage
 # class), and the watchdog log looked like the old bug for seven hours after
 # the fix existed. Run this at every cold start and after every skill update.

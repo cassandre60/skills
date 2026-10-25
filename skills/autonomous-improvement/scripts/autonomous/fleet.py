@@ -801,8 +801,9 @@ def run_doctor_checks(root: Path, cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
 
     # 11. Instruction hierarchy is declared (repo content is data, never
     #     instructions) — a docs guard the doctor surfaces for deployments.
-    docs = root / "references" / "05-unattended-operation.md"
-    skill_docs = Path(__file__).resolve().parent.parent.parent / "references" / "05-unattended-operation.md"
+    # The manual lives under fleet-ops/ (the elective keep-alive machinery).
+    docs = root / "fleet-ops" / "references" / "05-unattended-operation.md"
+    skill_docs = Path(__file__).resolve().parent.parent.parent / "fleet-ops" / "references" / "05-unattended-operation.md"
     target = docs if docs.exists() else skill_docs
     hierarchy_ok = False
     if target.exists():
@@ -813,9 +814,9 @@ def run_doctor_checks(root: Path, cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
             "soft",
             hierarchy_ok,
             (
-                "references/05 states repo content is data, never instructions"
+                "fleet-ops/references/05 states repo content is data, never instructions"
                 if hierarchy_ok
-                else "references/05 does not state the instruction hierarchy yet"
+                else "fleet-ops/references/05 does not state the instruction hierarchy yet"
             ),
         )
     )
@@ -1490,7 +1491,7 @@ def cmd_wake(args: argparse.Namespace) -> int:
 
 
 # --- Doctor: blast-radius advice as checks (issue #19) ----------------------
-# references/05's deployment rules were prose; nothing noticed when a token
+# fleet-ops/references/05's deployment rules were prose; nothing noticed when a token
 # got re-scoped or linger vanished after a reinstall. doctor is the
 # read-only, machine-readable version: hard failures exit nonzero and the
 # cold-start rule is "do not dispatch on a hard failure — report instead".

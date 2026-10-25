@@ -1,5 +1,6 @@
 #!/bin/bash
-# Behavioural test for assets/watchdog.sh — model rotation on a quota error.
+# Behavioural test for fleet-ops/assets/watchdog.sh — model rotation on a
+# quota error.
 #
 # The claim under test: a nudge whose model answers with a quota/balance
 # failure is retried INSIDE THE SAME TICK on the next model of the ladder,
@@ -10,9 +11,10 @@
 # all answered "Rate limit exceeded" and the session stayed frozen for ~8 h
 # while another free model was alive (2026-10-20).
 #
-# Run: bash tests/watchdog_rotation_test.sh
+# Run: bash fleet-ops/tests/watchdog_rotation_test.sh
 set -u
 
+# Relative to this file: fleet-ops/tests/ -> fleet-ops/assets/watchdog.sh.
 ASSETS="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/assets/watchdog.sh"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -482,8 +484,8 @@ fi
 # override (ORCH_RESUME_CMD, ORCH_SESSION_ID_FILE, ORCH_SESSION_GET_CMD,
 # ORCH_SESSION_SET_CMD). This case runs a full rotation with NO `opencode`
 # binary on PATH: a foreign fake harness carries the nudge, answers the
-# model read, and receives the switch. references/harness-adapters.md is
-# the contract this case proves.
+# model read, and receives the switch. fleet-ops/references/harness-adapters.md
+# is the contract this case proves.
 mkdir -p "$TMP/bin2"
 cat >"$TMP/bin2/myagent" <<EOF
 #!/bin/bash

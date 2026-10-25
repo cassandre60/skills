@@ -1,3 +1,7 @@
+> **OUTCOME (2026-10-25):** the owner chose **Option B** and it was executed —
+> the keep-alive set now lives under `fleet-ops/` in this skill. The option
+> text below is historical; its paths describe pre-move locations.
+
 # Proposal: separating the portable engine from the keep-alive machinery (Phase 6)
 
 Status: PROPOSAL ONLY — no file moves. Decision: the owner's (plan Phase 6.3).
@@ -6,11 +10,11 @@ reproduce with the greps listed at the end.
 
 ## The dependency map (facts)
 
-Keep-alive set: `references/05-unattended-operation.md`,
-`references/harness-adapters.md`, `assets/watchdog.sh`,
-`assets/stateless-wake.sh`, `assets/wake.sh`, `assets/snapshot.sh`,
-`assets/install-watchdog.sh`, the six `assets/orchestrator-*.service/.timer`
-units, `tests/watchdog_rotation_test.sh`, `tests/stateless_wake_test.sh`,
+Keep-alive set: references/05-unattended-operation.md,
+references/harness-adapters.md, assets/watchdog.sh,
+assets/stateless-wake.sh, assets/wake.sh, assets/snapshot.sh,
+assets/install-watchdog.sh, the six `assets/orchestrator-*.service/.timer`
+units, tests/watchdog_rotation_test.sh, tests/stateless_wake_test.sh,
 and the unattended subcommands of `fleet.py` (`wake`, `govern`, `doctor`,
 `needs-brain`, `snapshot` — `pr-state`, `stats`, `claim`, `publish` are core).
 

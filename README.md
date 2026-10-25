@@ -60,13 +60,14 @@ skills/
     LICENSE
     README.md
     SPEC.md
-    assets/     # 16 files
+    assets/     # 5 files
     docs/       # 2 files
     evals/      # 149 files
     examples/   # 2 files
-    references/ # 13 files
+    fleet-ops/  # 16 files
+    references/ # 11 files
     scripts/    # 32 files
-    tests/      # 19 files
+    tests/      # 17 files
   cliproxy-integration/
     SKILL.md
     FIELD-NOTES.md
