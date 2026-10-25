@@ -62,11 +62,11 @@ skills/
     SPEC.md
     assets/     # 16 files
     docs/       # 2 files
-    evals/      # 145 files
+    evals/      # 149 files
     examples/   # 2 files
     references/ # 13 files
-    scripts/    # 31 files
-    tests/      # 18 files
+    scripts/    # 32 files
+    tests/      # 19 files
   cliproxy-integration/
     SKILL.md
     FIELD-NOTES.md
