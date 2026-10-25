@@ -91,19 +91,24 @@ lens and one output format** — open-ended asks get generic advice.
 
 ## Install into a repo
 
+No copying: run the scripts from the skill folder against your repo. The
+repo root comes from git in your cwd, and config resolves from
+`.autonomous/config.json` (or the `AUTONOMOUS_CONFIG` env var; the legacy
+`<repo>/scripts/autonomous` copy layout still works). Bootstrap:
+
 ```bash
-cp -r <skill>/scripts/autonomous <repo>/scripts/autonomous
-cp <repo>/scripts/autonomous/config.example.json <repo>/scripts/autonomous/config.json
-cp <skill>/assets/AUTONOMOUS_WORK_LEDGER.template.md <repo>/docs/AUTONOMOUS_WORK_LEDGER.md
+python3 <skill>/scripts/autonomous/onboard.py detect   # stacks, commands, globs
+python3 <skill>/scripts/autonomous/onboard.py write    # .autonomous/config.json
+python3 <skill>/scripts/autonomous/onboard.py verify   # baseline test run once
 ```
 
-Edit the `config.json` copy to name the repo's real test, format, analyze, and
-gate commands. Every command is an **argv array**; a missing key is
-skipped with `[skip] <step> not configured`. Set also the candidate globs and
-the source-to-test mapping — both repo-specific, and an empty candidate list
-now means *not configured* rather than an empty queue. Verify the mapping once
-with `ledger.py next --stream A --limit 3`. See `references/stack-adapters.md`
-for Python, Dart/Flutter, TypeScript/JavaScript, and Go examples.
+Every command is an **argv array**; a missing key is skipped with
+`[skip] <step> not configured`. Hand-edit for candidate globs and the
+source-to-test mapping (empty candidates mean *not configured*, not an
+empty queue; check with `ledger.py next --stream A --limit 3`), and see
+`references/stack-adapters.md` for Python, Dart/Flutter, TypeScript, and Go
+examples. The ledger is `docs/AUTONOMOUS_WORK_LEDGER.md` (copy from
+`assets/AUTONOMOUS_WORK_LEDGER.template.md`).
 
 ## Quick start (a round)
 

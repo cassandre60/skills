@@ -1220,6 +1220,20 @@ def cmd_stats(args: argparse.Namespace) -> int:
         "by_model": by_model,
     }
 
+    decided = total_merged + total_closed_unmerged
+    incidents = _referee_incidents(root)
+    try:
+        from conventions import eligible_for_t2
+
+        t2_eligible, t2_reason = eligible_for_t2(acceptance_rate, decided, incidents)
+    except Exception:  # conventions helper absent: same floor, computed inline
+        t2_eligible = decided >= 10 and incidents == 0 and acceptance_rate >= 0.6
+        t2_reason = f"decided={decided} incidents={incidents} rate={round(acceptance_rate, 3)}"
+    stats_dict["decided_items"] = decided
+    stats_dict["referee_incidents"] = incidents
+    stats_dict["t2_eligible"] = bool(t2_eligible)
+    stats_dict["t2_reason"] = t2_reason
+
     if args.json:
         print(json.dumps(stats_dict, indent=2))
         return EXIT_OK
@@ -1230,6 +1244,11 @@ def cmd_stats(args: argparse.Namespace) -> int:
         f"({total_merged} merged, {total_closed_unmerged} closed-unmerged)"
     )
     print(f"- **Total PRs Opened**: {total_opened}")
+    if t2_eligible:
+        print(
+            "- **Trust tier**: eligible for T2 promotion (owner decision; "
+            "fleet.py never promotes itself)"
+        )
     print(f"- **Median CI Iterations**: {median_iterations}")
     if by_stream:
         print("\n### By Stream")
@@ -1753,12 +1772,52 @@ def _publish_issues(root: Path, args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _ai_policy_hit(root: Path) -> bool:
+    """True when the repo's own docs forbid AI-generated contributions.
+
+    Guarded import: conventions.py is a sibling script; when it is absent or
+    unreadable the trust tier alone decides.
+    """
+    try:
+        import conventions
+
+        return bool(conventions.read_conventions(root).get("ai_policy", {}).get("found"))
+    except Exception:  # missing helper, missing gh, unreadable docs: never crash publish
+        return False
+
+
+def _referee_incidents(root: Path) -> int:
+    """Owner-maintained incident count (.autonomous/referee-incidents.txt)."""
+    path = root / ".autonomous" / "referee-incidents.txt"
+    if not path.is_file():
+        return 0
+    try:
+        return int((path.read_text(encoding="utf-8").strip() or "0"))
+    except ValueError:
+        return 0
+
+
 def cmd_publish(args: argparse.Namespace) -> int:
     root = repo_root()
     if args.issues_from:
         return _publish_issues(root, args)
     if args.pr is None:
         raise UsageError("publish needs --pr <num> or --issues-from <engine.json>")
+
+    cfg = load_config(root, args.config)
+    tier = (cfg.get("trust") or {}).get("tier")
+    policy_hit = _ai_policy_hit(root)
+    if tier == "T1" or policy_hit:
+        detail = (
+            "; this repo's AI-contribution policy forces issue mode"
+            if policy_hit and tier != "T1"
+            else ""
+        )
+        raise UsageError(
+            f"trust tier {tier or 'T1 (policy)'}: publish is issue-mode only "
+            f"(--issues-from){detail}. Promotion to T2 is the owner's; "
+            "`fleet.py stats` reports eligibility."
+        )
 
     from evidence import validate_evidence_file
 

@@ -240,9 +240,24 @@ def _deep_merge(defaults: Dict[str, Any], override: Dict[str, Any]) -> Dict[str,
 
 
 def config_path(root: Path, explicit: Optional[str] = None) -> Path:
+    """Where this repo's autonomous config lives.
+
+    Lookup order: the --config flag, then the AUTONOMOUS_CONFIG env var, then
+    the canonical ``<repo>/.autonomous/config.json`` when it exists, then the
+    legacy ``<repo>/scripts/autonomous/config.json`` copy layout (kept
+    working). ``root`` always comes from git in the current directory, never
+    from this script's location.
+    """
     if explicit:
         path = Path(explicit)
         return path if path.is_absolute() else (Path.cwd() / path).resolve()
+    env = os.environ.get("AUTONOMOUS_CONFIG")
+    if env:
+        path = Path(env)
+        return path if path.is_absolute() else (Path.cwd() / path).resolve()
+    modern = root / ".autonomous" / "config.json"
+    if modern.exists():
+        return modern
     return root / "scripts" / "autonomous" / "config.json"
 
 
@@ -251,6 +266,10 @@ def load_config(root: Path, explicit: Optional[str] = None) -> Dict[str, Any]:
     if not path.exists():
         if explicit:
             raise UsageError(f"config not found: {path}")
+        if os.environ.get("AUTONOMOUS_CONFIG"):
+            raise UsageError(
+                f"config not found: {path} (AUTONOMOUS_CONFIG points there)"
+            )
         return _deep_merge(DEFAULT_CONFIG, {})
     try:
         with open(path, "r", encoding="utf-8") as handle:
@@ -437,7 +456,13 @@ def candidate_paths(root: Path, cfg: Dict[str, Any], stream: str) -> List[str]:
     exclude = section.get("exclude") or []
     if not include:
         path = config_path(root, None)
-        where = f" (no config file at {path})" if not path.exists() else ""
+        where = (
+            f" (no config file at {path}; looked for .autonomous/config.json "
+            "and scripts/autonomous/config.json, and AUTONOMOUS_CONFIG is "
+            "unset)"
+            if not path.exists()
+            else ""
+        )
         raise UsageError(
             f"no candidates configured for stream {stream}: set "
             f"candidates.{stream}.include in {path}{where}. "

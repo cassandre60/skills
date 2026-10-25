@@ -22,18 +22,23 @@ for example:
 cp -r autonomous-improvement ~/.config/opencode/skills/autonomous-improvement
 ```
 
-To use the scripts inside a target repo:
+To use it inside a target repo, run the scripts from the skill folder — no
+copying into the repo (the repo root comes from git in your cwd):
 
 ```sh
-cp -r <skill>/scripts/autonomous <repo>/scripts/autonomous
-cp <repo>/scripts/autonomous/config.example.json <repo>/scripts/autonomous/config.json
+python3 <skill>/scripts/autonomous/onboard.py detect
+python3 <skill>/scripts/autonomous/onboard.py write    # <repo>/.autonomous/config.json
+python3 <skill>/scripts/autonomous/onboard.py verify   # baseline test run once
 mkdir -p <repo>/docs
 cp <skill>/assets/AUTONOMOUS_WORK_LEDGER.template.md <repo>/docs/AUTONOMOUS_WORK_LEDGER.md
 ```
 
-Edit the `config.json` copy. Every project-specific command lives there as an
-argv array; no project-specific test runner, remote, or path is
-hardcoded. Then follow the Quick Start in `SKILL.md`.
+Config resolution order: `--config`, the `AUTONOMOUS_CONFIG` env var,
+`<repo>/.autonomous/config.json`, then the legacy
+`<repo>/scripts/autonomous/config.json` copy (still supported). Every
+project-specific command lives in the config as an argv array; no
+project-specific test runner, remote, or path is hardcoded. Then follow the
+Quick Start in `SKILL.md`.
 
 ## What is in the folder
 
