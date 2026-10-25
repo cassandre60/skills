@@ -385,22 +385,23 @@ def survey_repo(
     except Exception:
         cfg = {}
 
-    # Load profile priors
+    # Load profile priors (flat {tool: prior} map written by profile.py;
+    # a missing profile leaves every prior at the neutral 1.0) and the
+    # suppression list (3 consecutive rejections ⇒ 30 days, per profile.py).
     priors: dict[str, float] = {}
-    if profile_path and profile_path.is_file():
+    suppressed: set[str] = set()
+    profile_source = (
+        profile_path
+        if profile_path and profile_path.is_file()
+        else (root / ".autonomous" / "profile.json" if (root / ".autonomous" / "profile.json").is_file() else None)
+    )
+    if profile_source is not None:
         try:
-            pdata = json.loads(profile_path.read_text(encoding="utf-8"))
+            pdata = json.loads(profile_source.read_text(encoding="utf-8"))
             priors = pdata.get("priors", {})
+            suppressed = set(pdata.get("suppressed", []))
         except Exception:
             pass
-    else:
-        prof_cand = root / ".autonomous" / "profile.json"
-        if prof_cand.is_file():
-            try:
-                pdata = json.loads(prof_cand.read_text(encoding="utf-8"))
-                priors = pdata.get("priors", {})
-            except Exception:
-                pass
 
     # Gather signals
     red_ci_strength, red_ci_sigs = check_red_ci(root)
@@ -425,6 +426,8 @@ def survey_repo(
 
     picks: list[dict[str, Any]] = []
     for tool, meta in TOOL_METADATA.items():
+        if tool in suppressed:
+            continue  # suppressed in this repo (3 consecutive rejections, 30 days)
         stream_letter = meta["stream"]
         # Skip if stream absent in common.py STREAMS registry
         if STREAMS and stream_letter in STREAMS:

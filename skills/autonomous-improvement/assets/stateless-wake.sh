@@ -132,6 +132,17 @@ failed_recently() { # $1: model id
 
 mark_failed() { printf '%s %s\n' "$1" "$(date +%s)" >>"$FAIL_FILE"; }
 
+# Fallback run record (plan 5.1): counts and exit codes only, written even
+# when the model forgets or dies. Absent runrecord.py (older installs) or
+# any failure here must never affect the wake itself.
+record_wake() { # $1 = exit code, $2 = duration s, $3 = model label
+  ( cd "$REPO" && python3 scripts/autonomous/runrecord.py write \
+    --source stateless-wake --autonomy auto --environment "${ORCH_ENVIRONMENT:-vm}" \
+    --harness wake-launcher --model "${3:-}" \
+    --outcome "$( [ "$1" -eq 0 ] && echo wake-complete || echo wake-failed )" \
+    --exit-code "$1" --wall-s "$2" ) >>"$LOG" 2>&1 || true
+}
+
 # Error-line anchored quota signatures: a success that merely mentions
 # limits must not park its model (issue #19 lesson, shared here).
 ERROR_LINE_RE='^[[:space:]]*(Error|ERROR|error)\b|^[[:space:]]*HTTP[[:space:]]*429|^[[:space:]]*429[[:space:]]|curl: \(22\)|^[[:space:]]*[A-Za-z]+Error:'
@@ -163,6 +174,7 @@ echo "$(date -Is) DBG me=$0 sha=$(sha256sum "$0" | cut -c1-12) n=${#candidates[@
 echo "$(date -Is) candidates: ${candidates[*]:-<harness-default>}" >>"$LOG"
 OUT="$STATE_DIR/wake.out"
 attempt=0
+WAKE_START=$(date +%s)
 for model in "${candidates[@]}"; do
   attempt=$(( attempt + 1 ))
   label="${model:-harness-default}"
@@ -177,6 +189,7 @@ for model in "${candidates[@]}"; do
     continue
   fi
   echo "$(date -Is) wake on '$label' finished with exit $RC; done" >>"$LOG"
+  record_wake "$RC" "$(( $(date +%s) - WAKE_START ))" "$label"
   exit 0
 done
 
@@ -192,4 +205,5 @@ if path.is_file():
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 PY
 echo "$(date -Is) every attempted model failed; digest cleared for retry; exiting 3 (total failure)" >>"$LOG"
+record_wake 3 "$(( $(date +%s) - WAKE_START ))" ""
 exit 3

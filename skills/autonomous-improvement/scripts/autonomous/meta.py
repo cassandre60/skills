@@ -357,8 +357,73 @@ def cmd_replay(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+TOOL_TO_STREAM = {
+    "mutation": "A",
+    "adversarial": "B",
+    "fuzz": "C",
+    "defect-repair": "E",
+    "flake": "F",
+    "performance": "G",
+    "security": "H",
+    "docs-reconcile": "I",
+    "simplification": "J",
+}
+
+
+def records_to_history_rows(records_dir: Path) -> List[Dict[str, Any]]:
+    """Convert run-record/1 files into fleet-history/1 row shape.
+
+    Counts and ids only, like the records themselves: value/costs the
+    record cannot know are 0, never invented.
+    """
+    rows: List[Dict[str, Any]] = []
+    for path in sorted(records_dir.glob("rr-*.json")):
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        verdict = str(record.get("verdict") or "").strip().lower()
+        if verdict in ("merged", "accepted"):
+            outcome = "accepted"
+        elif verdict in ("closed", "ignored"):
+            outcome = "rejected"
+        else:
+            outcome = "open"
+        rows.append(
+            {
+                "id": record.get("id"),
+                "stream": TOOL_TO_STREAM.get(str(record.get("chosen") or ""), "?"),
+                "kind": str(record.get("source") or record.get("outcome") or "run"),
+                "files_touched": len(record.get("artifacts") or []),
+                "value": 0,
+                "owner_minutes": 0,
+                "ci_minutes": 0,
+                "tokens": int(record.get("tokens") or 0),
+                "outcome": outcome,
+            }
+        )
+    return rows
+
+
 def cmd_lessons(args: argparse.Namespace) -> int:
     root = Path.cwd()
+    if args.records:
+        records_dir = (
+            Path(args.records)
+            if Path(args.records).is_absolute()
+            else root / args.records
+        )
+        if not records_dir.is_dir():
+            raise Fatal(f"records dir not found: {records_dir}")
+        payload = {
+            "schema": "fleet-history/1",
+            "recorded_session": "run-records",
+            "rows": records_to_history_rows(records_dir),
+        }
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0
+    if not args.fixture_dir:
+        raise Fatal("lessons needs --fixture-dir (lessons.json) or --records (run records)")
     cfg = load_config(root, args.config)
     problem = kill_switch_problem(root, cfg)
     if problem:
@@ -418,8 +483,9 @@ def main() -> int:
     replay_p.add_argument("--json", action="store_true")
     replay_p.set_defaults(func=cmd_replay)
 
-    lessons_p = sub.add_parser("lessons", help="demote expired or evidence-free lessons")
-    lessons_p.add_argument("--fixture-dir", required=True, help="directory holding lessons.json")
+    lessons_p = sub.add_parser("lessons", help="demote expired lessons, or convert run records to history rows")
+    lessons_p.add_argument("--fixture-dir", default=None, help="directory holding lessons.json (or use --records)")
+    lessons_p.add_argument("--records", default=None, help="run-records dir: emit fleet-history/1 rows instead")
     lessons_p.add_argument("--as-of", help="digest date override for deterministic runs")
     lessons_p.add_argument("--config", help="path to config.json (default: scripts/autonomous/config.json)")
     lessons_p.add_argument("--json", action="store_true")

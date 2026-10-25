@@ -1,0 +1,1726 @@
+{
+  "pins": [
+    {
+      "case": null,
+      "class": "SelfImproveTests",
+      "file": "tests/test_selfimprove.py",
+      "pin": "UNVERIFIABLE",
+      "test": "test_evaluate_fails_without_recorded_matrix"
+    },
+    {
+      "case": "E7-8-protected-row",
+      "class": "SelfImproveTests",
+      "file": "tests/test_selfimprove.py",
+      "pin": "one change",
+      "test": "test_propose_lists_protocol_and_never_spends"
+    },
+    {
+      "case": "E8-1-bare-invocation",
+      "class": "SelfImproveTests",
+      "file": "tests/test_selfimprove.py",
+      "pin": "protected path",
+      "test": "test_protected_diff_is_refused_before_application"
+    },
+    {
+      "case": null,
+      "class": "SelfImproveTests",
+      "file": "tests/test_selfimprove.py",
+      "pin": "refused",
+      "test": "test_protected_diff_is_refused_before_application"
+    },
+    {
+      "case": null,
+      "class": "SelfImproveTests",
+      "file": "tests/test_selfimprove.py",
+      "pin": "owner-only",
+      "test": "test_reference_08_contract_diff_is_owner_only"
+    },
+    {
+      "case": null,
+      "class": "WorkerLifecycleContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "DEAD_MODEL_RE",
+      "test": "test_a_dead_model_is_its_own_failure_class"
+    },
+    {
+      "case": "E7-6-quota-rotation",
+      "class": "WorkerLifecycleContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "dead model",
+      "test": "test_a_dead_model_is_its_own_failure_class"
+    },
+    {
+      "case": null,
+      "class": "WorkerLifecycleContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "before touching its worktree",
+      "test": "test_a_dead_tabs_untracked_work_is_preserved"
+    },
+    {
+      "case": null,
+      "class": "WorkerLifecycleContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "dirty and untracked",
+      "test": "test_a_dead_tabs_untracked_work_is_preserved"
+    },
+    {
+      "case": null,
+      "class": "MutationMeasurementContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "hand-curated supplement",
+      "test": "test_a_hand_curated_supplement_is_required"
+    },
+    {
+      "case": null,
+      "class": "MutationMeasurementContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "kill criterion",
+      "test": "test_a_hand_curated_supplement_is_required"
+    },
+    {
+      "case": null,
+      "class": "WorkerLifecycleContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "current_session_model",
+      "test": "test_a_healthy_session_model_is_not_overridden"
+    },
+    {
+      "case": null,
+      "class": "WorkerLifecycleContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "never override a model that is already working",
+      "test": "test_a_healthy_session_model_is_not_overridden"
+    },
+    {
+      "case": "E7-1-weak-test",
+      "class": "SkillImprovementCadenceTests",
+      "file": "tests/test_v2.py",
+      "pin": "evidence",
+      "test": "test_a_proposal_carries_evidence_scope_and_the_rule"
+    },
+    {
+      "case": "E7-19-oracle-bump",
+      "class": "SkillImprovementCadenceTests",
+      "file": "tests/test_v2.py",
+      "pin": "scope",
+      "test": "test_a_proposal_carries_evidence_scope_and_the_rule"
+    },
+    {
+      "case": null,
+      "class": "SkillImprovementCadenceTests",
+      "file": "tests/test_v2.py",
+      "pin": "the rule it would have prevented",
+      "test": "test_a_proposal_carries_evidence_scope_and_the_rule"
+    },
+    {
+      "case": null,
+      "class": "SkillImprovementCadenceTests",
+      "file": "tests/test_v2.py",
+      "pin": "never a pr the fleet can merge",
+      "test": "test_a_referee_change_is_an_issue_not_a_pr"
+    },
+    {
+      "case": null,
+      "class": "WorkerLifecycleContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "\"$RC\" -eq 124",
+      "test": "test_a_timeout_is_judged_by_the_heartbeat"
+    },
+    {
+      "case": null,
+      "class": "WorkerLifecycleContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "judged by the heartbeat",
+      "test": "test_a_timeout_is_judged_by_the_heartbeat"
+    },
+    {
+      "case": null,
+      "class": "ValidateTests",
+      "file": "tests/test_v2.py",
+      "pin": "every row is visible",
+      "test": "test_a_well_formed_ledger_validates_clean"
+    },
+    {
+      "case": null,
+      "class": "EvalHarnessTests",
+      "file": "tests/test_v2.py",
+      "pin": "agent-only",
+      "test": "test_agent_only_case_still_runs_setup"
+    },
+    {
+      "case": null,
+      "class": "WorkerLifecycleContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "ORCH_RETRY_AFTER_EXHAUSTION",
+      "test": "test_an_exhausted_tick_does_not_flood_the_session"
+    },
+    {
+      "case": null,
+      "class": "WorkerLifecycleContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "must not flood the session",
+      "test": "test_an_exhausted_tick_does_not_flood_the_session"
+    },
+    {
+      "case": null,
+      "class": "WorkerLifecycleContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "OUTAGE_RE",
+      "test": "test_an_outage_does_not_rotate_or_park_a_pool"
+    },
+    {
+      "case": null,
+      "class": "WorkerLifecycleContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "do not rotate, do not park a pool",
+      "test": "test_an_outage_does_not_rotate_or_park_a_pool"
+    },
+    {
+      "case": null,
+      "class": "WorkerLifecycleContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "exit status is the contract",
+      "test": "test_an_unclassified_non_zero_exit_still_rotates"
+    },
+    {
+      "case": null,
+      "class": "WorkerLifecycleContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "if [ \"$RC\" -ne 0 ]",
+      "test": "test_an_unclassified_non_zero_exit_still_rotates"
+    },
+    {
+      "case": null,
+      "class": "MutationEngineTests",
+      "file": "tests/test_v2.py",
+      "pin": "sregex",
+      "test": "test_backend_auto_falls_back_to_regex"
+    },
+    {
+      "case": null,
+      "class": "VerdictReliabilityTests",
+      "file": "tests/test_v2.py",
+      "pin": "stryker report not found",
+      "test": "test_backend_auto_notes_fallback"
+    },
+    {
+      "case": null,
+      "class": "EvidenceTests",
+      "file": "tests/test_v2.py",
+      "pin": "cannot resolve",
+      "test": "test_base_sha_hard_fails_when_base_ref_does_not_resolve"
+    },
+    {
+      "case": null,
+      "class": "GitRealityContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "Batch the fleet's own deliveries",
+      "test": "test_batched_deliveries_are_named"
+    },
+    {
+      "case": null,
+      "class": "GitRealityContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "one commit per change",
+      "test": "test_batched_deliveries_are_named"
+    },
+    {
+      "case": null,
+      "class": "GitRealityContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "git diff origin/main...HEAD --stat",
+      "test": "test_branch_inheritance_is_named"
+    },
+    {
+      "case": null,
+      "class": "GitRealityContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "inherits that worktree's commits",
+      "test": "test_branch_inheritance_is_named"
+    },
+    {
+      "case": "E7-19-oracle-bump",
+      "class": "SecurityStreamTests",
+      "file": "tests/test_v2.py",
+      "pin": "risk note",
+      "test": "test_bump_green_records_evidence_and_does_not_edit_repo"
+    },
+    {
+      "case": null,
+      "class": "SecurityStreamTests",
+      "file": "tests/test_v2.py",
+      "pin": "## Breakage",
+      "test": "test_bump_red_becomes_issue_artifact_without_pr"
+    },
+    {
+      "case": null,
+      "class": "SecurityStreamTests",
+      "file": "tests/test_v2.py",
+      "pin": "3.0.0",
+      "test": "test_bump_red_becomes_issue_artifact_without_pr"
+    },
+    {
+      "case": null,
+      "class": "SecurityStreamTests",
+      "file": "tests/test_v2.py",
+      "pin": "pip install",
+      "test": "test_bump_red_becomes_issue_artifact_without_pr"
+    },
+    {
+      "case": null,
+      "class": "StatelessWakeTests",
+      "file": "tests/test_v2.py",
+      "pin": "green-unmerged-pr #7",
+      "test": "test_changed_snapshot_reopens_the_wake"
+    },
+    {
+      "case": null,
+      "class": "EvidenceTests",
+      "file": "tests/test_v2.py",
+      "pin": "source changed",
+      "test": "test_check_rejects_artifact_after_source_changes"
+    },
+    {
+      "case": null,
+      "class": "WorkerLifecycleContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "no EnvironmentFile=",
+      "test": "test_check_reports_a_unit_that_cannot_see_the_env_file"
+    },
+    {
+      "case": null,
+      "class": "FleetClaimPublishTests",
+      "file": "tests/test_v2.py",
+      "pin": "--draft",
+      "test": "test_claim_opens_one_draft_pr_and_refuses_claimed_target"
+    },
+    {
+      "case": null,
+      "class": "OrchestratorTests",
+      "file": "tests/test_v2.py",
+      "pin": "not created by this tool",
+      "test": "test_cleanup_refuses_dirty_unpushed_unregistered"
+    },
+    {
+      "case": null,
+      "class": "OrchestratorTests",
+      "file": "tests/test_v2.py",
+      "pin": "uncommitted",
+      "test": "test_cleanup_refuses_dirty_unpushed_unregistered"
+    },
+    {
+      "case": null,
+      "class": "OrchestratorTests",
+      "file": "tests/test_v2.py",
+      "pin": "unpushed",
+      "test": "test_cleanup_refuses_dirty_unpushed_unregistered"
+    },
+    {
+      "case": null,
+      "class": "ValidateTests",
+      "file": "tests/test_v2.py",
+      "pin": "more than one hash",
+      "test": "test_compound_target_and_hash_cells_are_invisible"
+    },
+    {
+      "case": null,
+      "class": "ValidateTests",
+      "file": "tests/test_v2.py",
+      "pin": "more than one path",
+      "test": "test_compound_target_and_hash_cells_are_invisible"
+    },
+    {
+      "case": null,
+      "class": "OwnerAskContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "consent is per item",
+      "test": "test_consent_is_per_item"
+    },
+    {
+      "case": null,
+      "class": "OwnerAskContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "standing consent",
+      "test": "test_consent_is_per_item"
+    },
+    {
+      "case": null,
+      "class": "ValidateTests",
+      "file": "tests/test_v2.py",
+      "pin": "COMPLETED (second round",
+      "test": "test_decorated_status_makes_a_row_invisible"
+    },
+    {
+      "case": null,
+      "class": "ValidateTests",
+      "file": "tests/test_v2.py",
+      "pin": "invisible",
+      "test": "test_decorated_status_makes_a_row_invisible"
+    },
+    {
+      "case": "E7-19-oracle-bump",
+      "class": "SecurityStreamTests",
+      "file": "tests/test_v2.py",
+      "pin": "vulnerable-lib",
+      "test": "test_dep_audit_flags_only_vulnerable_stubs"
+    },
+    {
+      "case": "E7-19-oracle-bump",
+      "class": "SecurityStreamTests",
+      "file": "tests/test_v2.py",
+      "pin": "deduped",
+      "test": "test_dep_run_twice_dedups_to_noop"
+    },
+    {
+      "case": null,
+      "class": "EvalHarnessTests",
+      "file": "tests/test_v2.py",
+      "pin": "1 passed",
+      "test": "test_deterministic_runs_without_git_identity"
+    },
+    {
+      "case": null,
+      "class": "MutationEngineTests",
+      "file": "tests/test_v2.py",
+      "pin": "uncommitted changes",
+      "test": "test_dirty_source_refused"
+    },
+    {
+      "case": "E7-11-perf-differential",
+      "class": "PerfGateTests",
+      "file": "tests/test_v2.py",
+      "pin": "differential",
+      "test": "test_does_less_is_rejected_by_differential_half"
+    },
+    {
+      "case": "E7-12-l4-proposal-issue-only",
+      "class": "PerfGateTests",
+      "file": "tests/test_v2.py",
+      "pin": "rejected",
+      "test": "test_does_less_is_rejected_by_differential_half"
+    },
+    {
+      "case": "E8-1-bare-invocation",
+      "class": "ConfigGuardTests",
+      "file": "tests/test_v2.py",
+      "pin": "not configured",
+      "test": "test_empty_include_is_a_named_configuration_error"
+    },
+    {
+      "case": null,
+      "class": "WorkerLifecycleContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "ALERT_FILE",
+      "test": "test_exhaustion_leaves_an_out_of_band_alert"
+    },
+    {
+      "case": null,
+      "class": "WorkerLifecycleContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "alert.md",
+      "test": "test_exhaustion_leaves_an_out_of_band_alert"
+    },
+    {
+      "case": null,
+      "class": "MutationEngineTests",
+      "file": "tests/test_v2.py",
+      "pin": "unsupported source extension",
+      "test": "test_exit_codes"
+    },
+    {
+      "case": null,
+      "class": "StreamLTests",
+      "file": "tests/test_v2.py",
+      "pin": "re-validate",
+      "test": "test_expired_lessons_are_demoted"
+    },
+    {
+      "case": null,
+      "class": "FlakeStreamTests",
+      "file": "tests/test_v2.py",
+      "pin": "same_sha",
+      "test": "test_finder_mines_mixed_outcome_history"
+    },
+    {
+      "case": null,
+      "class": "FlakeStreamTests",
+      "file": "tests/test_v2.py",
+      "pin": "tests/test_counter_flake.py",
+      "test": "test_finder_mines_mixed_outcome_history"
+    },
+    {
+      "case": null,
+      "class": "FlakeStreamTests",
+      "file": "tests/test_v2.py",
+      "pin": "tests/test_waiter.py",
+      "test": "test_finder_static_scan_flags_flake_idioms_only"
+    },
+    {
+      "case": null,
+      "class": "FlakeStreamTests",
+      "file": "tests/test_v2.py",
+      "pin": "time.sleep",
+      "test": "test_finder_static_scan_flags_flake_idioms_only"
+    },
+    {
+      "case": null,
+      "class": "StatelessWakeTests",
+      "file": "tests/test_v2.py",
+      "pin": "red-pr #7",
+      "test": "test_first_wake_needs_brain_and_records_state"
+    },
+    {
+      "case": null,
+      "class": "ConfigGuardTests",
+      "file": "tests/test_v2.py",
+      "pin": "No candidate path matched",
+      "test": "test_globs_that_match_nothing_are_reported_as_a_configuration_problem"
+    },
+    {
+      "case": "E7-13-l3-proposal-replay-draft",
+      "class": "StreamLTests",
+      "file": "tests/test_v2.py",
+      "pin": "40.0",
+      "test": "test_good_proposal_passes_replay_with_before_after_draft"
+    },
+    {
+      "case": "E7-18-secret-scan",
+      "class": "StreamLTests",
+      "file": "tests/test_v2.py",
+      "pin": "draft",
+      "test": "test_good_proposal_passes_replay_with_before_after_draft"
+    },
+    {
+      "case": null,
+      "class": "FleetTests",
+      "file": "tests/test_v2.py",
+      "pin": "14d",
+      "test": "test_govern_enforces_acceptance_floor"
+    },
+    {
+      "case": "E7-13-l3-proposal-replay-draft",
+      "class": "FleetTests",
+      "file": "tests/test_v2.py",
+      "pin": "acceptance",
+      "test": "test_govern_enforces_acceptance_floor"
+    },
+    {
+      "case": null,
+      "class": "FleetTests",
+      "file": "tests/test_v2.py",
+      "pin": "5 >= 5",
+      "test": "test_govern_enforces_wip_cap_and_kill_switch"
+    },
+    {
+      "case": null,
+      "class": "FleetTests",
+      "file": "tests/test_v2.py",
+      "pin": "kill switch",
+      "test": "test_govern_enforces_wip_cap_and_kill_switch"
+    },
+    {
+      "case": null,
+      "class": "DoctorTests",
+      "file": "tests/test_v2.py",
+      "pin": "doctor",
+      "test": "test_govern_refuses_to_dispatch_when_doctor_is_enforced"
+    },
+    {
+      "case": "E7-15-j-dead-code",
+      "class": "StreamLTests",
+      "file": "tests/test_v2.py",
+      "pin": "before",
+      "test": "test_groundless_claim_is_rejected_by_replay"
+    },
+    {
+      "case": null,
+      "class": "StatelessWakeTests",
+      "file": "tests/test_v2.py",
+      "pin": "queue-idle",
+      "test": "test_idle_queue_is_a_reason_to_generate"
+    },
+    {
+      "case": null,
+      "class": "WatchdogTests",
+      "file": "tests/test_v2.py",
+      "pin": "EnvironmentFile=",
+      "test": "test_installer_completes_and_wires_env_file"
+    },
+    {
+      "case": null,
+      "class": "WatchdogTests",
+      "file": "tests/test_v2.py",
+      "pin": "ORCH_MODEL_LADDER",
+      "test": "test_installer_completes_and_wires_env_file"
+    },
+    {
+      "case": null,
+      "class": "WatchdogTests",
+      "file": "tests/test_v2.py",
+      "pin": "wake.sh",
+      "test": "test_installer_completes_and_wires_env_file"
+    },
+    {
+      "case": null,
+      "class": "WatchdogTests",
+      "file": "tests/test_v2.py",
+      "pin": "watchdog.env",
+      "test": "test_installer_completes_and_wires_env_file"
+    },
+    {
+      "case": null,
+      "class": "RepairStreamTests",
+      "file": "tests/test_v2.py",
+      "pin": "zero code changes were made",
+      "test": "test_intake_bounces_missing_facts_zero_diff"
+    },
+    {
+      "case": "E7-3-dedup-second-run",
+      "class": "RepairStreamTests",
+      "file": "tests/test_v2.py",
+      "pin": "candidate",
+      "test": "test_intake_names_expected_and_actual"
+    },
+    {
+      "case": null,
+      "class": "RepairStreamTests",
+      "file": "tests/test_v2.py",
+      "pin": "median([1, 2, 3, 4]) == 3",
+      "test": "test_intake_names_expected_and_actual"
+    },
+    {
+      "case": null,
+      "class": "RiskRankingTests",
+      "file": "tests/test_v2.py",
+      "pin": "mentioned-in-issue-#88",
+      "test": "test_issue_intake_outranks_higher_score"
+    },
+    {
+      "case": null,
+      "class": "StreamLTests",
+      "file": "tests/test_v2.py",
+      "pin": "STOP-STREAM-L",
+      "test": "test_kill_switch_is_independent_of_the_fleet_switch"
+    },
+    {
+      "case": "E7-12-l4-proposal-issue-only",
+      "class": "StreamLTests",
+      "file": "tests/test_v2.py",
+      "pin": "L4",
+      "test": "test_l4_touching_proposal_is_issue_only_even_if_numbers_pass"
+    },
+    {
+      "case": null,
+      "class": "StreamLTests",
+      "file": "tests/test_v2.py",
+      "pin": "issue-only",
+      "test": "test_l4_touching_proposal_is_issue_only_even_if_numbers_pass"
+    },
+    {
+      "case": null,
+      "class": "DoctorTests",
+      "file": "tests/test_v2.py",
+      "pin": "elective",
+      "test": "test_laptop_profile_with_live_timer_warns_about_elective_machinery"
+    },
+    {
+      "case": null,
+      "class": "LedgerTests",
+      "file": "tests/test_v2.py",
+      "pin": "legacy",
+      "test": "test_legacy_hash_matches_source"
+    },
+    {
+      "case": null,
+      "class": "MutationEngineTests",
+      "file": "tests/test_v2.py",
+      "pin": "another mutation run owns",
+      "test": "test_live_lock_aborts"
+    },
+    {
+      "case": null,
+      "class": "ConfigGuardTests",
+      "file": "tests/test_v2.py",
+      "pin": "no config file at",
+      "test": "test_missing_config_is_named_too"
+    },
+    {
+      "case": null,
+      "class": "DoctorTests",
+      "file": "tests/test_v2.py",
+      "pin": "linger",
+      "test": "test_missing_linger_is_a_named_hard_failure"
+    },
+    {
+      "case": null,
+      "class": "DocsTruthStreamTests",
+      "file": "tests/test_v2.py",
+      "pin": "docs/ghost.md",
+      "test": "test_missing_link_flagged_only_when_target_missing"
+    },
+    {
+      "case": null,
+      "class": "EvalHarnessTests",
+      "file": "tests/test_v2.py",
+      "pin": "RED-PROOF",
+      "test": "test_negative_control_is_red"
+    },
+    {
+      "case": null,
+      "class": "MutantLedgerTests",
+      "file": "tests/test_v2.py",
+      "pin": "open mutant(s)",
+      "test": "test_next_resurfaces_a_partially_audited_file"
+    },
+    {
+      "case": null,
+      "class": "LedgerTests",
+      "file": "tests/test_v2.py",
+      "pin": "planned, not implemented",
+      "test": "test_next_stream_b_c_and_alias"
+    },
+    {
+      "case": null,
+      "class": "LedgerTests",
+      "file": "tests/test_v2.py",
+      "pin": "tests/test_app.py",
+      "test": "test_next_stream_b_c_and_alias"
+    },
+    {
+      "case": "E7-5-open-pr-claim",
+      "class": "LedgerTests",
+      "file": "tests/test_v2.py",
+      "pin": "gh",
+      "test": "test_next_without_gh"
+    },
+    {
+      "case": "E7-5-open-pr-claim",
+      "class": "LedgerTests",
+      "file": "tests/test_v2.py",
+      "pin": "warning",
+      "test": "test_next_without_gh"
+    },
+    {
+      "case": null,
+      "class": "DoctorTests",
+      "file": "tests/test_v2.py",
+      "pin": "worktree-registry",
+      "test": "test_orphan_worktree_registry_is_a_hard_failure"
+    },
+    {
+      "case": null,
+      "class": "DoctorTests",
+      "file": "tests/test_v2.py",
+      "pin": "token-scopes",
+      "test": "test_overscoped_token_is_a_hard_failure"
+    },
+    {
+      "case": null,
+      "class": "FleetClaimPublishTests",
+      "file": "tests/test_v2.py",
+      "pin": "Mutant-Key:",
+      "test": "test_publish_issue_mode_is_idempotent"
+    },
+    {
+      "case": null,
+      "class": "FleetClaimPublishTests",
+      "file": "tests/test_v2.py",
+      "pin": "killed",
+      "test": "test_publish_pr_mode_renders_evidence_and_flips_ready"
+    },
+    {
+      "case": "E7-2-vacuous-and-sleep",
+      "class": "MutationEngineTests",
+      "file": "tests/test_v2.py",
+      "pin": "True",
+      "test": "test_python_mutants"
+    },
+    {
+      "case": "E7-1-weak-test",
+      "class": "MutationEngineTests",
+      "file": "tests/test_v2.py",
+      "pin": "is not None",
+      "test": "test_python_mutants"
+    },
+    {
+      "case": null,
+      "class": "MutationEngineTests",
+      "file": "tests/test_v2.py",
+      "pin": "logical AND",
+      "test": "test_python_mutants"
+    },
+    {
+      "case": null,
+      "class": "MutationEngineTests",
+      "file": "tests/test_v2.py",
+      "pin": "logical OR",
+      "test": "test_python_mutants"
+    },
+    {
+      "case": null,
+      "class": "MutationEngineTests",
+      "file": "tests/test_v2.py",
+      "pin": "membership",
+      "test": "test_python_mutants"
+    },
+    {
+      "case": null,
+      "class": "LedgerTests",
+      "file": "tests/test_v2.py",
+      "pin": "--strict",
+      "test": "test_record_dirty_warns_and_strict_fails"
+    },
+    {
+      "case": null,
+      "class": "LedgerTests",
+      "file": "tests/test_v2.py",
+      "pin": "working tree differs",
+      "test": "test_record_dirty_warns_and_strict_fails"
+    },
+    {
+      "case": null,
+      "class": "MutantLedgerTests",
+      "file": "tests/test_v2.py",
+      "pin": "--reason",
+      "test": "test_record_validates_id_and_requires_evidence"
+    },
+    {
+      "case": null,
+      "class": "MutantLedgerTests",
+      "file": "tests/test_v2.py",
+      "pin": "mutant id must look like",
+      "test": "test_record_validates_id_and_requires_evidence"
+    },
+    {
+      "case": null,
+      "class": "LedgerTests",
+      "file": "tests/test_v2.py",
+      "pin": "already has a WONTFIX row",
+      "test": "test_rejected_duplicate_requires_force"
+    },
+    {
+      "case": null,
+      "class": "LedgerTests",
+      "file": "tests/test_v2.py",
+      "pin": "REJECTED",
+      "test": "test_rejected_target_is_suppressed_until_content_changes"
+    },
+    {
+      "case": null,
+      "class": "LedgerTests",
+      "file": "tests/test_v2.py",
+      "pin": "owner closed the PR as out of scope",
+      "test": "test_rejected_target_is_suppressed_until_content_changes"
+    },
+    {
+      "case": null,
+      "class": "TestWeakeningTests",
+      "file": "tests/test_v2.py",
+      "pin": "added-weakening-marker",
+      "test": "test_removed_assertion_and_added_skip"
+    },
+    {
+      "case": null,
+      "class": "TestWeakeningTests",
+      "file": "tests/test_v2.py",
+      "pin": "removed-assertion",
+      "test": "test_removed_assertion_and_added_skip"
+    },
+    {
+      "case": null,
+      "class": "LedgerTests",
+      "file": "tests/test_v2.py",
+      "pin": "unexpected payload",
+      "test": "test_require_gh_rejects_bad_payload"
+    },
+    {
+      "case": null,
+      "class": "WorkerLifecycleContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "ORCH_SWITCH_SESSION_MODEL",
+      "test": "test_rotation_switches_the_session_model"
+    },
+    {
+      "case": null,
+      "class": "WorkerLifecycleContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "switch_session_model",
+      "test": "test_rotation_switches_the_session_model"
+    },
+    {
+      "case": null,
+      "class": "DocsTruthStreamTests",
+      "file": "tests/test_v2.py",
+      "pin": "example-failure",
+      "test": "test_runnable_example_failure_flagged"
+    },
+    {
+      "case": "E8-m-rust-drift",
+      "class": "DocsTruthStreamTests",
+      "file": "tests/test_v2.py",
+      "pin": "README.md",
+      "test": "test_scaffold_issue_artifact_and_zero_diff"
+    },
+    {
+      "case": null,
+      "class": "DocsTruthStreamTests",
+      "file": "tests/test_v2.py",
+      "pin": "Stream I candidate issue",
+      "test": "test_scaffold_issue_artifact_and_zero_diff"
+    },
+    {
+      "case": null,
+      "class": "DocsTruthStreamTests",
+      "file": "tests/test_v2.py",
+      "pin": "do not silently",
+      "test": "test_scaffold_issue_artifact_and_zero_diff"
+    },
+    {
+      "case": "E7-14-stateless-wake",
+      "class": "StatelessWakeTests",
+      "file": "tests/test_v2.py",
+      "pin": "unchanged",
+      "test": "test_second_wake_on_unchanged_snapshot_is_quiet"
+    },
+    {
+      "case": null,
+      "class": "SecurityStreamTests",
+      "file": "tests/test_v2.py",
+      "pin": "[redacted",
+      "test": "test_secret_scan_flags_and_never_prints_the_secret"
+    },
+    {
+      "case": null,
+      "class": "MutationEngineTests",
+      "file": "tests/test_v2.py",
+      "pin": "restored",
+      "test": "test_sigkill_recovery"
+    },
+    {
+      "case": null,
+      "class": "DocumentationInvariantTests",
+      "file": "tests/test_v2.py",
+      "pin": "`SPEC.md`",
+      "test": "test_skill_references_its_spec"
+    },
+    {
+      "case": null,
+      "class": "DocumentationInvariantTests",
+      "file": "tests/test_v2.py",
+      "pin": "Autonomy resolution",
+      "test": "test_skill_routes_a_toolbox_not_a_formula"
+    },
+    {
+      "case": null,
+      "class": "DocumentationInvariantTests",
+      "file": "tests/test_v2.py",
+      "pin": "Fleet mode (opt-in)",
+      "test": "test_skill_routes_a_toolbox_not_a_formula"
+    },
+    {
+      "case": null,
+      "class": "DocumentationInvariantTests",
+      "file": "tests/test_v2.py",
+      "pin": "Single session (default)",
+      "test": "test_skill_routes_a_toolbox_not_a_formula"
+    },
+    {
+      "case": null,
+      "class": "DocumentationInvariantTests",
+      "file": "tests/test_v2.py",
+      "pin": "bare invocation",
+      "test": "test_skill_routes_a_toolbox_not_a_formula"
+    },
+    {
+      "case": null,
+      "class": "DocumentationInvariantTests",
+      "file": "tests/test_v2.py",
+      "pin": "references/10-toolbox.md",
+      "test": "test_skill_routes_a_toolbox_not_a_formula"
+    },
+    {
+      "case": null,
+      "class": "DocumentationInvariantTests",
+      "file": "tests/test_v2.py",
+      "pin": "toolbox of passes",
+      "test": "test_skill_routes_a_toolbox_not_a_formula"
+    },
+    {
+      "case": null,
+      "class": "FleetTests",
+      "file": "tests/test_v2.py",
+      "pin": "main_sha",
+      "test": "test_snapshot_records_dirty_worktree_without_gh"
+    },
+    {
+      "case": null,
+      "class": "LedgerTests",
+      "file": "tests/test_v2.py",
+      "pin": "--pr is required",
+      "test": "test_sound_without_pr_and_completed_requires_pr"
+    },
+    {
+      "case": null,
+      "class": "DocsTruthStreamTests",
+      "file": "tests/test_v2.py",
+      "pin": "G06",
+      "test": "test_spec_trace_runs_both_directions_when_spec_present"
+    },
+    {
+      "case": null,
+      "class": "DocsTruthStreamTests",
+      "file": "tests/test_v2.py",
+      "pin": "Z99",
+      "test": "test_spec_trace_runs_both_directions_when_spec_present"
+    },
+    {
+      "case": "E7-7-red-ci",
+      "class": "ValidateTests",
+      "file": "tests/test_v2.py",
+      "pin": "stale",
+      "test": "test_stale_hash_is_reported"
+    },
+    {
+      "case": null,
+      "class": "FleetTests",
+      "file": "tests/test_v2.py",
+      "pin": "A (Mutation)",
+      "test": "test_stats_computes_acceptance_rate"
+    },
+    {
+      "case": null,
+      "class": "FleetTests",
+      "file": "tests/test_v2.py",
+      "pin": "TestModel-A",
+      "test": "test_stats_computes_acceptance_rate"
+    },
+    {
+      "case": "E7-2-vacuous-and-sleep",
+      "class": "FlakeStreamTests",
+      "file": "tests/test_v2.py",
+      "pin": "F",
+      "test": "test_stream_f_unlocked"
+    },
+    {
+      "case": null,
+      "class": "GitRealityContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "--admin",
+      "test": "test_strict_protection_is_named"
+    },
+    {
+      "case": null,
+      "class": "GitRealityContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "strict branch protection",
+      "test": "test_strict_protection_is_named"
+    },
+    {
+      "case": null,
+      "class": "DocsTruthStreamTests",
+      "file": "tests/test_v2.py",
+      "pin": "src/config.py",
+      "test": "test_symbol_drift_flagged_with_file_and_line"
+    },
+    {
+      "case": "E7-5-open-pr-claim",
+      "class": "LedgerTests",
+      "file": "tests/test_v2.py",
+      "pin": "#7",
+      "test": "test_sync_rejections_remembers_closed_unmerged_prs_only"
+    },
+    {
+      "case": null,
+      "class": "LedgerTests",
+      "file": "tests/test_v2.py",
+      "pin": "src/app.py",
+      "test": "test_test_file_change_invalidates"
+    },
+    {
+      "case": null,
+      "class": "SkillImprovementCadenceTests",
+      "file": "tests/test_v2.py",
+      "pin": "already covered?",
+      "test": "test_the_already_covered_case_is_required"
+    },
+    {
+      "case": null,
+      "class": "SkillImprovementCadenceTests",
+      "file": "tests/test_v2.py",
+      "pin": "the rule existed and was not followed",
+      "test": "test_the_already_covered_case_is_required"
+    },
+    {
+      "case": null,
+      "class": "SkillImprovementCadenceTests",
+      "file": "tests/test_v2.py",
+      "pin": "does not authorise a merge",
+      "test": "test_the_cadence_authorises_no_merge"
+    },
+    {
+      "case": null,
+      "class": "SkillImprovementCadenceTests",
+      "file": "tests/test_v2.py",
+      "pin": "never produces a merge",
+      "test": "test_the_cadence_authorises_no_merge"
+    },
+    {
+      "case": null,
+      "class": "SkillImprovementCadenceTests",
+      "file": "tests/test_v2.py",
+      "pin": "merge policy",
+      "test": "test_the_cadence_excludes_the_referee"
+    },
+    {
+      "case": null,
+      "class": "SkillImprovementCadenceTests",
+      "file": "tests/test_v2.py",
+      "pin": "nothing meaningful left",
+      "test": "test_the_cadence_is_bound_to_an_empty_queue"
+    },
+    {
+      "case": null,
+      "class": "SkillImprovementCadenceTests",
+      "file": "tests/test_v2.py",
+      "pin": "spare capacity",
+      "test": "test_the_cadence_is_bound_to_an_empty_queue"
+    },
+    {
+      "case": null,
+      "class": "SkillImprovementCadenceTests",
+      "file": "tests/test_v2.py",
+      "pin": "not a second stream l",
+      "test": "test_the_cadence_is_not_the_skill_rounds_on_itself"
+    },
+    {
+      "case": null,
+      "class": "SkillImprovementCadenceTests",
+      "file": "tests/test_v2.py",
+      "pin": "running this skill's rounds against this skill's own code",
+      "test": "test_the_cadence_is_not_the_skill_rounds_on_itself"
+    },
+    {
+      "case": null,
+      "class": "SkillImprovementCadenceTests",
+      "file": "tests/test_v2.py",
+      "pin": "10% of the remaining time",
+      "test": "test_the_cadence_is_stated"
+    },
+    {
+      "case": null,
+      "class": "SkillImprovementCadenceTests",
+      "file": "tests/test_v2.py",
+      "pin": "at least once a week",
+      "test": "test_the_cadence_is_stated"
+    },
+    {
+      "case": null,
+      "class": "SkillImprovementCadenceTests",
+      "file": "tests/test_v2.py",
+      "pin": "spare capacity improves the skill",
+      "test": "test_the_cadence_is_stated"
+    },
+    {
+      "case": null,
+      "class": "WorkerLifecycleContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "stage new files by name",
+      "test": "test_the_checkpoint_covers_new_files"
+    },
+    {
+      "case": null,
+      "class": "FleetStateDurabilityTests",
+      "file": "tests/test_v2.py",
+      "pin": "clean up as part of the round",
+      "test": "test_the_cleanup_is_part_of_the_round"
+    },
+    {
+      "case": null,
+      "class": "LandingSeveralOwnPRsTests",
+      "file": "tests/test_v2.py",
+      "pin": "conflict markers",
+      "test": "test_the_conflict_marker_check_is_stated"
+    },
+    {
+      "case": null,
+      "class": "LandingSeveralOwnPRsTests",
+      "file": "tests/test_v2.py",
+      "pin": "git grep",
+      "test": "test_the_conflict_marker_check_is_stated"
+    },
+    {
+      "case": null,
+      "class": "EnvironmentIndependenceTests",
+      "file": "tests/test_v2.py",
+      "pin": "cleared explicitly",
+      "test": "test_the_controlled_environment_rule_is_stated"
+    },
+    {
+      "case": null,
+      "class": "EnvironmentIndependenceTests",
+      "file": "tests/test_v2.py",
+      "pin": "controlled environment",
+      "test": "test_the_controlled_environment_rule_is_stated"
+    },
+    {
+      "case": null,
+      "class": "ConfigGuardTests",
+      "file": "tests/test_v2.py",
+      "pin": "test/view/x_test.dart",
+      "test": "test_the_dart_example_config_resolves_the_companion"
+    },
+    {
+      "case": null,
+      "class": "FleetStateDurabilityTests",
+      "file": "tests/test_v2.py",
+      "pin": "budget the worktrees",
+      "test": "test_the_disk_is_part_of_the_machine_budget"
+    },
+    {
+      "case": null,
+      "class": "FleetStateDurabilityTests",
+      "file": "tests/test_v2.py",
+      "pin": "the disk is part of the machine budget",
+      "test": "test_the_disk_is_part_of_the_machine_budget"
+    },
+    {
+      "case": null,
+      "class": "WorkerLifecycleContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "correcting the brief's premise",
+      "test": "test_the_dispatch_brief_carries_the_precheck"
+    },
+    {
+      "case": null,
+      "class": "WorkerLifecycleContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "keeps the dispatch brief short",
+      "test": "test_the_dispatch_brief_carries_the_precheck"
+    },
+    {
+      "case": null,
+      "class": "WorkerLifecycleContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "ledger.py check --target",
+      "test": "test_the_dispatch_brief_carries_the_precheck"
+    },
+    {
+      "case": null,
+      "class": "StreamBChecklistTests",
+      "file": "tests/test_v2.py",
+      "pin": "in production",
+      "test": "test_the_fidelity_finding_shape_is_measured_not_asserted"
+    },
+    {
+      "case": null,
+      "class": "StreamBChecklistTests",
+      "file": "tests/test_v2.py",
+      "pin": "per-site",
+      "test": "test_the_fidelity_finding_shape_is_measured_not_asserted"
+    },
+    {
+      "case": null,
+      "class": "EnvironmentIndependenceTests",
+      "file": "tests/test_v2.py",
+      "pin": "same result everywhere",
+      "test": "test_the_fleet_suite_rule_is_stated"
+    },
+    {
+      "case": null,
+      "class": "EnvironmentIndependenceTests",
+      "file": "tests/test_v2.py",
+      "pin": "temporary tree",
+      "test": "test_the_fleet_suite_rule_is_stated"
+    },
+    {
+      "case": null,
+      "class": "OwnerAskContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "gh api --method POST",
+      "test": "test_the_gh_fallbacks_are_documented"
+    },
+    {
+      "case": null,
+      "class": "OwnerAskContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "repos/<owner>/<repo>/issues/<n>/labels",
+      "test": "test_the_gh_fallbacks_are_documented"
+    },
+    {
+      "case": null,
+      "class": "StreamBChecklistTests",
+      "file": "tests/test_v2.py",
+      "pin": "measure what production measures",
+      "test": "test_the_harness_fidelity_question_exists"
+    },
+    {
+      "case": null,
+      "class": "EnvironmentIndependenceTests",
+      "file": "tests/test_v2.py",
+      "pin": "evidence about the host",
+      "test": "test_the_host_evidence_rule_is_stated"
+    },
+    {
+      "case": null,
+      "class": "WorkerLifecycleContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "--check",
+      "test": "test_the_install_is_checked_for_drift"
+    },
+    {
+      "case": null,
+      "class": "WorkerLifecycleContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "installing is a copy",
+      "test": "test_the_install_is_checked_for_drift"
+    },
+    {
+      "case": null,
+      "class": "FleetStateDurabilityTests",
+      "file": "tests/test_v2.py",
+      "pin": "read the tail back",
+      "test": "test_the_journal_write_is_atomic_and_verified"
+    },
+    {
+      "case": null,
+      "class": "FleetStateDurabilityTests",
+      "file": "tests/test_v2.py",
+      "pin": "write the entry to a temp file",
+      "test": "test_the_journal_write_is_atomic_and_verified"
+    },
+    {
+      "case": null,
+      "class": "WorkerLifecycleContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "ORCH_AUTHORIZED_PROVIDERS",
+      "test": "test_the_ladder_is_owner_scoped"
+    },
+    {
+      "case": null,
+      "class": "WorkerLifecycleContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "throwaway session",
+      "test": "test_the_ladder_is_owner_scoped"
+    },
+    {
+      "case": null,
+      "class": "LandingSeveralOwnPRsTests",
+      "file": "tests/test_v2.py",
+      "pin": "concatenation is",
+      "test": "test_the_line_oriented_exception_is_stated"
+    },
+    {
+      "case": null,
+      "class": "SkillImprovementCadenceTests",
+      "file": "tests/test_v2.py",
+      "pin": "references/09-session-history-review.md",
+      "test": "test_the_orchestrator_duty_is_in_the_protocol"
+    },
+    {
+      "case": null,
+      "class": "SkillImprovementCadenceTests",
+      "file": "tests/test_v2.py",
+      "pin": "spends idle capacity on the skill itself",
+      "test": "test_the_orchestrator_duty_is_in_the_protocol"
+    },
+    {
+      "case": null,
+      "class": "GitRealityContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "orchestrator's own checkout",
+      "test": "test_the_owners_checkout_is_checked_at_cold_start"
+    },
+    {
+      "case": null,
+      "class": "GitRealityContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "rev-parse --abbrev-ref HEAD",
+      "test": "test_the_owners_checkout_is_checked_at_cold_start"
+    },
+    {
+      "case": null,
+      "class": "MutationMeasurementContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "a second oracle may already kill it",
+      "test": "test_the_protocol_names_every_oracle_file"
+    },
+    {
+      "case": null,
+      "class": "MutationMeasurementContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "every oracle file",
+      "test": "test_the_protocol_names_every_oracle_file"
+    },
+    {
+      "case": null,
+      "class": "LandingSeveralOwnPRsTests",
+      "file": "tests/test_v2.py",
+      "pin": "by rebuilding the file",
+      "test": "test_the_rebuild_rule_is_stated"
+    },
+    {
+      "case": null,
+      "class": "LandingSeveralOwnPRsTests",
+      "file": "tests/test_v2.py",
+      "pin": "rather than to keep both",
+      "test": "test_the_rebuild_rule_is_stated"
+    },
+    {
+      "case": null,
+      "class": "OwnerAskContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "-r <owner>/<repo>",
+      "test": "test_the_repo_override_rule_is_stated"
+    },
+    {
+      "case": null,
+      "class": "OwnerAskContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "always pass",
+      "test": "test_the_repo_override_rule_is_stated"
+    },
+    {
+      "case": null,
+      "class": "OwnerAskContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "parent",
+      "test": "test_the_repo_override_rule_is_stated"
+    },
+    {
+      "case": null,
+      "class": "StreamBChecklistTests",
+      "file": "tests/test_v2.py",
+      "pin": "report first",
+      "test": "test_the_report_before_failing_rule_is_stated"
+    },
+    {
+      "case": null,
+      "class": "GitRealityContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "git merge origin/main",
+      "test": "test_the_resync_is_a_merge_not_a_rebase"
+    },
+    {
+      "case": null,
+      "class": "GitRealityContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "merge the base into the branch",
+      "test": "test_the_resync_is_a_merge_not_a_rebase"
+    },
+    {
+      "case": null,
+      "class": "GitRealityContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "never by rebasing",
+      "test": "test_the_resync_is_a_merge_not_a_rebase"
+    },
+    {
+      "case": null,
+      "class": "LandingSeveralOwnPRsTests",
+      "file": "tests/test_v2.py",
+      "pin": "in any repo",
+      "test": "test_the_rule_is_stated_in_its_general_form"
+    },
+    {
+      "case": null,
+      "class": "LandingSeveralOwnPRsTests",
+      "file": "tests/test_v2.py",
+      "pin": "preserve the file's structure",
+      "test": "test_the_rule_is_stated_in_its_general_form"
+    },
+    {
+      "case": null,
+      "class": "MutationMeasurementContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "max-mutants",
+      "test": "test_the_sampling_flag_is_a_reporting_hazard"
+    },
+    {
+      "case": "E7-11-perf-differential",
+      "class": "MutationMeasurementContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "samples",
+      "test": "test_the_sampling_flag_is_a_reporting_hazard"
+    },
+    {
+      "case": null,
+      "class": "FleetStateDurabilityTests",
+      "file": "tests/test_v2.py",
+      "pin": "outside any tree the harness manages",
+      "test": "test_the_state_dir_is_outside_the_harness_tree"
+    },
+    {
+      "case": null,
+      "class": "EnvironmentIndependenceTests",
+      "file": "tests/test_v2.py",
+      "pin": "depend on the machine's environment",
+      "test": "test_the_stream_b_question_exists"
+    },
+    {
+      "case": null,
+      "class": "SkillImprovementCadenceTests",
+      "file": "tests/test_v2.py",
+      "pin": "idle capacity turns the fleet's own history into skill proposals",
+      "test": "test_the_summary_reaches_the_cadence"
+    },
+    {
+      "case": null,
+      "class": "StreamBChecklistTests",
+      "file": "tests/test_v2.py",
+      "pin": "framework errors",
+      "test": "test_the_swallowed_exception_question_exists"
+    },
+    {
+      "case": null,
+      "class": "StreamBChecklistTests",
+      "file": "tests/test_v2.py",
+      "pin": "swallow",
+      "test": "test_the_swallowed_exception_question_exists"
+    },
+    {
+      "case": null,
+      "class": "MutationMeasurementContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "counted as a kill",
+      "test": "test_the_timeout_flag_is_a_reporting_hazard"
+    },
+    {
+      "case": null,
+      "class": "MutationMeasurementContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "timeout-counts-as excluded",
+      "test": "test_the_timeout_flag_is_a_reporting_hazard"
+    },
+    {
+      "case": null,
+      "class": "LandingSeveralOwnPRsTests",
+      "file": "tests/test_v2.py",
+      "pin": "single trailing construct exactly once",
+      "test": "test_the_trailing_construct_rule_is_stated"
+    },
+    {
+      "case": null,
+      "class": "WorkerLifecycleContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "has no EnvironmentFile=",
+      "test": "test_the_unit_must_load_the_env_file"
+    },
+    {
+      "case": null,
+      "class": "WorkerLifecycleContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "installed copy is not yet a running configuration",
+      "test": "test_the_unit_must_load_the_env_file"
+    },
+    {
+      "case": null,
+      "class": "LandingSeveralOwnPRsTests",
+      "file": "tests/test_v2.py",
+      "pin": "verify the merged tree before pushing",
+      "test": "test_the_verification_step_is_stated"
+    },
+    {
+      "case": null,
+      "class": "WorkerLifecycleContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "outage",
+      "test": "test_three_failure_classes_are_named"
+    },
+    {
+      "case": "E7-6-quota-rotation",
+      "class": "WorkerLifecycleContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "quota",
+      "test": "test_three_failure_classes_are_named"
+    },
+    {
+      "case": null,
+      "class": "WorkerLifecycleContractTests",
+      "file": "tests/test_v2.py",
+      "pin": "task failure",
+      "test": "test_three_failure_classes_are_named"
+    },
+    {
+      "case": null,
+      "class": "MutationEngineTests",
+      "file": "tests/test_v2.py",
+      "pin": "# a == b",
+      "test": "test_trailing_comment_and_multiline_string_guarded"
+    },
+    {
+      "case": null,
+      "class": "MutationEngineTests",
+      "file": "tests/test_v2.py",
+      "pin": "a != b",
+      "test": "test_trailing_comment_and_multiline_string_guarded"
+    },
+    {
+      "case": null,
+      "class": "LedgerTests",
+      "file": "tests/test_v2.py",
+      "pin": "row-one",
+      "test": "test_union_merge_two_branches"
+    },
+    {
+      "case": null,
+      "class": "LedgerTests",
+      "file": "tests/test_v2.py",
+      "pin": "row-two",
+      "test": "test_union_merge_two_branches"
+    },
+    {
+      "case": "E7-7-red-ci",
+      "class": "EvidenceTests",
+      "file": "tests/test_v2.py",
+      "pin": "recorded",
+      "test": "test_verify_gate_fails_on_weakening_edit"
+    },
+    {
+      "case": "E7-12-l4-proposal-issue-only",
+      "class": "EvidenceTests",
+      "file": "tests/test_v2.py",
+      "pin": "weakening",
+      "test": "test_verify_gate_fails_on_weakening_edit"
+    },
+    {
+      "case": null,
+      "class": "OrchestratorTests",
+      "file": "tests/test_v2.py",
+      "pin": "sidecar",
+      "test": "test_verify_gate_rejects_sidecars"
+    },
+    {
+      "case": null,
+      "class": "OrchestratorTests",
+      "file": "tests/test_v2.py",
+      "pin": "[skip] format check",
+      "test": "test_verify_gate_skips_unconfigured_steps"
+    },
+    {
+      "case": null,
+      "class": "RepairStreamTests",
+      "file": "tests/test_v2.py",
+      "pin": "no base.sha",
+      "test": "test_verify_green_refuses_fixless_or_tampered_base"
+    },
+    {
+      "case": "E7-16-defect-repair",
+      "class": "RepairStreamTests",
+      "file": "tests/test_v2.py",
+      "pin": "src/calculator.py",
+      "test": "test_verify_green_requires_fix_and_records_spot_check"
+    },
+    {
+      "case": null,
+      "class": "RepairStreamTests",
+      "file": "tests/test_v2.py",
+      "pin": "non-test",
+      "test": "test_verify_red_refuses_non_test_changes"
+    },
+    {
+      "case": null,
+      "class": "SkillAutonomyTests",
+      "file": "tests/test_v3.py",
+      "pin": "Explicit task",
+      "test": "test_ask_owner_phrase_lives_only_in_ask_mode"
+    },
+    {
+      "case": "E7-6-quota-rotation",
+      "class": "SkillAutonomyTests",
+      "file": "tests/test_v3.py",
+      "pin": "ask",
+      "test": "test_ask_owner_phrase_lives_only_in_ask_mode"
+    },
+    {
+      "case": null,
+      "class": "SkillAutonomyTests",
+      "file": "tests/test_v3.py",
+      "pin": "Final report",
+      "test": "test_final_report_format_documented"
+    },
+    {
+      "case": "E8-1-bare-invocation",
+      "class": "SkillAutonomyTests",
+      "file": "tests/test_v3.py",
+      "pin": "not configured",
+      "test": "test_final_report_format_documented"
+    },
+    {
+      "case": "E8-1-bare-invocation",
+      "class": "SkillAutonomyTests",
+      "file": "tests/test_v3.py",
+      "pin": "runner-up",
+      "test": "test_final_report_format_documented"
+    },
+    {
+      "case": "E8-1-bare-invocation",
+      "class": "SkillAutonomyTests",
+      "file": "tests/test_v3.py",
+      "pin": "what needs the owner",
+      "test": "test_final_report_format_documented"
+    },
+    {
+      "case": null,
+      "class": "SkillAutonomyTests",
+      "file": "tests/test_v3.py",
+      "pin": "explicit owner",
+      "test": "test_roles_fleet_conditioned_not_only_instruction"
+    },
+    {
+      "case": null,
+      "class": "SkillAutonomyTests",
+      "file": "tests/test_v3.py",
+      "pin": "session.environment",
+      "test": "test_roles_fleet_conditioned_not_only_instruction"
+    },
+    {
+      "case": null,
+      "class": "SkillAutonomyTests",
+      "file": "tests/test_v3.py",
+      "pin": "Autonomy resolution",
+      "test": "test_skill_has_autonomy_resolution_section"
+    },
+    {
+      "case": null,
+      "class": "SkillAutonomyTests",
+      "file": "tests/test_v3.py",
+      "pin": "`ask`",
+      "test": "test_skill_has_autonomy_resolution_section"
+    },
+    {
+      "case": null,
+      "class": "SkillAutonomyTests",
+      "file": "tests/test_v3.py",
+      "pin": "`auto`",
+      "test": "test_skill_has_autonomy_resolution_section"
+    },
+    {
+      "case": null,
+      "class": "SkillAutonomyTests",
+      "file": "tests/test_v3.py",
+      "pin": "bare invocation",
+      "test": "test_skill_has_autonomy_resolution_section"
+    },
+    {
+      "case": "E7-7-red-ci",
+      "class": "SkillAutonomyTests",
+      "file": "tests/test_v3.py",
+      "pin": "owner-ask",
+      "test": "test_skill_has_autonomy_resolution_section"
+    },
+    {
+      "case": "E7-1-weak-test",
+      "class": "SurveyTests",
+      "file": "tests/test_v3.py",
+      "pin": "mutation",
+      "test": "test_unconfigured_stream_a_needs_config_and_not_chosen"
+    },
+    {
+      "case": "E8-m-go-redci",
+      "class": "SurveyTests",
+      "file": "tests/test_v3.py",
+      "pin": "picks",
+      "test": "test_works_with_no_gh_no_config_no_profile"
+    }
+  ]
+}
