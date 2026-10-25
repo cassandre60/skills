@@ -179,6 +179,52 @@ else
   ok "a non-quota failure parks nobody"
 fi
 
+# --- case 8: with no env ladder, the recorded model pool feeds the ladder --
+# (issue #103: the pool is the owner's recorded spend surface; the launcher
+# derives the ladder from it when ORCH_MODEL_LADDER is unset, and the env
+# still wins when set. The python3 wrapper stubs `pool ladder` and passes
+# everything else (the needs-brain predicate) to the real interpreter.)
+cat >"$TMP/bin/python3" <<'EOF'
+#!/bin/bash
+case "$*" in
+  *"pool ladder"*) echo "opencode/pool-free" ;;
+  *) exec /usr/bin/python3 "$@" ;;
+esac
+EOF
+chmod +x "$TMP/bin/python3"
+: >"$WAKE_LOG"
+rm -f "$TMP/state/wake.json"
+PATH="$TMP/bin:$PATH" \
+  ORCH_REPO="$SKILL_ROOT" \
+  ORCH_STATE_DIR="$TMP/state" \
+  ORCH_WAKE_CMD='fake-harness "$1" ${2:+-m "$2"}' \
+  ORCH_WAKE_TIMEOUT=20 \
+  ORCH_MIN_INTERVAL=0 \
+  GH_JSON="$TMP/prs-red.json" \
+  bash "$ASSETS" >/dev/null 2>&1
+if grep -q -- "-m opencode/pool-free" "$WAKE_LOG" 2>/dev/null; then
+  ok "with no env ladder, the recorded model pool feeds the harness"
+else
+  fail "the recorded model pool did not reach the harness"
+fi
+: >"$WAKE_LOG"
+rm -f "$TMP/state/wake.json"
+PATH="$TMP/bin:$PATH" \
+  ORCH_REPO="$SKILL_ROOT" \
+  ORCH_STATE_DIR="$TMP/state" \
+  ORCH_WAKE_CMD='fake-harness "$1" ${2:+-m "$2"}' \
+  ORCH_MODEL_LADDER="opencode/env-first" \
+  ORCH_WAKE_TIMEOUT=20 \
+  ORCH_MIN_INTERVAL=0 \
+  GH_JSON="$TMP/prs-red.json" \
+  bash "$ASSETS" >/dev/null 2>&1
+if grep -q -- "-m opencode/env-first" "$WAKE_LOG" 2>/dev/null && ! grep -q -- "pool-free" "$WAKE_LOG" 2>/dev/null; then
+  ok "an explicit ORCH_MODEL_LADDER still wins over the pool"
+else
+  fail "the env ladder did not take precedence over the recorded pool"
+fi
+rm -f "$TMP/bin/python3"
+
 if [ "$FAILED" -eq 0 ]; then
   echo "PASS: stateless wake launcher"
   exit 0
