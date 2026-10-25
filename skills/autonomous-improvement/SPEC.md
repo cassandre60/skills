@@ -14,6 +14,12 @@ and treat a finding here like a finding anywhere else. When a rule changes,
 change its row in the same PR. Rule ids are `R-nn` on purpose: they are row
 anchors, not the `G05`-style citation ids `docs_truth` traces both ways.
 
+A row may delegate enforcement to the enclosing skills repository: a cell
+that says `repository root` names a path that lives outside this skill
+folder. `tests/test_spec_standalone.py` fails if an unmarked path dangles,
+if the marker masks a path that is actually local, or if a proof names a
+test this suite does not define.
+
 | Rule | Enforcement | Proof |
 |---|---|---|
 | `R-01` **Fail-to-pass**: no fix or test lands without a red/green pair against the defect; publish refuses an incomplete evidence artifact | `scripts/autonomous/evidence.py`, `scripts/autonomous/orchestrator.py` | `test_publish_pr_mode_renders_evidence_and_flips_ready`, `test_verify_gate_after_commit` |
@@ -30,5 +36,5 @@ anchors, not the `G05`-style citation ids `docs_truth` traces both ways.
 | `R-12` **No project strings in the runtime**: candidate globs, commands, and mappings live in `config.json`, not in code | `scripts/autonomous/common.py`, `scripts/autonomous/config.example.json` | `test_no_project_strings`, `test_origin_untouched_on_success_and_failure` |
 | `R-13` **Referee isolation**: a stream without a shipped finder + oracle is rejected; the referee's own thresholds are owner-only | `scripts/autonomous/common.py`, `references/08-recursive-self-improvement.md` | `StreamRegistryTests` |
 | `R-14` **Claims are code**: a target is claimed by an open draft PR, deduped by exact path; publish is idempotent | `scripts/autonomous/fleet.py`, `references/02-ledger-and-dedup.md` | `test_claim_opens_one_draft_pr_and_refuses_claimed_target`, `test_publish_issue_mode_is_idempotent` |
-| `R-15` **Generated files stay generated**: the README's SKILLS/LAYOUT blocks are regenerated, never hand-edited | scripts/generate_readme.py | .github/workflows/check.yml |
-| `R-16` **Installable skills are discoverable**: frontmatter parses, `name:` matches the directory, links resolve | scripts/check_skills.py, scripts/check_discovery.sh | .github/workflows/check.yml |
+| `R-15` **Generated files stay generated**: the README's SKILLS/LAYOUT blocks are regenerated, never hand-edited | scripts/generate_readme.py — lives at the skills repository root, outside this skill | .github/workflows/check.yml — skills repository root, this repo's own CI |
+| `R-16` **Installable skills are discoverable**: frontmatter parses, `name:` matches the directory, links resolve | scripts/check_skills.py, scripts/check_discovery.sh — skills repository root, outside this skill | .github/workflows/check.yml — skills repository root, this repo's own CI |
