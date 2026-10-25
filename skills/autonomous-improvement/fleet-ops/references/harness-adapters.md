@@ -8,7 +8,7 @@ everything else is a starting point to confirm from the harness' own docs —
 
 The watchdog and the wake launcher read every touchpoint from the
 environment, so adapting a harness means setting variables — never editing
-`assets/watchdog.sh`:
+`fleet-ops/assets/watchdog.sh`:
 
 | Touchpoint | Where | Contract |
 |---|---|---|

@@ -61,7 +61,7 @@ class SkillAutonomyTests(unittest.TestCase):
         self.assertIn("session.environment", roles)
         self.assertIn("explicit owner", roles)
         unattended = " ".join(
-            (SKILL_ROOT / "references" / "05-unattended-operation.md")
+            (SKILL_ROOT / "fleet-ops" / "references" / "05-unattended-operation.md")
             .read_text(encoding="utf-8")
             .split()
         )

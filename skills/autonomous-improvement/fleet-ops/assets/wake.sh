@@ -6,7 +6,7 @@
 # needs-brain predicate whether anything awaits a decision, and only then
 # launches ONE fresh headless Orchestrator run (fleet.harness_cmd). Quiet
 # hours cost no model tokens. There is no session to resume and no
-# session-id file; see references/05 "Primary shape: stateless wakes".
+# session-id file; see fleet-ops/references/05 "Primary shape: stateless wakes".
 
 set -euo pipefail
 

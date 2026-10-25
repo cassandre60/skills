@@ -32,7 +32,7 @@ EXIT_ENV = 3
 def state_dir_candidates(home: Optional[Path] = None) -> List[Path]:
     """Deployed fleet state dirs under ``~/.local/share`` (issue #93).
 
-    ``references/05`` tells a cold start to look for ``<project>-oracle/``
+    ``fleet-ops/references/05`` tells a cold start to look for ``<project>-oracle/``
     while ``_resolve_state_dir`` looks at ``~/.local/share/orchestrator`` and
     the repo fallback — so a host can hold two state dirs, one of them dead,
     and the two readers disagree. This enumerates both shapes (the legacy
@@ -60,7 +60,7 @@ DEFAULT_CONFIG = {
     # Where this skill runs. "laptop" (the default) keeps every keep-alive
     # mechanism (beats, watchdog, wake timers) off unless the owner installed
     # it deliberately — the doctor names a live timer on a laptop as a
-    # warning; "vm"/"ci" are the unattended profiles (references/05).
+    # warning; "vm"/"ci" are the unattended profiles (fleet-ops/references/05).
     "session": {"environment": "laptop"},
     "format_check_cmd": None,
     "analyze_cmd": None,

@@ -70,7 +70,7 @@ or check that proves it. "Test" names refer to `tests/test_v2.py`.
 | D1 | Removed the background branch entirely; one foreground nudge path remains. D1 was verified experimentally (see above). | systemd 262 experiment; `WatchdogTests` |
 | D2 | Non-blocking `flock`, `timeout --signal=TERM --kill-after=60`, exit status logged (124 = timeout), unit `TimeoutStartSec=2h`. | `bash -n`; `test_fresh_heartbeat_skips_and_stale_runs_nudge` |
 | D3 | Removed `pgrep`; liveness is the heartbeat alone. | code inspection; watchdog test |
-| D4 | Added `assets/install-watchdog.sh` with idempotent install, `systemd-analyze --user verify`, enable/start, linger printout, list-timers, logging, and `--uninstall` (state preserved). Ref 05 has manual equivalents. | `bash -n`; `systemd-analyze --user verify` against a staged install |
+| D4 | Added assets/install-watchdog.sh with idempotent install, `systemd-analyze --user verify`, enable/start, linger printout, list-timers, logging, and `--uninstall` (state preserved). Ref 05 has manual equivalents. | `bash -n`; `systemd-analyze --user verify` against a staged install |
 | D5 | Units renamed `orchestrator-watchdog.{service,timer}`; `ORCH_RESUME_CMD` is configurable and invoked via `bash -c` with `$1`/`$2` (no `eval`); opencode material is marked harness-specific. | code + ref 05 |
 | D6 | Added a "Blast radius" section: scoped token, branch protection, no secrets, dedicated user, audit trail, high-trust warning. | ref 05 |
 
@@ -81,7 +81,7 @@ or check that proves it. "Test" names refer to `tests/test_v2.py`.
 | E1 | Law 1 now distinguishes bugfix (red on main) from test-only mutation work (red with mutant, green on clean source). Ref 04, issue text, and evals use the same wording. | SKILL.md; refs 01/03/04; examples |
 | E2 | Added `references/gates-and-vocabulary.md` defining every previously dangling term as optional, with a "no gates yet" fallback. Added `test_weakening_check.py`. All references now say what to do without the companion skill. | grep; `TestWeakeningTests` |
 | E3 | Description rewritten for Streams A/B only, with concrete triggers and an explicit "do not use for feature work, refactors, or one-off bugfixes". C/D are a short "Planned (not available)" note. | SKILL.md |
-| E4 | **Allowed fallback used instead of a split.** References 05/06 were consolidated into `references/05-unattended-operation.md`; harness-specific sections are marked; SKILL.md has one "Unattended operation (advanced)" pointer. Core Stream A/B material stays in the main skill. | file layout; SKILL.md |
+| E4 | **Allowed fallback used instead of a split.** References 05/06 were consolidated into references/05-unattended-operation.md; harness-specific sections are marked; SKILL.md has one "Unattended operation (advanced)" pointer. Core Stream A/B material stays in the main skill. | file layout; SKILL.md |
 | E5 | Replaced the Dart workflow with a toolchain-neutral 10-line quick start that points to ref 04, the single canonical per-task protocol. Dart/TS/Python/Go commands live in `references/stack-adapters.md`. | SKILL.md; ref 04; stack-adapters |
 | E6 | Law 4 now gives a general machine-safety rationale. `machine_budget.max_concurrent_tests` is documented as the owner's cap for parallel shards/agents; the engine itself is serial. | SKILL.md; config examples |
 | E7 | Added the 50-test stdlib suite, `evals/evals.json` with fixture repos for all five behavior cases, and `references/examples.md` with one end-to-end Stream A example and a good/bad Stream B contrast. | `tests/`, `evals/`, examples |

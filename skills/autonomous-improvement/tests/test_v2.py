@@ -14,6 +14,8 @@ from pathlib import Path
 
 from support import (
     ASSETS,
+    FLEET_OPS,
+    FLEET_OPS_ASSETS,
     PYTHON,
     SCRIPTS,
     SKILL_ROOT,
@@ -112,7 +114,7 @@ class GitRealityContractTests(unittest.TestCase):
             )
         )
         self.unattended = _flat_git(
-            (SKILL_ROOT / "references" / "05-unattended-operation.md").read_text(
+            (SKILL_ROOT / "fleet-ops" / "references" / "05-unattended-operation.md").read_text(
                 encoding="utf-8"
             )
         )
@@ -147,7 +149,7 @@ class OwnerAskContractTests(unittest.TestCase):
             )
         )
         self.unattended = _flat_ask(
-            (SKILL_ROOT / "references" / "05-unattended-operation.md").read_text(
+            (SKILL_ROOT / "fleet-ops" / "references" / "05-unattended-operation.md").read_text(
                 encoding="utf-8"
             )
         )
@@ -233,7 +235,7 @@ class ConfigGuardTests(RepoTestCase):
 class WorkerLifecycleContractTests(unittest.TestCase):
     def setUp(self) -> None:
         self.unattended = _flat(
-            (SKILL_ROOT / "references" / "05-unattended-operation.md").read_text(
+            (SKILL_ROOT / "fleet-ops" / "references" / "05-unattended-operation.md").read_text(
                 encoding="utf-8"
             )
         )
@@ -242,7 +244,7 @@ class WorkerLifecycleContractTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
-        self.watchdog = (SKILL_ROOT / "assets" / "watchdog.sh").read_text(
+        self.watchdog = (FLEET_OPS / "assets" / "watchdog.sh").read_text(
             encoding="utf-8"
         )
 
@@ -291,7 +293,7 @@ class WorkerLifecycleContractTests(unittest.TestCase):
 
     def test_the_install_is_checked_for_drift(self) -> None:
         self.assertIn("installing is a copy", self.unattended.lower())
-        installer = (ASSETS / "install-watchdog.sh").read_text(encoding="utf-8")
+        installer = (FLEET_OPS_ASSETS / "install-watchdog.sh").read_text(encoding="utf-8")
         self.assertIn("--check", installer)
 
     def test_an_exhausted_tick_does_not_flood_the_session(self) -> None:
@@ -325,7 +327,7 @@ class WorkerLifecycleContractTests(unittest.TestCase):
         state_dir.mkdir(parents=True)
         unit_dir.mkdir(parents=True)
         for name in ("watchdog.sh", "snapshot.sh"):
-            shutil.copy2(ASSETS / name, install_dir / name)
+            shutil.copy2(FLEET_OPS_ASSETS / name, install_dir / name)
         unit = unit_dir / "orchestrator-watchdog.service"
         write(unit, "[Service]\nType=oneshot\nExecStart=%h/install/watchdog.sh\n")
         env = dict(os.environ)
@@ -336,7 +338,7 @@ class WorkerLifecycleContractTests(unittest.TestCase):
         )
         env.pop("XDG_CONFIG_HOME", None)
         result = run(
-            [str(ASSETS / "install-watchdog.sh"), "--check"], cwd=home, env=env
+            [str(FLEET_OPS_ASSETS / "install-watchdog.sh"), "--check"], cwd=home, env=env
         )
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("no EnvironmentFile=", result.stdout + result.stderr)
@@ -347,7 +349,7 @@ class WorkerLifecycleContractTests(unittest.TestCase):
         )
         write(state_dir / "watchdog.env", "ORCH_MODEL_LADDER=\n")
         result = run(
-            [str(ASSETS / "install-watchdog.sh"), "--check"], cwd=home, env=env
+            [str(FLEET_OPS_ASSETS / "install-watchdog.sh"), "--check"], cwd=home, env=env
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
@@ -358,7 +360,7 @@ class WorkerLifecycleContractTests(unittest.TestCase):
             "installed copy is not yet a running configuration",
             self.unattended.lower(),
         )
-        installer = (ASSETS / "install-watchdog.sh").read_text(encoding="utf-8")
+        installer = (FLEET_OPS_ASSETS / "install-watchdog.sh").read_text(encoding="utf-8")
         self.assertIn("has no EnvironmentFile=", installer)
 
     def test_the_checkpoint_covers_new_files(self) -> None:
@@ -2123,7 +2125,7 @@ class WatchdogTests(RepoTestCase):
             ORCH_MARKER=str(marker),
             ORCH_HB_MAX_AGE="2700",
         )
-        script_path = ASSETS / "watchdog.sh"
+        script_path = FLEET_OPS_ASSETS / "watchdog.sh"
         fresh = run([str(script_path)], cwd=self.tmp, env=env)
         self.assertEqual(fresh.returncode, 0)
         self.assertFalse(marker.exists())
@@ -2160,7 +2162,7 @@ class WatchdogTests(RepoTestCase):
         # writes the env file into the REAL state dir instead of its temp
         # home - a failure that depends on the machine, not on the code.
         env.pop("ORCH_STATE_DIR", None)
-        result = run([str(ASSETS / "install-watchdog.sh")], cwd=self.tmp, env=env)
+        result = run([str(FLEET_OPS_ASSETS / "install-watchdog.sh")], cwd=self.tmp, env=env)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         unit = home / ".config/systemd/user/orchestrator-watchdog.service"
         self.assertTrue(unit.exists())
@@ -2188,7 +2190,7 @@ class WatchdogTests(RepoTestCase):
             ORCH_RESUME_CMD='printf touched > "$ORCH_MARKER"',
             ORCH_MARKER=str(marker),
         )
-        result = run([str(ASSETS / "watchdog.sh")], cwd=self.tmp, env=env)
+        result = run([str(FLEET_OPS_ASSETS / "watchdog.sh")], cwd=self.tmp, env=env)
         self.assertEqual(result.returncode, 0)
         self.assertFalse(marker.exists())
 
@@ -2926,29 +2928,30 @@ class DocumentationInvariantTests(unittest.TestCase):
             "references/02-ledger-and-dedup.md",
             "references/03-streams-and-triage.md",
             "references/04-workflow-and-roles.md",
-            "references/05-unattended-operation.md",
             "references/07-moving-main.md",
             "references/08-recursive-self-improvement.md",
             "references/09-session-history-review.md",
             "references/10-toolbox.md",
-            "references/harness-adapters.md",
             "references/gates-and-vocabulary.md",
             "references/stack-adapters.md",
             "references/examples.md",
-            "assets/watchdog.sh",
-            "assets/snapshot.sh",
-            "assets/orchestrator-watchdog.service",
-            "assets/orchestrator-watchdog.timer",
-            "assets/orchestrator-snapshot.service",
-            "assets/orchestrator-snapshot.timer",
-            "assets/wake.sh",
-            "assets/orchestrator-wake.service",
-            "assets/orchestrator-wake.timer",
-            "assets/install-watchdog.sh",
             "assets/gitattributes.fragment.txt",
             "assets/gitignore.fragment.txt",
             "scripts/autonomous/fleet.py",
             "SPEC.md",
+            # Elective keep-alive machinery lives under fleet-ops/.
+            "fleet-ops/references/05-unattended-operation.md",
+            "fleet-ops/references/harness-adapters.md",
+            "fleet-ops/assets/watchdog.sh",
+            "fleet-ops/assets/snapshot.sh",
+            "fleet-ops/assets/orchestrator-watchdog.service",
+            "fleet-ops/assets/orchestrator-watchdog.timer",
+            "fleet-ops/assets/orchestrator-snapshot.service",
+            "fleet-ops/assets/orchestrator-snapshot.timer",
+            "fleet-ops/assets/wake.sh",
+            "fleet-ops/assets/orchestrator-wake.service",
+            "fleet-ops/assets/orchestrator-wake.timer",
+            "fleet-ops/assets/install-watchdog.sh",
         ):
             self.assertTrue((SKILL_ROOT / relative).exists(), relative)
 
@@ -3112,7 +3115,7 @@ class EnvironmentIndependenceTests(unittest.TestCase):
             )
         )
         self.unattended = _flat_landing(
-            (SKILL_ROOT / "references" / "05-unattended-operation.md").read_text(
+            (SKILL_ROOT / "fleet-ops" / "references" / "05-unattended-operation.md").read_text(
                 encoding="utf-8"
             )
         )
@@ -3146,7 +3149,7 @@ class SkillImprovementCadenceTests(unittest.TestCase):
 
     def setUp(self) -> None:
         self.unattended = _flat_landing(
-            (SKILL_ROOT / "references" / "05-unattended-operation.md").read_text(
+            (SKILL_ROOT / "fleet-ops" / "references" / "05-unattended-operation.md").read_text(
                 encoding="utf-8"
             )
         )
@@ -3239,7 +3242,7 @@ class FleetStateDurabilityTests(unittest.TestCase):
 
     def setUp(self) -> None:
         self.unattended = _flat_landing(
-            (SKILL_ROOT / "references" / "05-unattended-operation.md").read_text(
+            (SKILL_ROOT / "fleet-ops" / "references" / "05-unattended-operation.md").read_text(
                 encoding="utf-8"
             )
         )

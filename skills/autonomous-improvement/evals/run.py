@@ -112,7 +112,7 @@ CASE_CHECKS: typing.Dict[str, typing.List[typing.Dict[str, typing.Any]]] = {
         {
             "name": "watchdog-rotates-on-quota",
             "kind": "exit-zero",
-            "argv": ["bash", str(SKILL_ROOT / "tests" / "watchdog_rotation_test.sh")],
+            "argv": ["bash", str(SKILL_ROOT / "fleet-ops" / "tests" / "watchdog_rotation_test.sh")],
         },
     ],
 }

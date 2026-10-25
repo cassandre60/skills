@@ -34,8 +34,8 @@ Turn the skill from "mutation testing is the first cycle" into a **toolbox with 
 - Red-first doctor test.
 
 ### Slice 3 — Harness adapter layer (modularity)
-- `assets/watchdog.sh`: parameterize the remaining opencode hardcodes without changing defaults — `ORCH_SESSION_ID_FILE` (default `opencode_session_id`), `ORCH_SESSION_GET_CMD`/`ORCH_SESSION_SET_CMD` (defaults = today's `opencode api get/post`), so a different harness overrides everything through env, not edits.
-- New `references/harness-adapters.md`: one table per harness (resume cmd, wake cmd, session-model get/set, model enumeration, worker dispatch, unattended-support status), rows marked verified/unverified — opencode verified; Claude Code/Codex already-unverified rows consolidated there; ZCode row added (interactive-only until a headless resume is verified). references/05's "Harness-specific notes (opencode)" collapses into a pointer.
+- assets/watchdog.sh (pre-move location): parameterize the remaining opencode hardcodes without changing defaults — `ORCH_SESSION_ID_FILE` (default `opencode_session_id`), `ORCH_SESSION_GET_CMD`/`ORCH_SESSION_SET_CMD` (defaults = today's `opencode api get/post`), so a different harness overrides everything through env, not edits.
+- New references/harness-adapters.md (pre-move location): one table per harness (resume cmd, wake cmd, session-model get/set, model enumeration, worker dispatch, unattended-support status), rows marked verified/unverified — opencode verified; Claude Code/Codex already-unverified rows consolidated there; ZCode row added (interactive-only until a headless resume is verified). references/05's "Harness-specific notes (opencode)" collapses into a pointer.
 - New rotation-test case: a non-opencode fake harness overriding the session get/set cmds drives a full rotation — proves the seam. Existing opencode-pinned tests keep passing (defaults unchanged).
 
 ### Slice 4 — `SPEC.md`: the authoritative rules table
