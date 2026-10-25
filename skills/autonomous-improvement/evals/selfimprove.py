@@ -148,7 +148,8 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
     if det.returncode != 0:
         print("[evaluate] deterministic layer failed: the change is NOT kept", file=sys.stderr)
         return 1
-    records = [p for p in RESULTS_DIR.glob("*.json")] if RESULTS_DIR.is_dir() else []
+    results_dir = Path(args.results_dir) if args.results_dir else RESULTS_DIR
+    records = list(results_dir.glob("*.json")) if results_dir.is_dir() else []
     if not records:
         print(
             "[evaluate] no recorded matrix results: improvement UNVERIFIABLE —\n"
@@ -191,6 +192,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     apply_p.add_argument("--motivation", required=True, help="the evidence behind the change")
     evaluate_p = sub.add_parser("evaluate", help="run the deterministic layers and gates")
     evaluate_p.add_argument("--worktree", required=True)
+    evaluate_p.add_argument("--results-dir", default=None,
+                            help="matrix records dir (default: evals/results)")
     revert_p = sub.add_parser("revert", help="drop the worktree and record why it lost")
     revert_p.add_argument("--worktree", required=True)
     revert_p.add_argument("--why", required=True, help="what was tried and why it lost")
