@@ -17,7 +17,7 @@ environment, so adapting a harness means setting variables — never editing
 | session-id file | `ORCH_SESSION_ID_FILE` | filename inside the state dir (default `opencode_session_id`) |
 | read session model | `ORCH_SESSION_GET_CMD` | `bash -c <cmd> _ <session-id>`; stdout JSON whose objects may carry `model.id`/`model.providerID` |
 | switch session model | `ORCH_SESSION_SET_CMD` | `bash -c <cmd> _ <session-id> <provider/id>`; exit 0 = switched |
-| model ladder / allowlist | `ORCH_MODEL_LADDER`, `ORCH_AUTHORIZED_PROVIDERS`, `fleet.model_ladder`, `fleet.model_pool` | `provider/model` ids; every entry needs independent quota and the owner's approval; the pool (`fleet.py pool show`) is the recorded allowlist — free-first, premium only when listed |
+| model ladder / allowlist | `ORCH_MODEL_LADDER`, `ORCH_AUTHORIZED_PROVIDERS`, `fleet.model_ladder` | `provider/model` ids; every entry needs independent quota and the owner's approval |
 
 ## opencode — verified
 
