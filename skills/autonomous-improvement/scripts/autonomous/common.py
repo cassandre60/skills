@@ -29,6 +29,28 @@ EXIT_NEGATIVE = 1
 EXIT_USAGE = 2
 EXIT_ENV = 3
 
+def state_dir_candidates(home: Optional[Path] = None) -> List[Path]:
+    """Deployed fleet state dirs under ``~/.local/share`` (issue #93).
+
+    ``references/05`` tells a cold start to look for ``<project>-oracle/``
+    while ``_resolve_state_dir`` looks at ``~/.local/share/orchestrator`` and
+    the repo fallback — so a host can hold two state dirs, one of them dead,
+    and the two readers disagree. This enumerates both shapes (the legacy
+    ``orchestrator`` name and the ``*-oracle`` pattern, which is an exact
+    suffix: an archived ``x-oracle.stale-2026-10-22`` no longer matches) and
+    de-duplicates by ``realpath``: two names for one directory are one
+    candidate, not an ambiguity.
+    """
+    base = (Path(home) if home is not None else Path.home()) / ".local" / "share"
+    found: Dict[str, Path] = {}
+    if base.is_dir():
+        for pattern in ("*-oracle", "orchestrator"):
+            for path in sorted(base.glob(pattern)):
+                if path.is_dir():
+                    found.setdefault(str(path.resolve()), path)
+    return sorted(found.values(), key=lambda p: str(p))
+
+
 DEFAULT_CONFIG = {
     "base_ref": "origin/main",
     "ledger_path": "docs/AUTONOMOUS_WORK_LEDGER.md",
