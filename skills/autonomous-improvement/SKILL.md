@@ -20,7 +20,8 @@ only if survey cannot resolve it, to ask the owner what to improve).
 
 In `auto`: run foundation passes (`docs_truth.py check`, spec-audit if SPEC
 exists), run `survey.py`, take `chosen`, run exactly one pass, produce at most
-one PR or issue, record the audit, report, stop. A laptop invocation never loops
+one PR or issue, record the audit and the run record (`runrecord.py write`),
+report, stop. A laptop invocation never loops
 or installs timers; a VM wake repeats at cadence. Respect `.autonomous/STOP`.
 When nothing scores above threshold, the result is `no gap`. Owner asks never
 block in `auto`: file an issue labeled `owner-ask` (or append to

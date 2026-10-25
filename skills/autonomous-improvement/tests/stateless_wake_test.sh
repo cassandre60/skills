@@ -129,6 +129,45 @@ else
   ok "a success that mentions limits parks nobody"
 fi
 
+# --- case 6: the launcher writes a fallback run record --------------------
+# Hermetic repo (not SKILL_ROOT): scripts installed, gh stub shows a red PR
+# so needs-brain says yes, the wake succeeds — a run-record/1 JSON with
+# source stateless-wake and the exit code must exist even if the model
+# itself never writes one.
+WAKE_REPO="$TMP/rr-repo"
+mkdir -p "$WAKE_REPO/scripts"
+cp -r "$SKILL_ROOT/scripts/autonomous" "$WAKE_REPO/scripts/autonomous"
+( cd "$WAKE_REPO" && git init -q -b main && git add -A \
+  && GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t \
+     git commit -qm base ) >/dev/null 2>&1
+printf '[{"number": 7, "headRefName": "task/pr-7", "headRefOid": "sha-7",
+  "statusCheckRollup": [{"name": "unit-tests", "status": "COMPLETED",
+  "conclusion": "FAILURE"}]}]\n' >"$TMP/prs-rr.json"
+mkdir -p "$TMP/state-rr"   # fresh digest: earlier cases already digested the same PR shape
+PATH="$TMP/bin:$PATH" \
+  ORCH_REPO="$WAKE_REPO" \
+  ORCH_STATE_DIR="$TMP/state-rr" \
+  ORCH_WAKE_CMD='true' \
+  ORCH_MODEL_LADDER="opencode/alpha-free" \
+  ORCH_WAKE_TIMEOUT=20 \
+  ORCH_MIN_INTERVAL=0 \
+  GH_JSON="$TMP/prs-rr.json" \
+  bash "$ASSETS" >/dev/null 2>&1
+RC=$?
+if [ "$RC" -eq 0 ]; then ok "hermetic wake exits 0"; else fail "hermetic wake exited $RC"; fi
+RECORD="$(ls "$WAKE_REPO/.autonomous/run-records/"rr-*.json 2>/dev/null | head -1)"
+if [ -n "$RECORD" ]; then
+  ok "the launcher wrote a fallback run record"
+  if grep -q '"stateless-wake"' "$RECORD" && grep -q '"wake-complete"' "$RECORD" \
+     && grep -q '"exit_code": 0' "$RECORD"; then
+    ok "record carries source/outcome/exit-code"
+  else
+    fail "record fields wrong: $(cat "$RECORD")"
+  fi
+else
+  fail "no run record appeared under .autonomous/run-records/"
+fi
+
 if [ "$FAILED" -eq 0 ]; then
   echo "PASS: stateless wake launcher"
   exit 0
