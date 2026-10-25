@@ -97,6 +97,8 @@ class RatchetTests(unittest.TestCase):
         self.repo = Path(self._tmp.name) / "repo"
         self.repo.mkdir()
         support.run(["git", "init", "-q", "-b", "main"], cwd=self.repo)
+        support.git(self.repo, "config", "user.email", "test@example.com")
+        support.git(self.repo, "config", "user.name", "Test User")
         support.write(self.repo / "src" / "app.py", APP)
         support.write(self.repo / "tests" / "__init__.py", "")
         support.write(self.repo / "tests" / "test_app.py", TESTS)
