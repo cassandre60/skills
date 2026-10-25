@@ -11,4 +11,5 @@ __pycache__/
 # as a PR diff. Fleet snapshots and kill-switch state live under the same
 # rule. The cache is keyed on (source bytes, test command), so a source or
 # test change invalidates it by construction.
-.autonomous/
+.autonomous/*
+!.autonomous/config.json

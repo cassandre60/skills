@@ -1,8 +1,9 @@
 # Stack Adapters
 
-The scripts are language-neutral. Only `config.json` names commands. The
-examples below are starting points; replace them with the project's real
-commands from `AGENTS.md`, `Makefile`, `justfile`, or CI.
+The scripts are language-neutral. Only `config.json` names commands — and
+`onboard.py detect|write|verify` derives a starting config from the repo
+itself (manifests, CI, test naming). The examples below are starting
+points; replace them with the project's real commands from `AGENTS.md`, `Makefile`, `justfile`, or CI.
 
 ## Python
 
