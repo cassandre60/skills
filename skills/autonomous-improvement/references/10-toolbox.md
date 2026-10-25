@@ -190,6 +190,31 @@ reads, not scripts. Their discipline:
   five laws, the stream contract, eval sets, tier floors, merge policy) are
   issues the owner decides.
 
+### scheduled environment pass (external)
+
+- **Reach for it when:** the cadence fires — at least every 12 months, plus
+  harness prompt-shape changes, skill-library churn, or a first-time outsized
+  token/latency bill on a trivial model turn. Runs through the sibling skill
+  `cliproxy-context-optimization` (formerly `cliproxy-log-inspection`).
+- **Finder:** the external skill's
+  `../cliproxy-context-optimization/scripts/find_request_logs.py`,
+  `render_request_log.py`, and `analyze_context_budget.py` on a fresh
+  successful capture; per-section budget (skills catalog, baseline files,
+  Code Mode catalog, date/env tail), skill ranking, duplicate flags, captured
+  thinking level and `Server-Timing`.
+- **Oracle:** after each applied lever, a fresh successful capture with a
+  before/after budget on owner-addressable sections. Error captures cannot
+  prove savings; a dead-provider fallback is itself a finding to report.
+- **Evidence:** measured character counts and captured usage. A complete run
+  records: capture id, model, prompt tokens, section budgets, each lever
+  applied with before/after chars, and what was parked/restored.
+- **Output format:** a before/after table plus a lever log; no repo ledger row.
+  Full method and worked receipts: `../cliproxy-context-optimization/references/03-context-budget.md`
+  in the sibling skill.
+- **Refutation:** read both skills before parking a duplicate pair; verify a
+  parked skill is truly out of every discovery directory; re-measure with the
+  same model and endpoint before claiming a token drop.
+
 ## Adapting the plan
 
 The toolbox is a menu, not a sequence. Derive the order from the repo: a
