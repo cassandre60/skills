@@ -1,0 +1,7 @@
+{
+  "name": "m-js-secret",
+  "private": true,
+  "scripts": {
+    "test": "node --test test/"
+  }
+}

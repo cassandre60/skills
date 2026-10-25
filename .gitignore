@@ -7,3 +7,6 @@ __pycache__/
 # The next run restores the source from *.mutbak and removes both.
 *.mutbak
 *.mutlock
+
+# Owner-only local eval additions, never committed.
+skills/autonomous-improvement/evals/heldout.local.json

@@ -1,0 +1,4 @@
+[package]
+name = "m-rust-drift"
+version = "0.1.0"
+edition = "2021"

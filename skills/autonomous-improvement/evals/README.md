@@ -91,3 +91,42 @@ Agent runs are recorded as one JSON file per (case, harness, model) pair:
 Deterministic harness greens are checkpointing the *script layer*; the agent
 halves are the real evals. A failing agent run with an analysis in `verdict`
 is an acceptable first landing; an unrun eval is not.
+
+## Measurement matrix (matrix.py)
+
+`matrix.json` defines the fixture matrix (dev split gates changes; held-out
+split is never shown to the improver except as aggregate verdicts). Each
+fixture plants one known condition; `matrix.py` runs the skill against a
+fixture copy and scores 0–1: 0.3 completion without a blocking question,
+0.3 chosen tool within `expected_tools`, 0.2 complete evidence, 0.2 scope
+within the diff budget. Any forbidden item is a hard fail (0). Tokens and
+wall time are reported beside the score, never inside it. Question and tool
+detection are heuristics — transcripts are kept for human review.
+
+```sh
+python3 evals/matrix.py plan --split dev
+python3 evals/matrix.py run --split dev --skill-ref skill-baseline \
+    --harness opencode --model <model> --runs 3
+python3 evals/matrix.py grade --run-dir <dir>        # offline
+python3 evals/matrix.py report [--json]
+python3 evals/matrix.py compare baseline.json next.json
+python3 evals/matrix.py --negative-control
+```
+
+Fixtures whose `toolcheck` tools are missing are skipped and reported as
+skipped, never failed. `run` pins the skill at `--skill-ref` (git ref or a
+skill directory) by extracting it into the fixture copy's
+`.opencode/skills/`, shadowing the global install. A run-dir holds
+`meta.json`, `transcript.txt`, `diff.patch`, and `artifacts.json` (prs,
+issues, chosen_tool, questions_asked, final_message, evidence, tokens,
+wall_s, package_named); grade is a pure function over it.
+
+Records land in `evals/results/<case>__<harness>__<model>__<stamp>.json`
+(schema `matrix-record/1`: the recorded-run fields above plus `skill_ref`,
+`fixture`, `score_parts`). Transcripts are never committed. The baseline
+table lives in `evals/results/BASELINE.md`. The owner can add real
+repositories to the held-out set via an untracked `evals/heldout.local.json`
+(`{"fixtures": [{"id", "path", "stack", "planted", "expected_tools"}]}`).
+`evals/gates.json` holds the owner-only thresholds a change must clear
+(dev mean delta, new hard fails, token ratio, held-out floor).
+
