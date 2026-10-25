@@ -4652,6 +4652,10 @@ class DoctorTests(RepoTestCase):
         state.mkdir(parents=True, exist_ok=True)
         (state / "clock_reference").write_text(str(int(time.time())))
         (state / "opencode_session_id").write_text("ses_TEST\n")
+        home = self.tmp / "home"
+        home.mkdir(parents=True, exist_ok=True)
+        env_extra.setdefault("HOME", str(home))
+        env_extra.setdefault("ORCH_STATE_DIR", "")
         self.env_extra = env_extra
         return repo
 
@@ -4760,6 +4764,73 @@ class DoctorTests(RepoTestCase):
         payload = json.loads(res.stdout)
         self.assertNotIn("environment-profile",
                          {c["name"] for c in payload["checks"]})
+
+    def test_two_candidate_state_dirs_are_a_hard_failure(self):
+        # Issue #93: the doc's <project>-oracle search and the code's default
+        # disagreed; adopting the wrong one reads a journal that is days dead.
+        home = self.tmp / "home"
+        share = home / ".local" / "share"
+        live = share / "proj-oracle"
+        live.mkdir(parents=True)
+        (live / "journal.md").write_text("live\n")
+        stale = share / "proj-old-oracle"
+        stale.mkdir(parents=True)
+        (stale / "journal.md").write_text("stale\n")
+        repo = self.stage(HOME=str(home))
+        res = self.doctor(repo)
+        payload = json.loads(res.stdout)
+        self.assertNotEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertIn("state-dir-candidates", payload["hard_failures"])
+        check = next(c for c in payload["checks"]
+                     if c["name"] == "state-dir-candidates")
+        self.assertIn("proj-old-oracle", check["detail"])
+        self.assertIn("proj-oracle", check["detail"])
+        self.assertIn("journal", check["detail"])
+
+    def test_symlinked_candidates_are_one_dir(self):
+        home = self.tmp / "home"
+        share = home / ".local" / "share"
+        live = share / "proj-oracle"
+        live.mkdir(parents=True)
+        (live / "journal.md").write_text("live\n")
+        (share / "proj-oracle-alias").symlink_to(live)
+        repo = self.stage(HOME=str(home))
+        res = self.doctor(repo)
+        payload = json.loads(res.stdout)
+        self.assertNotIn("state-dir-candidates", payload["hard_failures"])
+        check = next(c for c in payload["checks"]
+                     if c["name"] == "state-dir-candidates")
+        self.assertTrue(check["ok"], check)
+        self.assertIn("one candidate", check["detail"])
+
+    def test_archived_candidate_name_does_not_keep_the_ambiguity(self):
+        home = self.tmp / "home"
+        share = home / ".local" / "share"
+        (share / "proj-oracle").mkdir(parents=True)
+        (share / "proj-old-oracle.stale-2026-10-22").mkdir(parents=True)
+        repo = self.stage(HOME=str(home))
+        res = self.doctor(repo)
+        payload = json.loads(res.stdout)
+        self.assertNotIn("state-dir-candidates", payload["hard_failures"])
+
+    def test_explicit_state_dir_skips_the_candidate_scan(self):
+        home = self.tmp / "home"
+        share = home / ".local" / "share"
+        (share / "a-oracle").mkdir(parents=True)
+        (share / "b-oracle").mkdir(parents=True)
+        repo = self.stage(HOME=str(home), ORCH_STATE_DIR=str(self.tmp / "chosen"))
+        res = self.doctor(repo)
+        payload = json.loads(res.stdout)
+        self.assertNotIn("state-dir-candidates", payload["hard_failures"])
+        check = next(c for c in payload["checks"]
+                     if c["name"] == "state-dir-candidates")
+        self.assertIn("explicit", check["detail"])
+
+    def test_no_candidate_state_dirs_is_fine(self):
+        repo = self.stage()
+        res = self.doctor(repo)
+        payload = json.loads(res.stdout)
+        self.assertNotIn("state-dir-candidates", payload["hard_failures"])
 
     def test_live_keepalive_without_recorded_consent_is_a_hard_failure(self):
         # Issue #91: a live timer is the shape that flooded two frozen
