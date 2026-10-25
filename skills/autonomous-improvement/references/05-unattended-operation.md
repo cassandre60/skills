@@ -11,7 +11,10 @@ everything happens inside the session's own turns). `fleet.py doctor` names
 a live timer on a `laptop` profile as the `environment-profile` warning;
 uninstall the timers or set the profile deliberately instead of ignoring it.
 
-**Two shapes exist, and the order matters (issue #18):** the *stateless
+**Two shapes exist, and the order matters (issue #18):** arming either one
+(watchdog fallback or stateless wake) needs the same recorded one-time owner
+consent as `session.keepalive_consent` (step 0 of §Cold start) — "the skill is
+present" is never consent. The *stateless
 wake* (§Stateless wake) is the primary unattended shape — a fresh headless
 run per wake whose state is `state/*.json` + ledger + journal, with no
 session id involved. The long-lived-session + beats + watchdog dance
@@ -96,12 +99,39 @@ session (`vm`/`ci` environment or an explicit owner ask — never the skill's
 presence alone) starts its own operation before anything else. First turn, in
 order:
 
-1. **Find the state.** Look for the durable state dir outside the repo
-   (`~/.local/share/<project>-oracle/`, or the name a prior run deployed).
-   It should hold a journal, a session-id file and — when the snapshot
-   timer runs — a snapshots log. A missing dir means first deployment:
-   create it with the same naming pattern. The journal is the fleet's
-   memory; do not skip it.
+0. **Ask before arming.** Beats, a watchdog and a wake timer are all
+   *keep-alive machinery*, and arming any of them is an owner decision made
+   at least once — ask in plain words ("do you want this run kept alive
+   between turns: beats only, watchdog fallback, or stateless wake?"). Never
+   infer consent from the profile, from a prior deployment's leftover files,
+   or from a busy queue: two real deployments flooded a frozen session (84
+   and 90 queued nudges over 20–22 h) because the stack was already installed
+   and nobody had been asked again. Record the answer in the repo config:
+
+   ```json
+   "session": {
+     "environment": "vm",
+     "keepalive_consent": {"granted_by": "owner", "date": "2026-10-25", "shape": "watchdog"}
+   }
+   ```
+
+   `shape` is `watchdog`, `stateless-wake`, or `beats`; `fleet.py doctor`
+   treats a live timer with no recorded consent as a hard failure and a
+   `vm`/`ci` profile with no timer as a soft one, so `govern` stops the
+   dispatch loop until the owner answers.
+
+1. **Find the state.** Precedence is `--state-dir` → `$ORCH_STATE_DIR` →
+   `~/.local/share/orchestrator` → `<repo>/.autonomous/state`. On a host that
+   has run a fleet before, `fleet.py doctor` reports `state-dir-candidates`
+   (hard when there is more than one and no explicit choice): **never pick
+   among several** — compare the journals' mtimes, then rename the stale dir
+   so its name no longer ends in `-oracle` (an archived
+   `x-oracle.stale-2026-10-22` no longer matches), or set `ORCH_STATE_DIR`.
+   Two *live* deployments on one host are legal; each must set its own
+   explicit state dir. The chosen dir should hold a journal, a session-id
+   file and — when the snapshot timer runs — a snapshots log; a missing dir
+   means first deployment: create it with the same naming pattern. The
+   journal is the fleet's memory; do not skip it.
 2. **Learn your own session id** from the harness and write it into the
    session-id file the watchdog reads (opencode: a no-op
    `session_rename` returns it). Until this is current, every revive
