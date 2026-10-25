@@ -61,6 +61,7 @@ skills/
     README.md
     SPEC.md
     assets/     # 16 files
+    docs/       # 1 file
     evals/      # 114 files
     examples/   # 2 files
     references/ # 13 files
