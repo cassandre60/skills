@@ -199,3 +199,11 @@ thin gets mutation testing after a test audit, not before; a repo with no
 gates gets `gates-and-vocabulary.md`'s fallback, not a lecture. When two
 tools plausibly apply, take the one whose oracle is a command and whose
 finder is 0-token — and put the other on the menu with one line of why.
+The executable form of this section is `scripts/autonomous/survey.py`: it
+ranks these same signals with zero tokens and outputs the pick (`chosen`),
+the runner-up, and the reason.
+
+The executable form of this adaptation is `survey.py` (`python3 scripts/autonomous/survey.py [--json]`),
+which scores each pass from 0-token signals (red CI, docs drift, test smells,
+secrets, ledger coverage, baseline-green test commands) without human prompts or
+model tokens.
