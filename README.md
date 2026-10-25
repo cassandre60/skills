@@ -66,7 +66,7 @@ skills/
     examples/   # 2 files
     references/ # 13 files
     scripts/    # 31 files
-    tests/      # 17 files
+    tests/      # 18 files
   cliproxy-integration/
     SKILL.md
     FIELD-NOTES.md
