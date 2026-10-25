@@ -350,11 +350,13 @@ of interpolated user text.
 **Default (opencode-specific):**
 
 ```sh
-opencode run --auto -s "$1" ${3:+-m "$3"} "$2"
+opencode run -s "$1" ${3:+-m "$3"} "$2"
 ```
 
-`-s` continues a specific session; `--auto` avoids a headless stall on the first
-permission prompt. For another harness, read its docs for the headless
+`-s` continues a specific session. Some opencode builds accept `--auto` to
+skip the first permission prompt; current builds reject it silently (see the
+opencode row in `references/harness-adapters.md`) — feature-test before
+relying on it. For another harness, read its docs for the headless
 resume-session flags and set `ORCH_RESUME_CMD`; do not copy opencode flags.
 
 ### The dispatch prompt: short, and carrying its pre-checks

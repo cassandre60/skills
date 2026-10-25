@@ -24,8 +24,14 @@ environment, so adapting a harness means setting variables — never editing
 The defaults implement this row; it is the harness the unattended stack was
 built and verified on.
 
-- headless resume: `opencode run --auto -s "$1" ${3:+-m "$3"} "$2"`
-- one-shot wake: `opencode run --auto ${2:+-m "$2"} "$1"`
+- headless resume: `opencode run -s "$1" ${3:+-m "$3"} "$2"`
+- one-shot wake: `opencode run ${2:+-m "$2"} "$1"`
+- headless approval: some opencode builds accept `--auto` to skip permission
+  prompts; current builds do not (checked 2026-10-25) and **swallow unknown
+  flags**, so the positional message never arrives and every run dies with
+  `Error: You must provide a message`. Feature-test with `opencode run
+  --help` before adding it to `ORCH_WAKE_CMD`; that one log line is the
+  signature of a flag/message mismatch.
 - session model read: `opencode api get "/api/session/$1"`
 - session model switch: `opencode api post "/api/session/$1/model" -d '{"model":{"id":"…","providerID":"…"}}'`
   (204 No Content on success; endpoint documented as "Switch the model used by
