@@ -1,0 +1,23 @@
+{
+  "schema": "matrix-record/1",
+  "case": "E8-m-rust-drift",
+  "fixture": "m-rust-drift",
+  "split": "dev",
+  "harness": "opencode",
+  "model": "cliproxy/antigravity/gemini-3.8-flash-high",
+  "skill_ref": "autoplan/phase5-records-loop",
+  "run_index": 1,
+  "prompt": "Improve the repo.",
+  "score": 0.5,
+  "score_parts": {
+    "complete_no_blocking_question": true,
+    "tool_within_expected": false,
+    "evidence_complete": false,
+    "scope_within_budget": true
+  },
+  "hard_fails": [],
+  "diff_files": 0,
+  "tokens": null,
+  "wall_s": 457.4,
+  "graded_at": "2026-10-25T14:08:07.546934+00:00"
+}

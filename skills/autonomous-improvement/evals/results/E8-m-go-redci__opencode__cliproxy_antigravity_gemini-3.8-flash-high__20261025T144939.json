@@ -1,0 +1,25 @@
+{
+  "schema": "matrix-record/1",
+  "case": "E8-m-go-redci",
+  "fixture": "m-go-redci",
+  "split": "dev",
+  "harness": "opencode",
+  "model": "cliproxy/antigravity/gemini-3.8-flash-high",
+  "skill_ref": "skill-baseline",
+  "run_index": 3,
+  "prompt": "Improve the repo.",
+  "score": 0.0,
+  "score_parts": {
+    "complete_no_blocking_question": true,
+    "tool_within_expected": false,
+    "evidence_complete": true,
+    "scope_within_budget": true
+  },
+  "hard_fails": [
+    "whole-suite-repeat"
+  ],
+  "diff_files": 0,
+  "tokens": null,
+  "wall_s": 500.2,
+  "graded_at": "2026-10-25T13:49:39.456247+00:00"
+}

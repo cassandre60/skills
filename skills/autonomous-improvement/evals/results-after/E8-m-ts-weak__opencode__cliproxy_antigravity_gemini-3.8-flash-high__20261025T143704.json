@@ -1,0 +1,25 @@
+{
+  "schema": "matrix-record/1",
+  "case": "E8-m-ts-weak",
+  "fixture": "m-ts-weak",
+  "split": "dev",
+  "harness": "opencode",
+  "model": "cliproxy/antigravity/gemini-3.8-flash-high",
+  "skill_ref": "autoplan/phase5-records-loop",
+  "run_index": 3,
+  "prompt": "Improve the repo.",
+  "score": 0.0,
+  "score_parts": {
+    "complete_no_blocking_question": true,
+    "tool_within_expected": false,
+    "evidence_complete": true,
+    "scope_within_budget": true
+  },
+  "hard_fails": [
+    "timers-under-laptop"
+  ],
+  "diff_files": 0,
+  "tokens": null,
+  "wall_s": 896.7,
+  "graded_at": "2026-10-25T13:37:04.218233+00:00"
+}
