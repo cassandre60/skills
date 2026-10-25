@@ -11,7 +11,10 @@ everything happens inside the session's own turns). `fleet.py doctor` names
 a live timer on a `laptop` profile as the `environment-profile` warning;
 uninstall the timers or set the profile deliberately instead of ignoring it.
 
-**Two shapes exist, and the order matters (issue #18):** the *stateless
+**Two shapes exist, and the order matters (issue #18):** arming either one
+(watchdog fallback or stateless wake) needs the same recorded one-time owner
+consent as `session.keepalive_consent` (step 0 of §Cold start) — "the skill is
+present" is never consent. The *stateless
 wake* (§Stateless wake) is the primary unattended shape — a fresh headless
 run per wake whose state is `state/*.json` + ledger + journal, with no
 session id involved. The long-lived-session + beats + watchdog dance
@@ -94,6 +97,27 @@ Use this shape when your harness has no headless one-shot mode, or when a
 single long conversation is the deployment's deliberate choice. A session
 whose only instruction is this skill starts its own operation before
 anything else. First turn, in order:
+
+0. **Ask before arming.** Beats, a watchdog and a wake timer are all
+   *keep-alive machinery*, and arming any of them is an owner decision made
+   at least once — ask in plain words ("do you want this run kept alive
+   between turns: beats only, watchdog fallback, or stateless wake?"). Never
+   infer consent from the profile, from a prior deployment's leftover files,
+   or from a busy queue: two real deployments flooded a frozen session (84
+   and 90 queued nudges over 20–22 h) because the stack was already installed
+   and nobody had been asked again. Record the answer in the repo config:
+
+   ```json
+   "session": {
+     "environment": "vm",
+     "keepalive_consent": {"granted_by": "owner", "date": "2026-10-25", "shape": "watchdog"}
+   }
+   ```
+
+   `shape` is `watchdog`, `stateless-wake`, or `beats`; `fleet.py doctor`
+   treats a live timer with no recorded consent as a hard failure and a
+   `vm`/`ci` profile with no timer as a soft one, so `govern` stops the
+   dispatch loop until the owner answers.
 
 1. **Find the state.** Precedence is `--state-dir` → `$ORCH_STATE_DIR` →
    `~/.local/share/orchestrator` → `<repo>/.autonomous/state`. On a host that

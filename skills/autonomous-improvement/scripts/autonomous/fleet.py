@@ -619,6 +619,38 @@ def run_doctor_checks(root: Path, cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
             )
         )
 
+    # 5c. Keep-alive consent (issue #91). Arming beats/timers is an owner
+    #     decision made at least once and recorded in the config — never an
+    #     inference from the profile, a prior deployment's leftover files, or
+    #     a busy queue. Two real deployments flooded a frozen session (84 and
+    #     90 queued nudges) because the stack was already installed and nobody
+    #     had been asked again. An active timer without a record is a hard
+    #     failure: dispatch stops until the owner is asked.
+    session_cfg = cfg.get("session") or {}
+    consent = session_cfg.get("keepalive_consent") or {}
+    consent_shape = str(consent.get("shape") or "")
+    consent_ok = (
+        bool(consent.get("granted_by"))
+        and bool(consent.get("date"))
+        and consent_shape in {"watchdog", "stateless-wake", "beats"}
+    )
+    if timer_state == "active" or environment in {"vm", "ci"}:
+        checks.append(
+            _doctor_check(
+                "keepalive-consent",
+                "hard" if timer_state == "active" else "soft",
+                consent_ok,
+                (
+                    f"keep-alive consent recorded ({consent_shape})"
+                    if consent_ok
+                    else "keep-alive machinery needs a recorded owner ask: after "
+                    "asking, set session.keepalive_consent={granted_by, date, "
+                    "shape: watchdog|stateless-wake|beats}; never arm timers on "
+                    "inference from the profile or a prior deployment"
+                ),
+            )
+        )
+
     # 6a. Candidate state dirs (issue #93). The doc's `<project>-oracle`
     #     heuristic and the code's resolution used to disagree, letting a cold
     #     start adopt a journal that had been dead for days while the live
@@ -646,8 +678,8 @@ def run_doctor_checks(root: Path, cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "hard",
                 False,
                 f"{len(candidates)} candidate state dirs — {described}. Archive "
-                "the stale one out of the glob (rename it so *-oracle* no longer "
-                "matches) or set ORCH_STATE_DIR; never pick among them.",
+                "the stale one out of the glob (rename it so it no longer ends in "
+                "-oracle) or set ORCH_STATE_DIR; never pick among them.",
             )
         )
     else:
