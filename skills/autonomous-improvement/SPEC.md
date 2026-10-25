@@ -14,6 +14,12 @@ and treat a finding here like a finding anywhere else. When a rule changes,
 change its row in the same PR. Rule ids are `R-nn` on purpose: they are row
 anchors, not the `G05`-style citation ids `docs_truth` traces both ways.
 
+A row may delegate enforcement to the enclosing skills repository: a cell
+that says `repository root` names a path that lives outside this skill
+folder. `tests/test_spec_standalone.py` fails if an unmarked path dangles,
+if the marker masks a path that is actually local, or if a proof names a
+test this suite does not define.
+
 | Rule | Enforcement | Proof |
 |---|---|---|
 | `R-01` **Fail-to-pass**: no fix or test lands without a red/green pair against the defect; publish refuses an incomplete evidence artifact | `scripts/autonomous/evidence.py`, `scripts/autonomous/orchestrator.py` | `test_publish_pr_mode_renders_evidence_and_flips_ready`, `test_verify_gate_after_commit` |
@@ -22,7 +28,7 @@ anchors, not the `G05`-style citation ids `docs_truth` traces both ways.
 | `R-04` **Machine budget**: one targeted test per mutant, one full-file run per task, no whole-suite local runs, argv lists only (no shell) | `references/04-workflow-and-roles.md`, `scripts/autonomous/common.py` | `MutationMeasurementContractTests`, `test_filename_with_space_passed_as_one_argv` |
 | `R-05` **Pool rotation**: a quota error rotates the model; an outage parks nothing; exit status is the contract | `assets/watchdog.sh`, `references/harness-adapters.md` | `tests/watchdog_rotation_test.sh` |
 | `R-06` **No test weakening**: `skip`/`xfail`/`.only`/`# noqa`/widened tolerance cannot buy a green gate; sidecars block verify-gate | `scripts/autonomous/test_weakening_check.py`, `scripts/autonomous/orchestrator.py` | `test_verify_gate_fails_on_weakening_edit`, `test_verify_gate_rejects_sidecars` |
-| `R-07` **Elective keep-alive**: `session.environment` defaults to `laptop`; a live timer under the laptop profile is a named warning, never a silent default | `scripts/autonomous/common.py`, `scripts/autonomous/fleet.py` | `test_laptop_profile_with_live_timer_warns_about_elective_machinery` |
+| `R-07` **Elective keep-alive + recorded consent**: `session.environment` defaults to `laptop`; a live timer under the laptop profile is a named warning, never a silent default; arming any keep-alive timer requires a recorded one-time owner ask (`session.keepalive_consent`), and a live timer without one is a hard doctor failure | `scripts/autonomous/common.py`, `scripts/autonomous/fleet.py` | `test_laptop_profile_with_live_timer_warns_about_elective_machinery`, `test_live_keepalive_without_recorded_consent_is_a_hard_failure`, `test_recorded_keepalive_consent_clears_the_check`, `test_vm_profile_without_consent_is_soft_until_a_timer_exists` |
 | `R-08` **Harness adapters**: every harness touchpoint is an environment override; adapting harnesses means setting variables, never editing scripts | `assets/watchdog.sh`, `references/harness-adapters.md` | `tests/watchdog_rotation_test.sh` |
 | `R-09` **Autonomy resolution**: bare invocation resolves autonomy once at the start (`auto` vs `ask`); fleet mode is opt-in | `SKILL.md`, `references/10-toolbox.md` | `test_skill_routes_a_toolbox_not_a_formula` |
 | `R-10` **SKILL.md stays short** (≤ 200 lines) and routes; the details live in the references | `SKILL.md` | `test_skill_is_short` |
@@ -30,8 +36,8 @@ anchors, not the `G05`-style citation ids `docs_truth` traces both ways.
 | `R-12` **No project strings in the runtime**: candidate globs, commands, and mappings live in `config.json`, not in code | `scripts/autonomous/common.py`, `scripts/autonomous/config.example.json` | `test_no_project_strings`, `test_origin_untouched_on_success_and_failure` |
 | `R-13` **Referee isolation**: a stream without a shipped finder + oracle is rejected; the referee's own thresholds are owner-only | `scripts/autonomous/common.py`, `references/08-recursive-self-improvement.md` | `StreamRegistryTests` |
 | `R-14` **Claims are code**: a target is claimed by an open draft PR, deduped by exact path; publish is idempotent | `scripts/autonomous/fleet.py`, `references/02-ledger-and-dedup.md` | `test_claim_opens_one_draft_pr_and_refuses_claimed_target`, `test_publish_issue_mode_is_idempotent` |
-| `R-15` **Generated files stay generated**: the README's SKILLS/LAYOUT blocks are regenerated, never hand-edited | scripts/generate_readme.py | .github/workflows/check.yml |
-| `R-16` **Installable skills are discoverable**: frontmatter parses, `name:` matches the directory, links resolve | scripts/check_skills.py, scripts/check_discovery.sh | .github/workflows/check.yml |
+| `R-15` **Generated files stay generated**: the README's SKILLS/LAYOUT blocks are regenerated, never hand-edited | scripts/generate_readme.py — lives at the skills repository root, outside this skill | .github/workflows/check.yml — skills repository root, this repo's own CI |
+| `R-16` **Installable skills are discoverable**: frontmatter parses, `name:` matches the directory, links resolve | scripts/check_skills.py, scripts/check_discovery.sh — skills repository root, outside this skill | .github/workflows/check.yml — skills repository root, this repo's own CI |
 | `R-17` **Portable config lookup**: `--config` > `AUTONOMOUS_CONFIG` > `.autonomous/config.json` > the legacy scripts/autonomous/config.json copy; repo root from git of cwd, never the script's location | `scripts/autonomous/common.py` | `ConfigLookupTests`, `ConfigLessRunsTests` |
 | `R-18` **Onboarding without hand edits**: stack, commands, globs and mapping detected from manifests/CI/naming; shell metacharacters refused; a red baseline disables stream A | `scripts/autonomous/onboard.py` | `OnboardDetectTests`, `OnboardWriteTests`, `OnboardVerifyTests` |
 | `R-19` **Trust tiers and repo conventions**: explicit T1 or an AI-contribution policy keeps publish in issue mode; T2 eligibility is reported, never automatic | `scripts/autonomous/conventions.py`, `scripts/autonomous/fleet.py` | `AiPolicyTests`, `TrustTierHelperTests`, `FleetTierTests` |
