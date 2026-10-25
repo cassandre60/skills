@@ -59,6 +59,7 @@ from common import (
     rel_path,
     repo_root,
     run,
+    state_dir_candidates,
     stream_label,
     test_for_source,
     write_json_atomic,
@@ -462,6 +463,14 @@ def _doctor_check(name: str, severity: str, ok: bool, detail: str) -> Dict[str, 
     return {"name": name, "severity": severity, "ok": bool(ok), "detail": detail}
 
 
+def _journal_age(path: Path) -> str:
+    """``journal YYYY-MM-DD`` or ``no journal`` — the tie-breaker a human reads."""
+    journal = path / "journal.md"
+    if not journal.is_file():
+        return "no journal"
+    return "journal " + time.strftime("%Y-%m-%d", time.localtime(journal.stat().st_mtime))
+
+
 def _doctor_run(argv: List[str], timeout: int = 20) -> Optional[subprocess.CompletedProcess]:
     """Run a doctor probe; None when the tool is missing."""
     try:
@@ -607,6 +616,83 @@ def run_doctor_checks(root: Path, cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "active: keep-alive machinery is elective on a personal machine — "
                 "uninstall it (install-watchdog.sh --uninstall) or set "
                 "session.environment to vm/ci deliberately",
+            )
+        )
+
+    # 5c. Keep-alive consent (issue #91). Arming beats/timers is an owner
+    #     decision made at least once and recorded in the config — never an
+    #     inference from the profile, a prior deployment's leftover files, or
+    #     a busy queue. Two real deployments flooded a frozen session (84 and
+    #     90 queued nudges) because the stack was already installed and nobody
+    #     had been asked again. An active timer without a record is a hard
+    #     failure: dispatch stops until the owner is asked.
+    session_cfg = cfg.get("session") or {}
+    consent = session_cfg.get("keepalive_consent") or {}
+    consent_shape = str(consent.get("shape") or "")
+    consent_ok = (
+        bool(consent.get("granted_by"))
+        and bool(consent.get("date"))
+        and consent_shape in {"watchdog", "stateless-wake", "beats"}
+    )
+    if timer_state == "active" or environment in {"vm", "ci"}:
+        checks.append(
+            _doctor_check(
+                "keepalive-consent",
+                "hard" if timer_state == "active" else "soft",
+                consent_ok,
+                (
+                    f"keep-alive consent recorded ({consent_shape})"
+                    if consent_ok
+                    else "keep-alive machinery needs a recorded owner ask: after "
+                    "asking, set session.keepalive_consent={granted_by, date, "
+                    "shape: watchdog|stateless-wake|beats}; never arm timers on "
+                    "inference from the profile or a prior deployment"
+                ),
+            )
+        )
+
+    # 6a. Candidate state dirs (issue #93). The doc's `<project>-oracle`
+    #     heuristic and the code's resolution used to disagree, letting a cold
+    #     start adopt a journal that had been dead for days while the live
+    #     fleet state sat elsewhere. Two distinct candidates are a hard stop:
+    #     read the mtimes, archive the stale one, or set ORCH_STATE_DIR.
+    candidates = state_dir_candidates()
+    if os.environ.get("ORCH_STATE_DIR"):
+        # An explicit choice settles it: the scan is only for readers who
+        # have not chosen, and two live deployments on one host are legal.
+        checks.append(
+            _doctor_check(
+                "state-dir-candidates",
+                "soft",
+                True,
+                "explicit state dir configured via ORCH_STATE_DIR; candidate scan skipped",
+            )
+        )
+    elif len(candidates) > 1:
+        described = "; ".join(
+            f"{path} ({_journal_age(path)})" for path in candidates
+        )
+        checks.append(
+            _doctor_check(
+                "state-dir-candidates",
+                "hard",
+                False,
+                f"{len(candidates)} candidate state dirs — {described}. Archive "
+                "the stale one out of the glob (rename it so it no longer ends in "
+                "-oracle) or set ORCH_STATE_DIR; never pick among them.",
+            )
+        )
+    else:
+        checks.append(
+            _doctor_check(
+                "state-dir-candidates",
+                "soft",
+                True,
+                (
+                    f"one candidate: {candidates[0]}"
+                    if candidates
+                    else "no deployed state dirs under ~/.local/share (first deployment)"
+                ),
             )
         )
 
