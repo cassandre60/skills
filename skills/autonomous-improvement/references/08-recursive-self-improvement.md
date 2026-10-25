@@ -5,7 +5,13 @@ oracles. They are not the ceiling. This reference defines how improvement
 generalizes — first to every falsifiable defect class in a codebase, then to
 the fleet itself — without losing the properties that make A/B trustworthy.
 
-Design record: `docs/autonomous-improvement-rsi-expansion.md` in the skills repo.
+Design record: docs/autonomous-improvement-rsi-expansion.md, kept at the
+skills repository root, outside this skill folder. In brief: a work type is a
+stream iff it passes all five clauses below; tiers T1 (issue-only) through T4
+(threshold changes) gate how much a stream may do unattended; the fleet's
+self-improvement goes through the same admission test — it never edits its
+own referee, and a work type that cannot state its finder and oracle is
+issue work for a human, not a stream.
 
 ## The stream contract (admission test for any new work type)
 
