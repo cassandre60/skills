@@ -180,10 +180,16 @@ def _full_suite_runs(transcript: str) -> int:
 
 
 def _timer_install(transcript: str, diff_text: str) -> bool:
-    hay = (transcript + "\n" + diff_text).lower()
-    if any(marker in hay for marker in TIMER_MARKERS):
-        return True
-    return bool(re.search(r"systemctl.*--user.*enable", hay))
+    """An INSTALL ACTION, not a mention: quoting the skill's own docs
+    (which name orchestrator-*.timer and install-watchdog.sh) must not
+    fail a run; actually enabling, executing, or copying a unit does."""
+    hay = transcript + "\n" + diff_text
+    return bool(
+        re.search(r"systemctl[^\n]*--user[^\n]*\benable\b", hay)
+        or re.search(r"(?:sudo\s+|\./|\bbash\s+|\bsh\s+)install-watchdog\.sh", hay)
+        or re.search(r"\bcp\b[^\n]*orchestrator-\w+\.(?:timer|service)", hay)
+        or re.search(r"\bln\s+-s\b[^\n]*\.timer", hay)
+    )
 
 
 def _tool_ok(fixture: dict[str, Any], artifacts: dict[str, Any]) -> bool:
@@ -470,26 +476,52 @@ TOOL_MARKERS: tuple = (
 )
 
 
+def _pick_tool(text: str):
+    """The tool a REPORT names: script mentions beat generic words, and the
+    earliest hit in the report beats later runner-up mentions. The skill
+    body itself lists every tool, so whole-transcript scanning is noise."""
+    hits = []
+    for tool, markers in TOOL_MARKERS:
+        for marker in markers:
+            pos = text.find(marker)
+            if pos >= 0:
+                hits.append((0 if marker.endswith(".py") else 1, pos, tool))
+    if not hits:
+        return None
+    hits.sort()
+    return hits[0][2]
+
+
+def _ambiguous(text: str) -> bool:
+    """More than three distinct tools named in one message = the toolbox
+    index (skill body), not a run report."""
+    tools = set()
+    for tool, markers in TOOL_MARKERS:
+        if any(marker in text for marker in markers):
+            tools.add(tool)
+    return len(tools) > 3
+
+
 def _extract_artifacts(transcript: str) -> dict[str, Any]:
     """Heuristic first-pass artifacts from the transcript (review by hand).
 
     opencode run prints the assistant's text on stdout and diagnostics on
     stderr; the transcript stores both, split by a '-- stderr --' marker.
+    The chosen tool comes from the FINAL MESSAGE (the report) or the tail
+    of stdout — never from the whole transcript, which carries the skill
+    body naming every tool.
     """
     stdout = transcript.split("-- stderr --", 1)[0]
     lines = [line.strip() for line in stdout.splitlines() if line.strip()]
     final_message = lines[-1] if lines else ""
+    tail = " ".join(lines[-15:])
     lowered = transcript.lower()
     questions = 1 if any(m in lowered for m in QUESTION_TOOL_MARKERS) else 0
-    chosen = None
-    for tool, markers in TOOL_MARKERS:
-        if any(marker in lowered for marker in markers):
-            chosen = tool
-    # The most specific signal wins over a generic word: prefer a script
-    # mention over a bare noun when both appear.
-    for tool, markers in TOOL_MARKERS:
-        if any(marker.endswith(".py") and marker in lowered for marker in markers):
-            chosen = tool
+    chosen = _pick_tool(final_message.lower()) or _pick_tool(tail.lower())
+    if chosen is not None and _ambiguous(final_message.lower()):
+        # The final message names most of the toolbox: that is the injected
+        # skill body echoing, not a report. No confident tool call.
+        chosen = None
     evidence_complete = "evidence.py" in lowered
     return {
         "prs": [],
@@ -598,6 +630,18 @@ def _run_once(
             json.dumps(artifacts, indent=2), encoding="utf-8"
         )
         print(f"    run-dir (review artifacts.json by hand if needed): {run_dir}")
+        # Keep the small run-dir (meta/transcript/diff/artifacts) under
+        # .autonomous/matrix-runs for transcript-level review — the PR #90
+        # runs kept nothing, which limited the analysis to record fields.
+        if not args.no_keep_dirs:
+            stamp = datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
+            kept = (
+                SKILL_ROOT / ".autonomous" / "matrix-runs"
+                / f"{case['id']}-run{index}-{stamp}"
+            )
+            kept.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(run_dir, kept, dirs_exist_ok=True)
+            print(f"    run-dir kept for review: {kept}")
         return grade_run_dir(run_dir, matrix)
     finally:
         if not args.keep:
@@ -734,6 +778,12 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--timeout", type=int, default=900, help="per-run seconds")
     run.add_argument("--out", default=str(RESULTS_DIR))
     run.add_argument("--keep", action="store_true", help="keep temp run dirs")
+    run.add_argument(
+        "--no-keep-dirs",
+        dest="no_keep_dirs",
+        action="store_true",
+        help="do not copy run-dirs into .autonomous/matrix-runs for review",
+    )
 
     grade = sub.add_parser("grade", help="score one run-dir offline")
     grade.add_argument("--run-dir", required=True)

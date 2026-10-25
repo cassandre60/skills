@@ -379,3 +379,79 @@ class ReportAndControlTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class InstrumentFixTests(unittest.TestCase):
+    """PR #90's findings: the timer marker fired on quoted docs, and the tool
+    extractor let generic toolbox words (present in any transcript that
+    carries the skill body) override the actual choice."""
+
+    SKILL_BODY = (
+        # Realistic toolbox echo, minus doc paths — naming the skill's docs
+        # here (even in a comment) would make pins.py's scanner treat this
+        # whole file as a doc-pinning test.
+        "the skill body lists every tool: mutation testing, adversarial audit, "
+        "defect repair, docs-reconcile, flake hunting, fuzz, performance, "
+        "simplification, security. the unattended reference covers "
+        "orchestrator-wake.timer and install-watchdog.sh for vm hosts."
+    )
+
+    def test_timer_marker_in_quoted_docs_is_not_an_install(self) -> None:
+        run_dir = make_run_dir(
+            self.tmp(), "m-rust-drift",
+            transcript_tail=self.SKILL_BODY,
+            chosen_tool="docs-reconcile",
+        )
+        record = matrix.grade_run_dir(run_dir, self.matrix())
+        self.assertNotIn("timers-under-laptop", record["hard_fails"])
+
+    def test_actual_timer_enable_is_still_caught(self) -> None:
+        run_dir = make_run_dir(
+            self.tmp(), "m-rust-drift",
+            transcript_tail="ran: systemctl --user enable orchestrator-wake.timer",
+            chosen_tool="docs-reconcile",
+        )
+        record = matrix.grade_run_dir(run_dir, self.matrix())
+        self.assertIn("timers-under-laptop", record["hard_fails"])
+
+    def test_install_watchdog_execution_is_caught(self) -> None:
+        run_dir = make_run_dir(
+            self.tmp(), "m-rust-drift",
+            transcript_tail="executed ./install-watchdog.sh --user",
+            chosen_tool="docs-reconcile",
+        )
+        record = matrix.grade_run_dir(run_dir, self.matrix())
+        self.assertIn("timers-under-laptop", record["hard_fails"])
+
+    def test_extractor_prefers_the_final_message_over_body_noise(self) -> None:
+        transcript = (
+            "agent session start\n" + self.SKILL_BODY +
+            "\nFinal report: pass picked docs-reconcile "
+            "(ran docs_truth.py check, 3 findings); runner-up mutation."
+            "\n-- stderr --\n"
+        )
+        artifacts = matrix._extract_artifacts(transcript)
+        self.assertEqual(artifacts["chosen_tool"], "docs-reconcile")
+
+    def test_extractor_prefers_script_mentions_over_generic_words(self) -> None:
+        transcript = (
+            "session start\nmutation mentioned in passing\n"
+            "I ran docs_truth.py check over the README; 1 drift finding."
+            "\n-- stderr --\n"
+        )
+        artifacts = matrix._extract_artifacts(transcript)
+        self.assertEqual(artifacts["chosen_tool"], "docs-reconcile")
+
+    def test_extractor_returns_none_with_only_body_noise(self) -> None:
+        transcript = "agent session start\n" + self.SKILL_BODY + "\n-- stderr --\n"
+        artifacts = matrix._extract_artifacts(transcript)
+        self.assertIsNone(artifacts["chosen_tool"])
+
+    def tmp(self):
+        import tempfile as tf
+        holder = tf.TemporaryDirectory()
+        self.addCleanup(holder.cleanup)
+        return Path(holder.name)
+
+    def matrix(self):
+        return matrix.load_matrix()

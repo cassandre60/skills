@@ -51,7 +51,12 @@ def scan_pins(tests_dir: Path = TESTS_DIR) -> List[Dict[str, Any]]:
             source = path.read_text(encoding="utf-8")
         except OSError:
             continue
-        if "SKILL.md" not in source and "references/" not in source:
+        # A doc-pinning test file READS the docs it pins: it names SKILL.md,
+        # or reads reference files (mentioning references/ alone is not
+        # enough — fixture strings quote paths without pinning any doc).
+        if "SKILL.md" not in source and not (
+            "references/" in source and "read_text" in source
+        ):
             continue  # not a doc-pinning test file
         try:
             tree = ast.parse(source, filename=str(path))

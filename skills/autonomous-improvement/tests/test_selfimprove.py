@@ -60,11 +60,14 @@ class SelfImproveTests(unittest.TestCase):
         self.assertIn("owner-only", proc.stderr)
 
     def test_evaluate_fails_without_recorded_matrix(self) -> None:
-        # evaluate needs a worktree argument; without recorded results ANY
-        # worktree is unverifiable. Use the skill tree itself as the stand-in
-        # (evaluate never mutates it).
+        # Hermetic: an empty results dir (the real evals/results carries
+        # committed measurement records).
+        empty = self.tmp / "no-records"
+        empty.mkdir()
         proc = self.run_tool(
-            "evaluate", "--worktree", str(support.SKILL_ROOT.parent.parent)
+            "evaluate",
+            "--worktree", str(support.SKILL_ROOT.parent.parent),
+            "--results-dir", str(empty),
         )
         self.assertEqual(proc.returncode, 1)
         self.assertIn("UNVERIFIABLE", proc.stderr)
