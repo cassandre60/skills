@@ -157,13 +157,12 @@ evidence-backed issue. The stream contract and catalog are in reference 08.
 ## Unattended operation (elective)
 
 Nothing in this skill runs outside your session unless the owner asked for a
-fleet or config names a `vm`/`ci` environment. When that is the case,
-`references/05-unattended-operation.md` is the manual: heartbeats, the
-watchdog's model ladder (`ORCH_MODEL_LADDER` — on a quota/balance error it
-marks that model and retries the next in the same tick; every ladder entry
-must carry quota independent of the others, and must actually be free), fleet
-coordination, and the improvement cadence. Harness-specific commands live in
-the adapter material there, not in this file.
+fleet or config names a `vm`/`ci` environment. When that is the case, the
+manual is `fleet-ops/references/05-unattended-operation.md` (heartbeats, the
+watchdog's model ladder, fleet coordination, the improvement cadence, harness
+adapters) and the machinery lives under `fleet-ops/` — the watchdog, wake
+launcher, and systemd units. Nothing else in this skill installs or runs
+anything on a timer.
 
 ## References
 
@@ -173,12 +172,12 @@ the adapter material there, not in this file.
 | `references/02-ledger-and-dedup.md` | Schema, newest-wins, composite hash, escaping, merge driver, the validator, draft-PR claims |
 | `references/03-streams-and-triage.md` | Deeper Stream A/B/J checklists and planned streams |
 | `references/04-workflow-and-roles.md` | The one canonical per-task protocol and evidence contract |
-| `references/05-unattended-operation.md` | Heartbeats, watchdog, quotas, fleet coordination, the improvement cadence (advanced) |
+| `fleet-ops/references/05-unattended-operation.md` | Heartbeats, watchdog, quotas, fleet coordination, the improvement cadence (advanced) |
 | `references/07-moving-main.md` | Working on a repo that keeps merging; stale-base traps |
 | `references/08-recursive-self-improvement.md` | The stream contract, autonomy tiers, and the stream catalog |
 | `references/09-session-history-review.md` | The method and evidence bar for skill-improvement proposals |
 | `references/10-toolbox.md` | Per-tool contracts and the lens menu |
-| `references/harness-adapters.md` | Per-harness command table (resume, wake, session model) and verification status |
+| `fleet-ops/references/harness-adapters.md` | Per-harness command table (resume, wake, session model) and verification status |
 | `SPEC.md` | The skill's own rule map: rule, enforcement, failing test; audit it with `docs_truth.py` |
 | `references/gates-and-vocabulary.md` | Gate ids, optional vocabulary, and the "no gates yet" fallback |
 | `references/stack-adapters.md` | Concrete commands per stack |

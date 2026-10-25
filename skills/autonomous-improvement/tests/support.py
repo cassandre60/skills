@@ -19,6 +19,9 @@ SKILL_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = SKILL_ROOT / "scripts" / "autonomous"
 EXAMPLES = SKILL_ROOT / "examples"
 ASSETS = SKILL_ROOT / "assets"
+# Elective keep-alive machinery (watchdog, wake launcher, systemd units).
+FLEET_OPS = SKILL_ROOT / "fleet-ops"
+FLEET_OPS_ASSETS = FLEET_OPS / "assets"
 PYTHON = sys.executable
 
 

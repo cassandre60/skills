@@ -1,5 +1,6 @@
 #!/bin/bash
-# Behavioural test for assets/stateless-wake.sh — the timer-driven launcher.
+# Behavioural test for fleet-ops/assets/stateless-wake.sh — the timer-driven
+# launcher.
 #
 # The claim under test (issue #18): a stateless wake starts a FRESH headless
 # run per wake; it consults `fleet.py needs-brain` first so an unchanged
@@ -7,11 +8,16 @@
 # ladder on error-line-anchored quota failures; and a tick that ends in
 # total failure exits 3 so systemd OnFailure=/owner notification can fire.
 #
-# Run: bash tests/stateless_wake_test.sh
+# Run: bash fleet-ops/tests/stateless_wake_test.sh
 set -u
 
-SKILL_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ASSETS="$SKILL_ROOT/assets/stateless-wake.sh"
+# This test lives at fleet-ops/tests/, one level deeper than the skill's own
+# tests: fleet-ops/ holds the elective keep-alive machinery. FLEET_OPS is the
+# machinery folder (its assets/), SKILL_ROOT the skill root (its
+# scripts/autonomous and, in case 6, the repo a hermetic wake runs in).
+FLEET_OPS="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SKILL_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+ASSETS="$FLEET_OPS/assets/stateless-wake.sh"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 mkdir -p "$TMP/bin" "$TMP/state"

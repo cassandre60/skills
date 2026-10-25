@@ -13,7 +13,8 @@
 # tick on the next model. Staleness depth is a weaker signal than the failure
 # signature — a quota error rotates at once, whatever the heartbeat age.
 #
-# See references/05-unattended-operation.md. Install with install-watchdog.sh.
+# See fleet-ops/references/05-unattended-operation.md. Install with
+# fleet-ops/assets/install-watchdog.sh.
 #
 # Configuration:
 #   ORCH_STATE_DIR    durable state, outside the repo (default: ~/.local/share/orchestrator)
@@ -59,7 +60,7 @@
 # line shaped like a harness ERROR, so a nudge that SUCCEEDS while merely
 # mentioning limits does not park its model. A harness reporting quota on a
 # bare non-error line is not detected (accepted risk; the retry ladder and
-# the stale-heartbeat path cover it) — see references/05.
+# the stale-heartbeat path cover it) — see fleet-ops/references/05.
 #
 # Harness-specific: the default resume/session commands are for opencode. Read
 # your harness docs for its headless resume-session flags; do not copy these
@@ -67,7 +68,7 @@
 # ORCH_RESUME_CMD, ORCH_SESSION_ID_FILE, ORCH_SESSION_GET_CMD,
 # ORCH_SESSION_SET_CMD (the latter two run via `bash -c <cmd> _ <sid> [model]`)
 # — so adapting harnesses means setting variables, not editing this file.
-# See references/harness-adapters.md for the per-harness table.
+# See fleet-ops/references/harness-adapters.md for the per-harness table.
 #
 # Security note: ORCH_RESUME_CMD is passed to bash -c with SID and NUDGE_MSG
 # as positional arguments ($1, $2). Never source ORCH_RESUME_CMD or the
@@ -124,7 +125,7 @@ fi
 # Signatures are tight on purpose (issue #19): a quota term only counts on a
 # line that looks like a harness ERROR, so a nudge that SUCCEEDS while merely
 # discussing limits ("rate limit handled yesterday, quota notes filed") does
-# not park its model. Accepted risk, documented in references/05: a harness
+# not park its model. Accepted risk, documented in fleet-ops/references/05: a harness
 # that reports quota exhaustion on a bare line with no error prefix is not
 # detected here — the attempt-marker still backdates nothing, so the next
 # stale tick retries and walks the ladder anyway.
