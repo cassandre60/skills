@@ -353,3 +353,5 @@ already exists** — update/dedupe rather than duplicate.
   command examples inside docs — use a placeholder or omit it there and stamp
   only when actually running `git commit` / `gh`.
 
+- [2026-10-25, GLM-5.3-Flash via ZCode desktop] `scripts/generate_readme.py` counts UNTRACKED files on disk: regenerating in a dirty checkout bakes local-only files (e.g. the plan brief, repomix output) into the LAYOUT block and CI fails with "stale". Regenerate from a clean clone (or `git clean -nd`-verify first) whenever the checkout carries untracked non-dot files. Verified by: main CI red on a polluted regen, green after committing the clean-clone's output.
+- [2026-10-25, GLM-5.3-Flash via ZCode desktop] A parallel ZCode session switches branches inside shared worktrees (it took over a remeasure worktree mid-run); long-running jobs need isolated `/tmp` worktrees with absolute output paths, and subagents that die on provider errors should have written their tests FIRST so the contract survives. Verified by: first remeasure's records lost; second attempt in `/tmp` unaffected.
