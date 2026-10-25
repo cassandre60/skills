@@ -95,12 +95,18 @@ single long conversation is the deployment's deliberate choice. A session
 whose only instruction is this skill starts its own operation before
 anything else. First turn, in order:
 
-1. **Find the state.** Look for the durable state dir outside the repo
-   (`~/.local/share/<project>-oracle/`, or the name a prior run deployed).
-   It should hold a journal, a session-id file and — when the snapshot
-   timer runs — a snapshots log. A missing dir means first deployment:
-   create it with the same naming pattern. The journal is the fleet's
-   memory; do not skip it.
+1. **Find the state.** Precedence is `--state-dir` → `$ORCH_STATE_DIR` →
+   `~/.local/share/orchestrator` → `<repo>/.autonomous/state`. On a host that
+   has run a fleet before, `fleet.py doctor` reports `state-dir-candidates`
+   (hard when there is more than one and no explicit choice): **never pick
+   among several** — compare the journals' mtimes, then rename the stale dir
+   so its name no longer ends in `-oracle` (an archived
+   `x-oracle.stale-2026-10-22` no longer matches), or set `ORCH_STATE_DIR`.
+   Two *live* deployments on one host are legal; each must set its own
+   explicit state dir. The chosen dir should hold a journal, a session-id
+   file and — when the snapshot timer runs — a snapshots log; a missing dir
+   means first deployment: create it with the same naming pattern. The
+   journal is the fleet's memory; do not skip it.
 2. **Learn your own session id** from the harness and write it into the
    session-id file the watchdog reads (opencode: a no-op
    `session_rename` returns it). Until this is current, every revive
