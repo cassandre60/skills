@@ -610,6 +610,38 @@ def run_doctor_checks(root: Path, cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
             )
         )
 
+    # 5c. Keep-alive consent (issue #91). Arming beats/timers is an owner
+    #     decision made at least once and recorded in the config — never an
+    #     inference from the profile, a prior deployment's leftover files, or
+    #     a busy queue. Two real deployments flooded a frozen session (84 and
+    #     90 queued nudges) because the stack was already installed and nobody
+    #     had been asked again. An active timer without a record is a hard
+    #     failure: dispatch stops until the owner is asked.
+    session_cfg = cfg.get("session") or {}
+    consent = session_cfg.get("keepalive_consent") or {}
+    consent_shape = str(consent.get("shape") or "")
+    consent_ok = (
+        bool(consent.get("granted_by"))
+        and bool(consent.get("date"))
+        and consent_shape in {"watchdog", "stateless-wake", "beats"}
+    )
+    if timer_state == "active" or environment in {"vm", "ci"}:
+        checks.append(
+            _doctor_check(
+                "keepalive-consent",
+                "hard" if timer_state == "active" else "soft",
+                consent_ok,
+                (
+                    f"keep-alive consent recorded ({consent_shape})"
+                    if consent_ok
+                    else "keep-alive machinery needs a recorded owner ask: after "
+                    "asking, set session.keepalive_consent={granted_by, date, "
+                    "shape: watchdog|stateless-wake|beats}; never arm timers on "
+                    "inference from the profile or a prior deployment"
+                ),
+            )
+        )
+
     # 6. State-dir consistency (or stateless wake configured)
     if bool(fleet_cfg.get("stateless_wake")):
         checks.append(_doctor_check("state-dir", "soft", True, "stateless wake configured; no session state required"))

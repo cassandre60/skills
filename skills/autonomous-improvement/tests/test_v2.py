@@ -4633,7 +4633,16 @@ class DoctorTests(RepoTestCase):
         repo.mkdir(exist_ok=True)
         shutil.copytree(self.FIXTURE, repo / "doctor-vm")
         install_scripts(repo)
-        write_config(repo, {"fleet": {"merge_policy": "never"}})
+        write_config(repo, {
+            "session": {
+                "keepalive_consent": {
+                    "granted_by": "owner",
+                    "date": "2026-10-25",
+                    "shape": "watchdog",
+                }
+            },
+            "fleet": {"merge_policy": "never"},
+        })
         git(repo, "init", "-q", "-b", "main")
         git(repo, "config", "user.email", "test@example.com")
         git(repo, "config", "user.name", "Test User")
@@ -4718,7 +4727,14 @@ class DoctorTests(RepoTestCase):
         # timer means it was installed without — or beyond — an owner ask.
         repo = self.stage()
         write_config(repo, {"fleet": {"merge_policy": "never"},
-                            "session": {"environment": "laptop"}})
+                            "session": {
+                                "environment": "laptop",
+                                "keepalive_consent": {
+                                    "granted_by": "owner",
+                                    "date": "2026-10-25",
+                                    "shape": "watchdog",
+                                },
+                            }})
         res = self.doctor(repo)
         payload = json.loads(res.stdout)
         profile = next(c for c in payload["checks"]
@@ -4732,11 +4748,68 @@ class DoctorTests(RepoTestCase):
     def test_vm_profile_with_live_timer_is_clean(self):
         repo = self.stage()
         write_config(repo, {"fleet": {"merge_policy": "never"},
-                            "session": {"environment": "vm"}})
+                            "session": {
+                                "environment": "vm",
+                                "keepalive_consent": {
+                                    "granted_by": "owner",
+                                    "date": "2026-10-25",
+                                    "shape": "watchdog",
+                                },
+                            }})
         res = self.doctor(repo)
         payload = json.loads(res.stdout)
         self.assertNotIn("environment-profile",
                          {c["name"] for c in payload["checks"]})
+
+    def test_live_keepalive_without_recorded_consent_is_a_hard_failure(self):
+        # Issue #91: a live timer is the shape that flooded two frozen
+        # sessions (84 and 90 queued nudges). Arming it is an owner decision
+        # recorded in the config — never inferred from a profile or a prior
+        # deployment's leftovers.
+        repo = self.stage()
+        write_config(repo, {"fleet": {"merge_policy": "never"}})
+        res = self.doctor(repo)
+        payload = json.loads(res.stdout)
+        self.assertNotEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertIn("keepalive-consent", payload["hard_failures"])
+        consent = next(c for c in payload["checks"]
+                       if c["name"] == "keepalive-consent")
+        self.assertEqual(consent["severity"], "hard")
+        self.assertFalse(consent["ok"])
+        self.assertIn("recorded owner ask", consent["detail"])
+
+    def test_malformed_keepalive_consent_does_not_count(self):
+        repo = self.stage()
+        write_config(repo, {
+            "session": {"keepalive_consent": {"granted_by": "owner",
+                                              "shape": "always-on"}},
+            "fleet": {"merge_policy": "never"},
+        })
+        res = self.doctor(repo)
+        payload = json.loads(res.stdout)
+        self.assertIn("keepalive-consent", payload["hard_failures"])
+
+    def test_recorded_keepalive_consent_clears_the_check(self):
+        repo = self.stage()
+        res = self.doctor(repo)
+        payload = json.loads(res.stdout)
+        consent = next(c for c in payload["checks"]
+                       if c["name"] == "keepalive-consent")
+        self.assertTrue(consent["ok"], consent)
+        self.assertEqual(consent["severity"], "hard")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+
+    def test_vm_profile_without_consent_is_soft_until_a_timer_exists(self):
+        repo = self.stage(DOCTOR_STUB_TIMER="inactive")
+        write_config(repo, {"fleet": {"merge_policy": "never"},
+                            "session": {"environment": "vm"}})
+        res = self.doctor(repo)
+        payload = json.loads(res.stdout)
+        consent = next(c for c in payload["checks"]
+                       if c["name"] == "keepalive-consent")
+        self.assertEqual(consent["severity"], "soft")
+        self.assertFalse(consent["ok"])
+        self.assertTrue(payload["dispatch_ok"], payload["hard_failures"])
 
 
 class StatelessWakeTests(RepoTestCase):
