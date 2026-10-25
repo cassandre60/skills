@@ -36,6 +36,10 @@ AUDIT_ALLOWLIST = {
     ("spec-id-undefined", "E402"),
     ("spec-id-undefined", "G06"),
     ("spec-id-undefined", "Z99"),
+    # T09 is the docs_truth id-regex matching the "T09" inside an ISO
+    # timestamp in a test fixture string (2026-08-03T09:00:00) — not a
+    # spec citation.
+    ("spec-id-undefined", "T09"),
     ("symbol-drift", "src.config"),
 }
 

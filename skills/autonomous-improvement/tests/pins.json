@@ -435,6 +435,13 @@
       "test": "test_expired_lessons_are_demoted"
     },
     {
+      "case": "E7-15-j-dead-code",
+      "class": "DoctorTests",
+      "file": "tests/test_v2.py",
+      "pin": "explicit",
+      "test": "test_explicit_state_dir_skips_the_candidate_scan"
+    },
+    {
       "case": null,
       "class": "FlakeStreamTests",
       "file": "tests/test_v2.py",
@@ -629,6 +636,20 @@
       "file": "tests/test_v2.py",
       "pin": "legacy",
       "test": "test_legacy_hash_matches_source"
+    },
+    {
+      "case": null,
+      "class": "DoctorTests",
+      "file": "tests/test_v2.py",
+      "pin": "keepalive-consent",
+      "test": "test_live_keepalive_without_recorded_consent_is_a_hard_failure"
+    },
+    {
+      "case": null,
+      "class": "DoctorTests",
+      "file": "tests/test_v2.py",
+      "pin": "recorded owner ask",
+      "test": "test_live_keepalive_without_recorded_consent_is_a_hard_failure"
     },
     {
       "case": null,
@@ -1021,6 +1042,13 @@
       "file": "tests/test_v2.py",
       "pin": "src/config.py",
       "test": "test_symbol_drift_flagged_with_file_and_line"
+    },
+    {
+      "case": null,
+      "class": "DoctorTests",
+      "file": "tests/test_v2.py",
+      "pin": "one candidate",
+      "test": "test_symlinked_candidates_are_one_dir"
     },
     {
       "case": "E7-5-open-pr-claim",
@@ -1553,6 +1581,34 @@
       "file": "tests/test_v2.py",
       "pin": "a != b",
       "test": "test_trailing_comment_and_multiline_string_guarded"
+    },
+    {
+      "case": "E7-9-cold-start",
+      "class": "DoctorTests",
+      "file": "tests/test_v2.py",
+      "pin": "journal",
+      "test": "test_two_candidate_state_dirs_are_a_hard_failure"
+    },
+    {
+      "case": null,
+      "class": "DoctorTests",
+      "file": "tests/test_v2.py",
+      "pin": "proj-old-oracle",
+      "test": "test_two_candidate_state_dirs_are_a_hard_failure"
+    },
+    {
+      "case": null,
+      "class": "DoctorTests",
+      "file": "tests/test_v2.py",
+      "pin": "proj-oracle",
+      "test": "test_two_candidate_state_dirs_are_a_hard_failure"
+    },
+    {
+      "case": null,
+      "class": "DoctorTests",
+      "file": "tests/test_v2.py",
+      "pin": "state-dir-candidates",
+      "test": "test_two_candidate_state_dirs_are_a_hard_failure"
     },
     {
       "case": null,
