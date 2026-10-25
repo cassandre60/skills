@@ -4975,5 +4975,110 @@ class StatelessWakeTests(RepoTestCase):
         self.assertTrue(payload["needs_brain"])
         self.assertIn("queue-idle", payload["reasons"][0])
 
+
+class ModelPoolTests(RepoTestCase):
+    """Issue #103: the recorded model pool is an ALLOWLIST with a free-first
+    ladder — premium models are reachable only when the owner lists them,
+    dynamic sources are owner-configured mechanisms (never hardcoded lists),
+    and an unavailable source degrades with a warning instead of fabricating
+    entries."""
+
+    def stage(self, cfg, opencode_stub=None):
+        repo, _origin = init_repo(self.tmp, name="pool-repo", with_origin=True)
+        install_scripts(repo)
+        write_config(repo, cfg)
+        bin_dir = path_with_only(self.tmp, ("git",))
+        if opencode_stub is not None:
+            stub = write(bin_dir / "opencode", opencode_stub)
+            stub.chmod(0o755)
+        env = env_with_path(bin_dir)
+        return repo, env
+
+    MODELS_STUB = (
+        "#!/bin/sh\n"
+        "printf '%s\\n' opencode/a-free anthropic/claude-premium opencode/b-free\n"
+    )
+
+    def test_pool_ladder_orders_free_first_and_includes_only_listed_models(self):
+        repo, env = self.stage(
+            {
+                "fleet": {
+                    "model_pool": {
+                        "entries": [
+                            {"id": "anthropic/claude-premium", "tier": "premium"},
+                            {"id": "opencode/x-free", "tier": "free"},
+                        ]
+                    }
+                }
+            }
+        )
+        res = script(repo, "fleet.py", "pool", "ladder", env=env)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(res.stdout.split(), ["opencode/x-free", "anthropic/claude-premium"])
+
+    def test_pool_ladder_dynamic_source_filters_by_owner_rule(self):
+        repo, env = self.stage(
+            {
+                "fleet": {
+                    "model_pool": {
+                        "dynamic": [{"source": "opencode-models", "keep": {"provider": "opencode"}}],
+                        "entries": [{"id": "nvidia/z-ai/glm-5.3-flash", "tier": "free"}],
+                    }
+                }
+            },
+            opencode_stub=self.MODELS_STUB,
+        )
+        res = script(repo, "fleet.py", "pool", "ladder", env=env)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        # dynamic (free by the owner's filter) first, then static free; the
+        # premium model the CLI listed is NOT kept — it was never in the pool.
+        self.assertEqual(
+            res.stdout.split(), ["opencode/a-free", "opencode/b-free", "nvidia/z-ai/glm-5.3-flash"]
+        )
+
+    def test_pool_static_entry_without_tier_defaults_to_premium(self):
+        repo, env = self.stage({"fleet": {"model_pool": {"entries": [{"id": "x/y"}]}}})
+        ladder = script(repo, "fleet.py", "pool", "ladder", env=env)
+        self.assertEqual(ladder.returncode, 0, ladder.stdout + ladder.stderr)
+        self.assertEqual(ladder.stdout.split(), ["x/y"])
+        shown = script(repo, "fleet.py", "pool", "show", env=env)
+        self.assertEqual(shown.returncode, 0, shown.stdout + shown.stderr)
+        self.assertIn("tier=premium", shown.stderr)
+
+    def test_pool_dynamic_source_without_keep_rules_keeps_nothing(self):
+        repo, env = self.stage(
+            {"fleet": {"model_pool": {"dynamic": [{"source": "opencode-models"}]}}},
+            opencode_stub=self.MODELS_STUB,
+        )
+        res = script(repo, "fleet.py", "pool", "ladder", env=env)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(res.stdout.split(), [])
+        self.assertIn("no keep rules", res.stderr)
+
+    def test_pool_unavailable_dynamic_source_skips_with_warning(self):
+        repo, env = self.stage(
+            {
+                "fleet": {
+                    "model_pool": {
+                        "dynamic": [{"source": "opencode-models", "keep": {"provider": "opencode"}}],
+                        "entries": [{"id": "fallback/only", "tier": "free"}],
+                    }
+                }
+            }
+        )
+        res = script(repo, "fleet.py", "pool", "ladder", env=env)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(res.stdout.split(), ["fallback/only"])
+        self.assertIn("unavailable", res.stderr)
+
+    def test_pool_show_empty_prints_the_onboarding_pointer(self):
+        repo, env = self.stage({})
+        res = script(repo, "fleet.py", "pool", "show", env=env)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertIn("model pool is empty", res.stderr)
+        self.assertIn("owner", res.stderr)
+        self.assertIn("fleet.model_pool", res.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
