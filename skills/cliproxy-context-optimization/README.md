@@ -1,16 +1,21 @@
-# cliproxy-log-inspection
+# cliproxy-context-optimization
 
-Read CLIProxyAPI request captures without drowning in escaped JSON.
+Read CLIProxyAPI request captures without drowning in escaped JSON — then bill
+the agent context they expose and cut it.
 
 A capture contains the full request body, the translated upstream request, the
 upstream response, and the downstream response, all in one line per section. That
 is complete and nearly unreadable. This skill finds the right capture, verifies
-which logging switch produced it, and renders three documents:
+which logging switch produced it, renders three documents, and then measures
+where the per-turn context tokens go — the skill catalog, agent baseline files,
+harness fixed cost, per-request latency levers — with savings proven by a fresh
+capture:
 
 - a transcript with the conversation, quoted thinking, reply, tool calls, and
   compact request/response details;
 - the full system and developer prompt, verbatim, as Markdown;
-- a raw reference with every header, request body, and stream payload.
+- a raw reference with every header, request body, and stream payload;
+- a context budget report per section with ownership map and levers.
 
 The original `.log` is never modified. The raw reference preserves values;
 presentation changes only.
@@ -22,10 +27,12 @@ presentation changes only.
 | [SKILL.md](SKILL.md) | entrypoint: rules, workflow, supported shapes, traps |
 | [references/01-request-logging.md](references/01-request-logging.md) | the two switches, config layout drift, `auth-dir`, enabling and verifying capture |
 | [references/02-log-anatomy.md](references/02-log-anatomy.md) | section map, error captures, SSE, tool calls, fidelity contract |
+| [references/03-context-budget.md](references/03-context-budget.md) | optimization method, ownership map, levers with receipts, verification protocol |
 | [FIELD-NOTES.md](FIELD-NOTES.md) | why the skill exists and the setup already completed on the originating machine |
 | [scripts/find_request_logs.py](scripts/find_request_logs.py) | config and log discovery; request/error inventory; mismatch warnings; `--json` |
 | [scripts/render_request_log.py](scripts/render_request_log.py) | transcript, system prompt, and raw-reference renderer with automatic verification |
-| [tests/](tests/) | fixture captures and scoped renderer/finder tests |
+| [scripts/analyze_context_budget.py](scripts/analyze_context_budget.py) | per-section context budget, skill ranking, duplicate flags, latency levers |
+| [tests/](tests/) | fixture captures and scoped renderer/finder/analyzer tests |
 
 The central distinction: `logging-to-file` writes application logs.
 `request-log` writes request and response bodies. Error logs can exist while
@@ -36,7 +43,7 @@ request logging is off, and the management logs endpoint never returns bodies.
 Copy this directory into wherever your agent reads skills from:
 
 ```sh
-cp -r skills/cliproxy-log-inspection ~/.config/opencode/skills/
+cp -r skills/cliproxy-context-optimization ~/.config/opencode/skills/
 ```
 
 Or install the whole set from the repository root with the `skills` installer.
@@ -71,6 +78,17 @@ Existing outputs are not overwritten without `--force`. Exit code `4` means the
 renderer's fidelity check failed; do not treat the bundle as verified in that
 case.
 
+Then bill the context and pick a lever:
+
+```sh
+python3 scripts/analyze_context_budget.py /tmp/readable
+python3 scripts/analyze_context_budget.py /tmp/readable --json --top 20
+```
+
+Both transcript shapes (table-based and prose-based) are parsed, and error
+captures are supported with their limits stated: a failed exchange carries no
+usage, so a post-change victory must be proven on a fresh successful capture.
+
 ## What the renderer supports
 
 - Streaming and non-streaming `/v1/chat/completions` responses.
@@ -90,22 +108,26 @@ incomplete split bodies rather than guessing.
 Run the scoped tests:
 
 ```sh
-python3 -m unittest discover -s skills/cliproxy-log-inspection/tests -v
+python3 -m unittest discover -s skills/cliproxy-context-optimization/tests -v
 ```
 
 The tests cover a streaming success, a gateway failure with no upstream request,
 a non-streaming tool call, an unsupported endpoint, overwrite refusal, JSON
 preservation, and deliberate verification failures (mismatched JSON, an altered
-reply, and an altered system prompt). The verification tests are guards against
-the checks being vacuous.
+reply, and an altered system prompt). The analyzer tests pin the section split,
+both transcript shapes, duplicate flagging, lever content, CLI exits, and
+newest-bundle selection. The verification tests are guards against the checks
+being vacuous.
 
 ## Limitations
 
 - One capture is one request, not a session replay.
 - Upstream payloads are preserved but not interpreted; the transcript is built
   from the downstream OpenAI-compatible exchange.
-- Split `request-log-parts-*` bodies are reported by the finder but not joined by
-  the renderer.
 - Truncated errors stay truncated. The renderer does not invent missing text.
 - Captures contain sensitive prompts and possibly credentials in headers. Keep
   them out of version control and redact before sharing.
+- The context budget converts characters to tokens with a fixed ratio; its
+  token counts are estimates, its character counts are measurements.
+- Model/provider internals that own the harness catalog and tool declarations
+  are out of scope: report them as fixed cost, not savings.

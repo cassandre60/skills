@@ -92,3 +92,27 @@ The failure modes that matter are silent:
 The renderer verifies JSON round-trips, payload presence, and transcript text
 before printing success. When it cannot verify, it exits non-zero. That is the
 point: an unverified bundle is not a deliverable.
+
+## v2.0.0 — from inspection to optimization (2026-10-25)
+
+The naming changed because the job changed. Turn-one work in a real session
+showed the rendered bundle was sufficient to not merely read a capture but to
+bill it: on the originating machine a five-character prompt paid 15,354 prompt
+tokens, and the bill split 53% skills catalog (62 skills, 26.5K chars), 33%
+agent baseline (16,689 chars), 10% harness Code Mode catalog, and latency
+42.0 s driven by `thinkingLevel: high` (41.8 s of provider `Server-Timing`).
+
+Levers actually applied and measured in that session: 26 Dart/Flutter skills,
+three overlapping pairs, one unconfigured-dependency skill, and six
+personal-workflow skills parked to `~/.agents/skills-parked/` (catalog
+26.5K → ~13.5K chars); the global baseline compressed from 16,689 to 8,331
+chars without dropping any rule. Post-change verification was blocked when the
+CLI's default-model chain fell back to a dead `antigravity` provider and only
+error captures were produced — the honest close is that the token delta is
+derived from payload sizes, and the first fresh 200 capture confirms it.
+
+Method caveats learned while writing the analyzer: transcripts now render in
+two shapes (table-based and prose-based) and the parser reads both; error
+captures carry no usage; section char counts never sum exactly to the header
+length; and the similarity threshold flags duplicates only as candidates to
+read, not verdicts.
