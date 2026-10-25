@@ -56,7 +56,11 @@ a narrow finder with a proven-safe oracle — first-wave T1: issue/proposal
 only until the owner promotes the stream), and **L** meta — gated behind
 its own kill switch (`meta.py`: claims replayed from recorded fleet
 history, L4 surfaces issue-only, lessons expire). **D** (migration
-safety) remains planned.
+safety) remains planned. **M** ratchet (`ratchet.py`: a configured
+measurable proxy — lint count, TODO count, bundle size — accepted only on
+strict improvement with the targeted tests green and the diff inside the
+ratchet's scope; first-wave T1: issue/proposal only, the stream never
+commits).
 **F** flake & determinism (`flakes.py`: finder + N-run oracle), the first
 expansion stream. The oracle demands ZERO failing runs after a fix —
 "passed twice in a row" is not evidence — and names a cause class
@@ -81,6 +85,7 @@ recording a negative row here.
 | **I** Docs & spec truthfulness | executable examples flip fail→pass; spec-id trace complete | T3 path |
 | **J** Simplification / dead code | suite green **and** touched-area mutation score not lower | T1 first wave → T2 |
 | **K** Dependency evolution | build + targeted suite green on the bump; majors one per PR | T2 |
+| **M** Ratchet | metric strictly better than base, targeted tests green, diff in scope | T1 first wave → T2 |
 | **L** Meta (fleet self-improvement) | proposal beats incumbent on history replay; eval set does not regress | T1/T2 capped |
 
 `ledger.py` rejects still-planned letters with "planned, not implemented"

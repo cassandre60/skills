@@ -540,6 +540,7 @@ STREAMS: Dict[str, Dict[str, Any]] = {
     "I": {"label": "I (Docs & Spec Truthfulness)", "status": "available"},
     "J": {"label": "J (Simplification / Dead Code)", "status": "available"},
     "K": {"label": "K (Dependency Evolution)", "status": "available"},
+    "M": {"label": "M (Ratchet)", "status": "available"},
     "L": {"label": "L (Meta: Fleet Self-Improvement)", "status": "gated"},
 }
 _STREAM_ALIASES: Dict[str, str] = {"1": "A", "2": "B"}

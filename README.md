@@ -58,18 +58,16 @@ skills/
     SKILL.md
     CHANGELOG-v2.md
     LICENSE
-    Plan make autonomous-improvement general, measurable and self-improving.md
     README.md
     SPEC.md
-    repomix-output.xml
     assets/     # 5 files
     docs/       # 2 files
-    evals/      # 145 files
+    evals/      # 149 files
     examples/   # 2 files
     fleet-ops/  # 16 files
     references/ # 11 files
-    scripts/    # 31 files
-    tests/      # 16 files
+    scripts/    # 32 files
+    tests/      # 17 files
   cliproxy-integration/
     SKILL.md
     FIELD-NOTES.md
