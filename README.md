@@ -58,8 +58,10 @@ skills/
     SKILL.md
     CHANGELOG-v2.md
     LICENSE
+    Plan make autonomous-improvement general, measurable and self-improving.md
     README.md
     SPEC.md
+    repomix-output.xml
     assets/     # 5 files
     docs/       # 2 files
     evals/      # 149 files
