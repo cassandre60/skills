@@ -1,24 +1,32 @@
 #!/usr/bin/env python3
-"""Context budget analyzer for a rendered CLIProxyAPI capture bundle.
+"""Context budget analyzer for one agent model turn, from any capture source.
 
-Reads the bundle produced by ``render_request_log.py`` (the transcript
-``*.md`` and the ``*-system-prompt.md``) and reports where the per-turn
-context tokens go: the skill catalog, the agent baseline files, the
-harness/catalog fixed cost, and the latency levers recorded in the capture.
+Reports where the per-turn context tokens go — the skill catalog, the agent
+instruction baseline files, the harness catalogs and tool declarations, the
+date/env tail, and the latency levers recorded in the capture — and pairs
+every measured lever with a verification step on a fresh successful capture.
+
+Supported sources (all read-only):
+
+- a rendered capture bundle (the CLIProxyAPI adapter's output): the transcript
+  ``<id>.md`` plus ``<id>-system-prompt.md``,
+- explicit ``--system-prompt``/``--transcript`` rendered Markdown paths, or
+- a raw OpenAI-compatible pair: ``--request`` (chat completion request JSON
+  with ``messages`` and ``tools``) together with ``--response`` (response JSON
+  with ``usage``), plus optional ``--latency-ms`` when the source recorded it.
 
 It never modifies the capture or the bundle. It inspects sizes by character
 count (measured, authoritative) and reports token counts as estimates built
-from a configurable chars-per-token ratio (labelled ``est.`` everywhere).
+from a fixed chars-per-token ratio (labelled ``est.`` everywhere). Sectioning
+recognizes the OpenCode system-prompt taxonomy and degrades to an
+``unmapped_system_message`` total when the markers belong to another harness;
+error captures carry no usage facts and the analyzer says so.
 
 Usage:
   python3 analyze_context_budget.py BUNDLE_DIR
   python3 analyze_context_budget.py --system-prompt A.md --transcript B.md
-  python3 analyze_context_budget.py BUNDLE_DIR --json --top 20 --ratio 3.85
-
-BUNDLE_DIR must contain one rendered bundle: a transcript ``<id>.md`` and, if
-the capture had a system message, ``<id>-system-prompt.md``. When several
-bundles are present the newest by modification time wins. Error captures
-carry no usage facts; the analyzer reports what is present and says so.
+  python3 analyze_context_budget.py --request send.json --response recv.json
+  python3 analyze_context_budget.py BUNDLE_DIR --json --top 20
 
 Exit codes: 0 analysis produced, 2 usage problem, 3 nothing analyzable.
 """
@@ -42,6 +50,7 @@ SECTION_ORDER = (
     "baseline_files",
     "date_and_env",
 )
+UNMAPPED_SECTION = "unmapped_system_message"
 
 
 def parse_skills_catalog(block: str) -> dict:
@@ -83,20 +92,14 @@ def parse_skills_catalog(block: str) -> dict:
     }
 
 
-def parse_system_prompt_doc(text: str) -> dict:
-    """Split the rendered system-prompt document into named sections."""
-    errors: list[str] = []
-    header_len = None
-    model = None
-    m = re.search(
-        r"The\s+([\d,]+)-character system message sent to `([^`]+)`", text
-    )
-    if m:
-        header_len = int(m.group(1).replace(",", ""))
-        model = m.group(2)
-    else:
-        errors.append("system-prompt header line not found")
+def sectionize_system_text(text: str) -> tuple[dict, dict | None, list[str]]:
+    """Split a system message body into OpenCode-taxonomy sections.
 
+    Works on the raw system message or the rendered document alike. When no
+    known anchor appears, every known section is zero and the whole text is
+    reported under ``unmapped_system_message`` so totals stay measured.
+    """
+    errors: list[str] = []
     payload_start = text.find("You are an AI agent")
     payload_start = text.find("\n", payload_start) + 1 if payload_start >= 0 else 0
 
@@ -106,6 +109,13 @@ def parse_system_prompt_doc(text: str) -> dict:
     instr = text.find("Instructions from:")
     today = text.find("Today's date")
     env = text.find("<env>")
+
+    if max(code_mode, skills_start, instr, today, env) < 0:
+        # No taxonomy anchor from any harness: report one unmapped total
+        # instead of misattributing the whole text to a known section.
+        return ({UNMAPPED_SECTION: len(text), **{name: 0 for name in SECTION_ORDER}},
+                None,
+                errors)
 
     if skills_start >= 0 and skills_end == -1:
         errors.append("<available_skills> opened but never closed")
@@ -153,12 +163,34 @@ def parse_system_prompt_doc(text: str) -> dict:
         else None
     )
 
+    recognized = sum(sections.values())
+    if not recognized:
+        sections = {UNMAPPED_SECTION: len(text), **sections}
+
+    return sections, catalog, errors
+
+
+def parse_system_prompt_doc(text: str) -> dict:
+    """Split the rendered system-prompt document into named sections."""
+    errors: list[str] = []
+    header_len = None
+    model = None
+    m = re.search(
+        r"The\s+([\d,]+)-character system message sent to `([^`]+)`", text
+    )
+    if m:
+        header_len = int(m.group(1).replace(",", ""))
+        model = m.group(2)
+    else:
+        errors.append("system-prompt header line not found")
+
+    sections, catalog, sect_errors = sectionize_system_text(text)
     return {
         "model": model,
         "system_message_chars": header_len,
         "sections": sections,
         "catalog": catalog,
-        "errors": errors,
+        "errors": errors + sect_errors,
     }
 
 
@@ -169,6 +201,7 @@ def parse_transcript(text: str) -> dict:
         "completion_tokens": None,
         "reasoning_tokens": None,
         "total_tokens": None,
+        "cached_tokens": None,
         "request_body_bytes": None,
         "tools_count": None,
         "thinking_level": None,
@@ -252,6 +285,171 @@ def parse_transcript(text: str) -> dict:
     return out
 
 
+def _find_thinking_key(node) -> str | None:
+    """Locate a thinking/reasoning effort key anywhere in a request JSON."""
+    if isinstance(node, dict):
+        for key in ("thinkingLevel", "thinking_level", "reasoning_effort"):
+            value = node.get(key)
+            if isinstance(value, str) and value:
+                return value
+        for value in node.values():
+            found = _find_thinking_key(value)
+            if found:
+                return found
+    elif isinstance(node, list):
+        for item in node:
+            found = _find_thinking_key(item)
+            if found:
+                return found
+    return None
+
+
+def _content_chars(content) -> tuple[int, list[str]]:
+    """Measured characters in a message content field."""
+    errors: list[str] = []
+    if isinstance(content, str):
+        return len(content), errors
+    if isinstance(content, list):
+        total = 0
+        for part in content:
+            if isinstance(part, dict) and isinstance(part.get("text"), str):
+                total += len(part["text"])
+            else:
+                errors.append("non-text content part; chars undercounted")
+        return total, errors
+    if content is None:
+        return 0, errors
+    errors.append("unmapped content shape; chars undercounted")
+    return 0, errors
+
+
+def parse_openai_request(json_text: str, request_bytes: int | None) -> dict:
+    """Parse an OpenAI-compatible chat completion request JSON."""
+    out: dict = {
+        "model": None,
+        "system_message_chars": None,
+        "sections": {},
+        "catalog": None,
+        "tools_count": None,
+        "request_body_bytes": request_bytes,
+        "user_prompt_chars": None,
+        "thinking_level": None,
+        "errors": [],
+    }
+    try:
+        payload = json.loads(json_text)
+    except json.JSONDecodeError as exc:
+        out["errors"].append(f"request JSON invalid: {exc}")
+        return out
+    if not isinstance(payload, dict):
+        out["errors"].append("request JSON is not an object")
+        return out
+
+    model = payload.get("model")
+    if isinstance(model, str):
+        out["model"] = model
+    if not isinstance(payload.get("messages"), list):
+        out["errors"].append("request JSON has no messages array")
+        return out
+
+    system_parts: list[str] = []
+    content_errors: list[str] = []
+    for message in payload["messages"]:
+        if not isinstance(message, dict):
+            out["errors"].append("message entry is not an object")
+            continue
+        role = message.get("role")
+        chars, part_errors = _content_chars(message.get("content"))
+        content_errors.extend(part_errors)
+        if role in ("system", "developer"):
+            if isinstance(message.get("content"), str):
+                system_parts.append(message["content"] + "\n")
+            else:
+                out["errors"].append(
+                    "system message content not plain text; sectioning skipped "
+                    f"for {chars} chars"
+                )
+        elif out["user_prompt_chars"] is None and isinstance(message.get("content"), str):
+            out["user_prompt_chars"] = len(message["content"].strip())
+    out["errors"].extend(content_errors[:5])
+
+    system_text = "".join(system_parts)
+    out["system_message_chars"] = len(system_text)
+    if system_text:
+        sections, catalog, sect_errors = sectionize_system_text(system_text)
+        out["sections"] = sections
+        out["catalog"] = catalog
+        out["errors"].extend(sect_errors)
+    else:
+        out["sections"] = {UNMAPPED_SECTION: 0, **{name: 0 for name in SECTION_ORDER}}
+
+    tools = payload.get("tools")
+    if isinstance(tools, list):
+        out["tools_count"] = len(tools)
+    elif isinstance(payload.get("functions"), list):
+        out["tools_count"] = len(payload["functions"])
+    elif tools is not None:
+        out["errors"].append("tools field is present but not an array")
+
+    out["thinking_level"] = _find_thinking_key(payload)
+    return out
+
+
+def parse_openai_response(json_text: str) -> dict:
+    """Parse an OpenAI-compatible response JSON for usage facts."""
+    out: dict = {
+        "prompt_tokens": None,
+        "completion_tokens": None,
+        "reasoning_tokens": None,
+        "total_tokens": None,
+        "cached_tokens": None,
+        "user_prompt_chars": None,
+        "model": None,
+        "errors": [],
+    }
+    try:
+        payload = json.loads(json_text)
+    except json.JSONDecodeError as exc:
+        out["errors"].append(f"response JSON invalid: {exc}")
+        return out
+    if not isinstance(payload, dict):
+        out["errors"].append("response JSON is not an object")
+        return out
+    usage = payload.get("usage")
+    if not isinstance(usage, dict):
+        out["errors"].append("response JSON has no usage object (failed turn?)")
+        return out
+    for key, target in (
+        ("prompt_tokens", "prompt_tokens"),
+        ("completion_tokens", "completion_tokens"),
+        ("total_tokens", "total_tokens"),
+    ):
+        value = usage.get(key)
+        if isinstance(value, int):
+            out[target] = value
+    details = usage.get("completion_tokens_details")
+    if isinstance(details, dict) and isinstance(details.get("reasoning_tokens"), int):
+        out["reasoning_tokens"] = details["reasoning_tokens"]
+    prompt_details = usage.get("prompt_tokens_details")
+    if isinstance(prompt_details, dict) and isinstance(
+        prompt_details.get("cached_tokens"), int
+    ):
+        out["cached_tokens"] = prompt_details["cached_tokens"]
+    if not isinstance(out["prompt_tokens"], int) and isinstance(
+        usage.get("input_tokens"), int
+    ):
+        out["prompt_tokens"] = usage["input_tokens"]
+        completion = usage.get("output_tokens")
+        if isinstance(completion, int):
+            out["completion_tokens"] = completion
+    model = payload.get("model")
+    if isinstance(model, str):
+        out["model"] = model
+    if out["prompt_tokens"] is None:
+        out["errors"].append("usage line not found (error captures carry none)")
+    return out
+
+
 def _fmt(n: int) -> str:
     return f"{n:,}"
 
@@ -306,18 +504,32 @@ def build_levers(usage: dict, sp: dict) -> list[str]:
             "— use a lite or thinking-lite variant for chat-scale turns; "
             "context trimming cannot remove this."
         )
+    unmapped = sp["sections"].get(UNMAPPED_SECTION, 0)
+    if unmapped:
+        levers.append(
+            f"Unmapped system body: {_fmt(unmapped)} chars did not match a "
+            "known section taxonomy — bill it as instruction fixed cost "
+            "and read it before claiming any lever."
+        )
     levers.append(
         "Harness fixed cost: code_mode_catalog "
         f"{_fmt(sp['sections'].get('code_mode_catalog', 0))} chars and "
         f"{usage.get('tools_count') or '?'} tool declarations belong to the "
         "harness and change with releases, not configuration."
     )
+    cached = usage.get("cached_tokens")
+    prompted = usage.get("prompt_tokens")
+    if isinstance(cached, int) and prompted and 0 < cached < prompted:
+        levers.append(
+            f"Provider cache served {cached} of {prompted} prompt tokens — "
+            "protect that discount by keeping the stable prefix byte-stable; "
+            "trim the tail, never churn the head."
+        )
     levers.append(
         "Caching: keep section order and the leading sections byte-stable "
         "when trimming (date/env last) so repeated turns share one "
         "cacheable prefix."
     )
-    prompted = usage.get("prompt_tokens")
     if prompted and usage.get("request_body_bytes") and sys_chars:
         levers.append(
             f"Measure-then-verify: re-run after any change on a fresh "
@@ -331,6 +543,31 @@ def build_levers(usage: dict, sp: dict) -> list[str]:
 def analyze(sp_text: str, transcript_text: str, top: int = DEFAULT_TOP) -> dict:
     sp = parse_system_prompt_doc(sp_text)
     usage = parse_transcript(transcript_text)
+    return _assemble(sp, usage, top=top)
+
+
+def analyze_pair(
+    request_text: str,
+    response_text: str,
+    request_bytes: int | None = None,
+    latency_ms: float | None = None,
+    top: int = DEFAULT_TOP,
+) -> dict:
+    """Analyze one turn from a raw OpenAI-compatible request/response pair."""
+    sp = parse_openai_request(request_text, request_bytes)
+    usage = parse_openai_response(response_text)
+    usage["request_body_bytes"] = sp.get("request_body_bytes")
+    usage["tools_count"] = sp.get("tools_count")
+    usage["thinking_level"] = sp.get("thinking_level")
+    usage["user_prompt_chars"] = sp.get("user_prompt_chars") or usage.get(
+        "user_prompt_chars"
+    )
+    if latency_ms is not None:
+        usage["server_ms"] = float(latency_ms)
+    return _assemble(sp, usage, top=top)
+
+
+def _assemble(sp: dict, usage: dict, top: int) -> dict:
     catalog = sp.get("catalog") or {}
     sections = {
         name: {
@@ -339,13 +576,14 @@ def analyze(sp_text: str, transcript_text: str, top: int = DEFAULT_TOP) -> dict:
         }
         for name, chars in sp["sections"].items()
     }
-    result = {
+    return {
         "model": sp["model"] or usage.get("model"),
         "system_message_chars": sp.get("system_message_chars"),
         "prompt_tokens": usage.get("prompt_tokens"),
         "completion_tokens": usage.get("completion_tokens"),
         "reasoning_tokens": usage.get("reasoning_tokens"),
         "total_tokens": usage.get("total_tokens"),
+        "cached_tokens": usage.get("cached_tokens"),
         "request_body_bytes": usage.get("request_body_bytes"),
         "tools_count": usage.get("tools_count"),
         "thinking_level": usage.get("thinking_level"),
@@ -361,9 +599,8 @@ def analyze(sp_text: str, transcript_text: str, top: int = DEFAULT_TOP) -> dict:
         ],
         "possible_overlap_pairs": catalog.get("possible_overlap_pairs", []),
         "levers": build_levers(usage, sp),
-        "errors": sp["errors"] + usage["errors"],
+        "errors": sp["errors"] + list(usage.get("errors", [])),
     }
-    return result
 
 
 def render_markdown(result: dict) -> str:
@@ -440,9 +677,40 @@ def main(argv: list[str] | None = None) -> int:
                         help="rendered bundle directory")
     parser.add_argument("--system-prompt", type=Path)
     parser.add_argument("--transcript", type=Path)
+    parser.add_argument("--request", type=Path,
+                        help="OpenAI-compatible request JSON")
+    parser.add_argument("--response", type=Path,
+                        help="OpenAI-compatible response JSON")
+    parser.add_argument("--latency-ms", type=float,
+                        help="recorded server time for the request/response pair")
     parser.add_argument("--top", type=int, default=DEFAULT_TOP)
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
+
+    if args.request or args.response:
+        if not (args.request and args.response):
+            parser.error("--request and --response go together")
+            return 2
+        for path in (args.request, args.response):
+            if not path.exists():
+                print(f"error: {path} not found", file=sys.stderr)
+                return 2
+        try:
+            result = analyze_pair(
+                args.request.read_text(encoding="utf-8"),
+                args.response.read_text(encoding="utf-8"),
+                request_bytes=args.request.stat().st_size,
+                latency_ms=args.latency_ms,
+                top=args.top,
+            )
+        except (ValueError, OSError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 3
+        if args.json:
+            print(json.dumps(result, indent=2))
+        else:
+            sys.stdout.write(render_markdown(result))
+        return 0
 
     if args.system_prompt and args.transcript:
         sp_path, tx_path = args.system_prompt, args.transcript
@@ -463,8 +731,8 @@ def main(argv: list[str] | None = None) -> int:
             tx_path.stem + "-system-prompt.md"
         )
     else:
-        parser.error("give a bundle directory or both --system-prompt and "
-                     "--transcript")
+        parser.error("give a bundle directory, a request/response pair, or "
+                     "both --system-prompt and --transcript")
         return 2
     if not sp_path.exists():
         print(f"error: {sp_path} not found", file=sys.stderr)

@@ -1,12 +1,12 @@
-# cliproxy-context-optimization
+# context-optimization
 
-Read CLIProxyAPI request captures without drowning in escaped JSON — then bill
+Read captured model exchanges without drowning in escaped JSON — then bill
 the agent context they expose and cut it.
 
 A capture contains the full request body, the translated upstream request, the
 upstream response, and the downstream response, all in one line per section. That
-is complete and nearly unreadable. This skill finds the right capture, verifies
-which logging switch produced it, renders three documents, and then measures
+is complete and nearly unreadable. This skill obtains one model turn from any
+supported source, renders it into readable documents, and then measures
 where the per-turn context tokens go — the skill catalog, agent baseline files,
 harness fixed cost, per-request latency levers — with savings proven by a fresh
 capture:
@@ -17,21 +17,23 @@ capture:
 - a raw reference with every header, request body, and stream payload;
 - a context budget report per section with ownership map and levers.
 
-The original `.log` is never modified. The raw reference preserves values;
-presentation changes only.
+The original capture is never modified. The raw reference preserves values;
+presentation changes only. The analyzer alone needs no capture plumbing at
+all: an OpenAI-compatible request/response JSON pair from any gateway or
+session log (or plain rendered Markdown documents) is enough.
 
 ## What this covers
 
 | Path | What it is |
 | --- | --- |
-| [SKILL.md](SKILL.md) | entrypoint: rules, workflow, supported shapes, traps |
-| [references/01-request-logging.md](references/01-request-logging.md) | the two switches, config layout drift, `auth-dir`, enabling and verifying capture |
-| [references/02-log-anatomy.md](references/02-log-anatomy.md) | section map, error captures, SSE, tool calls, fidelity contract |
-| [references/03-context-budget.md](references/03-context-budget.md) | optimization method, ownership map, levers with receipts, verification protocol |
+| [SKILL.md](SKILL.md) | entrypoint: rules, workflow, capture sources, supported shapes, traps |
+| [references/01-request-logging.md](references/01-request-logging.md) | CLIProxyAPI source: the two switches, config layout drift, `auth-dir`, enabling and verifying capture |
+| [references/02-log-anatomy.md](references/02-log-anatomy.md) | CLIProxyAPI source: section map, error captures, SSE, tool calls, fidelity contract |
+| [references/03-context-budget.md](references/03-context-budget.md) | optimization method, ownership map, capture sources, levers with receipts, verification protocol |
 | [FIELD-NOTES.md](FIELD-NOTES.md) | why the skill exists and the setup already completed on the originating machine |
-| [scripts/find_request_logs.py](scripts/find_request_logs.py) | config and log discovery; request/error inventory; mismatch warnings; `--json` |
-| [scripts/render_request_log.py](scripts/render_request_log.py) | transcript, system prompt, and raw-reference renderer with automatic verification |
-| [scripts/analyze_context_budget.py](scripts/analyze_context_budget.py) | per-section context budget, skill ranking, duplicate flags, latency levers |
+| [scripts/find_request_logs.py](scripts/find_request_logs.py) | CLIProxyAPI source: config and log discovery; request/error inventory; mismatch warnings; `--json` |
+| [scripts/render_request_log.py](scripts/render_request_log.py) | CLIProxyAPI source: transcript, system prompt, and raw-reference renderer with automatic verification |
+| [scripts/analyze_context_budget.py](scripts/analyze_context_budget.py) | per-section context budget from any source: skill ranking, duplicate flags, latency and caching levers |
 | [tests/](tests/) | fixture captures and scoped renderer/finder/analyzer tests |
 
 The central distinction: `logging-to-file` writes application logs.
@@ -43,7 +45,7 @@ request logging is off, and the management logs endpoint never returns bodies.
 Copy this directory into wherever your agent reads skills from:
 
 ```sh
-cp -r skills/cliproxy-context-optimization ~/.config/opencode/skills/
+cp -r skills/context-optimization ~/.config/opencode/skills/
 ```
 
 Or install the whole set from the repository root with the `skills` installer.
@@ -51,6 +53,8 @@ Or install the whole set from the repository root with the `skills` installer.
 Requires Python 3.10 or newer. The scripts use only the standard library.
 
 ## Use
+
+### Source: CLIProxyAPI request-log capture
 
 Find out whether capture is enabled and where the files are:
 
@@ -78,7 +82,25 @@ Existing outputs are not overwritten without `--force`. Exit code `4` means the
 renderer's fidelity check failed; do not treat the bundle as verified in that
 case.
 
-Then bill the context and pick a lever:
+### Source: any OpenAI-compatible gateway or session log
+
+Save one request and its response as JSON (`messages` in the request, `usage`
+in the response; redact secrets first) and bill the turn directly:
+
+```sh
+python3 scripts/analyze_context_budget.py \
+  --request req.json --response resp.json --latency-ms 41839
+```
+
+### Source: rendered Markdown documents
+
+Already-readable docs work too — pass both paths:
+
+```sh
+python3 scripts/analyze_context_budget.py --system-prompt sp.md --transcript tx.md
+```
+
+Then pick a lever:
 
 ```sh
 python3 scripts/analyze_context_budget.py /tmp/readable
@@ -108,7 +130,7 @@ incomplete split bodies rather than guessing.
 Run the scoped tests:
 
 ```sh
-python3 -m unittest discover -s skills/cliproxy-context-optimization/tests -v
+python3 -m unittest discover -s skills/context-optimization/tests -v
 ```
 
 The tests cover a streaming success, a gateway failure with no upstream request,
