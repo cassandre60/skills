@@ -1,0 +1,45 @@
+=== REQUEST INFO ===
+Version: 8.0.27
+URL: /v1/chat/completions
+Method: POST
+Downstream Transport: http
+Upstream Transport: http
+Timestamp: 2026-10-26T12:00:00.000000000+01:00
+
+
+=== HEADERS ===
+Content-Type: application/json
+X-Session-Id: ses_tool
+
+
+=== REQUEST BODY ===
+{"model":"test-model","messages":[{"role":"user","content":"Use the read tool."}],"stream":false,"max_completion_tokens":32,"tools":[{"type":"function","function":{"name":"read","description":"Read a file","parameters":{"type":"object","properties":{"path":{"type":"string"}}}}}]}
+
+=== API REQUEST 1 ===
+Timestamp: 2026-10-26T12:00:00.100000000+01:00
+Upstream URL: https://upstream.invalid/v1/chat/completions
+HTTP Method: POST
+Auth: provider=test, auth_id=test:apikey:1, label=test, type=api_key value=***
+
+Headers:
+Content-Type: application/json
+
+Body:
+{"model":"test-model","messages":[{"role":"user","content":"Use the read tool."}],"stream":false}
+
+=== API RESPONSE 1 ===
+Timestamp: 2026-10-26T12:00:01.000000000+01:00
+
+Status: 200
+Headers:
+Content-Type: application/json
+
+Body:
+{"id":"up-tool","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"Done"},"finish_reason":"stop"}]}
+
+
+=== RESPONSE ===
+Status: 200
+Content-Type: application/json
+
+{"id":"chatcmpl-tool","object":"chat.completion","created":0,"model":"test-model","choices":[{"index":0,"message":{"role":"assistant","content":"Done","tool_calls":[{"id":"call_1","type":"function","function":{"name":"read","arguments":"{\"path\":\"README.md\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":20,"completion_tokens":8,"total_tokens":28}}

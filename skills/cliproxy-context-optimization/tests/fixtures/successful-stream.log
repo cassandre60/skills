@@ -1,0 +1,58 @@
+=== REQUEST INFO ===
+Version: 8.0.27
+URL: /v1/chat/completions
+Method: POST
+Downstream Transport: http
+Upstream Transport: http
+Timestamp: 2026-10-26T10:00:00.000000000+01:00
+
+
+=== HEADERS ===
+Content-Type: application/json
+Content-Length: 512
+X-Session-Id: ses_test
+Authorization: Bearer test-token
+
+
+=== REQUEST BODY ===
+{"model":"test-model","messages":[{"role":"system","content":"You are a test harness."},{"role":"user","content":"say hi"}],"stream":true,"stream_options":{"include_usage":true},"store":false,"max_completion_tokens":64,"reasoning_effort":"low","tools":[{"type":"function","function":{"name":"read","description":"Read a file","parameters":{"type":"object","properties":{"path":{"type":"string"}}}}}]}
+
+=== API REQUEST 1 ===
+Timestamp: 2026-10-26T10:00:00.100000000+01:00
+Upstream URL: https://upstream.invalid/v1/chat/completions
+HTTP Method: POST
+Auth: provider=test, auth_id=test:apikey:1, label=test, type=api_key value=***
+
+Headers:
+Content-Type: application/json
+
+Body:
+{"model":"test-model","messages":[{"role":"system","content":"You are a test harness."},{"role":"user","content":"say hi"}],"stream":true}
+
+=== API RESPONSE 1 ===
+Timestamp: 2026-10-26T10:00:02.100000000+01:00
+
+Status: 200
+Headers:
+Content-Type: text/event-stream
+
+Body:
+data: {"id":"up-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"Thinking about it.\n"},"finish_reason":null}]}
+
+data: {"id":"up-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"Hi there"},"finish_reason":"stop"}]}
+
+data: [DONE]
+
+
+=== RESPONSE ===
+Status: 200
+Content-Type: text/event-stream
+Cache-Control: no-cache
+
+data: {"id":"chatcmpl-test","object":"chat.completion.chunk","created":0,"model":"test-model","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"Thinking about it.\n","content":null},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"chatcmpl-test","object":"chat.completion.chunk","created":0,"model":"test-model","choices":[{"index":0,"delta":{"content":"Hi"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"chatcmpl-test","object":"chat.completion.chunk","created":0,"model":"test-model","choices":[{"index":0,"delta":{"content":" there"},"finish_reason":"stop","native_finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":5,"total_tokens":17,"completion_tokens_details":{"reasoning_tokens":2}}}
+
+data: [DONE]

@@ -1,0 +1,30 @@
+=== REQUEST INFO ===
+Version: 8.0.27
+URL: /v1/chat/completions
+Method: POST
+Downstream Transport: http
+Upstream Transport: http
+Timestamp: 2026-10-26T11:00:00.000000000+01:00
+
+
+=== HEADERS ===
+Content-Type: application/json
+Content-Length: 256
+X-Session-Id: ses_failure
+Authorization: Bearer test-token
+
+
+=== REQUEST BODY ===
+{"model":"test-model","messages":[{"role":"system","content":"You are a test harness."},{"role":"user","content":"hello"}],"stream":true,"stream_options":{"include_usage":true}}
+
+=== API RESPONSE ===
+Timestamp: 2026-10-26T11:00:00.050000000+01:00
+{"error":{"code":"model_cooldown","last_upstream_error":"{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"Individual quota reached. Resets in 1h.\",\n    \"status\": \"RESOURCE_EXHAUSTED\"\n  }\n}","message":"All credentials for model test-model are cooling down (last error: {\"error\":{\"code\":429,\"message\":\"Individual quota reached. Resets in 1h.\",\"status\":\"RESOURCE_EXHAUSTED\"}})","model":"test-model","reset_seconds":3600}}
+
+
+=== RESPONSE ===
+Status: 429
+Retry-After: 3600
+Content-Type: application/json
+
+{"error":{"code":"model_cooldown","last_upstream_error":"{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"Individual quota reached. Resets in 1h.\",\n    \"status\": \"RESOURCE_EXHAUSTED\"\n  }\n}","message":"All credentials for model test-model are cooling down (last error: {\"error\":{\"code\":429,\"message\":\"Individual quota reached. Resets in 1h.\",\"status\":\"RESOURCE_EXHAUSTED\"}})","model":"test-model","reset_seconds":3600}}

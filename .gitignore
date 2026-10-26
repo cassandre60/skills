@@ -10,3 +10,6 @@ __pycache__/
 
 # Owner-only local eval additions, never committed.
 skills/autonomous-improvement/evals/heldout.local.json
+
+# Synthetic CLIProxyAPI captures used as test fixtures.
+!skills/cliproxy-log-inspection/tests/fixtures/*.log
