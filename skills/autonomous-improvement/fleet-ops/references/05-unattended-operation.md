@@ -358,6 +358,40 @@ opencode run --auto -s "$1" ${3:+-m "$3"} "$2"
 permission prompt. For another harness, read its docs for the headless
 resume-session flags and set `ORCH_RESUME_CMD`; do not copy opencode flags.
 
+### The recorded model pool: free-first, owner-accepted (issue #103)
+
+The spend surface is DATA in the repo's local config, never hardcoded in the
+skill. `fleet.model_pool` records the models the owner accepts the fleet to
+spend; rotation candidates come only from it, so a premium pool the owner did
+not list is unreachable by construction.
+
+```json
+"fleet": {
+  "model_pool": {
+    "dynamic": [{ "source": "opencode-models", "keep": { "provider": "opencode" } }],
+    "entries": [
+      { "id": "nvidia/z-ai/glm-5.3-flash", "tier": "free", "note": "owner-accepted" }
+    ],
+    "order": "free-first"
+  }
+}
+```
+
+- `dynamic` sources are **mechanisms**: `opencode-models` runs `opencode
+  models` and keeps ids matching the owner's `keep` rules (`provider` /
+  `suffix` / `contains`). No rules configured = keeps nothing (an unfiltered
+  source would silently widen the spend surface). A missing CLI or a failed
+  call is a warning and a skip — never fabricated entries, never fatal.
+- `entries` are static ids; an entry **without a `tier` is premium**
+  (conservative). Listing a premium model is the owner's explicit choice;
+  nothing else can reach it.
+- Ladder precedence in the launcher: `ORCH_MODEL_LADDER` env > the recorded
+  pool (`fleet.py pool ladder`) > one harness-default attempt. A pool that
+  fails to resolve degrades to the harness default, never blocks a wake.
+- **First-deploy ask**: ask the owner which models the fleet may spend, and
+  record the answer under `fleet.model_pool` before arming any timer.
+  `fleet.py pool show` on an empty pool prints exactly this pointer.
+
 ### The dispatch prompt: short, and carrying its pre-checks
 
 Two lessons from one live session, both about the prompt itself.

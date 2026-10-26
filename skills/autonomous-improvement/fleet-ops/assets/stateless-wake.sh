@@ -46,7 +46,17 @@ REPO="${ORCH_REPO:-$PWD}"
 LOG="$STATE_DIR/wake.log"
 FAIL_FILE="$STATE_DIR/wake_failures"
 HB="$STATE_DIR/last_wake"
+# The fleet script used for the predicate and the model pool (R-08: env
+# override, never an edited script).
+FLEET_PY="${ORCH_FLEET_PY:-$REPO/scripts/autonomous/fleet.py}"
+# Ladder precedence: ORCH_MODEL_LADDER env > the recorded model pool
+# (fleet.model_pool, free-first; issue #103) > empty (one harness-default
+# attempt). A pool that fails to resolve degrades to empty, never blocks.
 LADDER="${ORCH_MODEL_LADDER:-}"
+if [ -z "$LADDER" ] && [ -f "$FLEET_PY" ]; then
+  LADDER="$(cd "$REPO" && python3 "$FLEET_PY" pool ladder 2>>"$LOG" | tr '\n' ' ' || true)"
+  [ -n "$LADDER" ] && echo "$(date -Is) ladder from the recorded model pool: [$LADDER]" >>"$LOG"
+fi
 NUDGE_TIMEOUT="${ORCH_WAKE_TIMEOUT:-3600}"
 MIN_INTERVAL="${ORCH_MIN_INTERVAL:-0}"
 COOLDOWN="${ORCH_MODEL_COOLDOWN:-3600}"
@@ -76,7 +86,7 @@ if [ ! -d "$REPO" ]; then
   echo "[!] ORCH_REPO does not exist: $REPO" >&2
   exit 2
 fi
-PREDICATE="$REPO/scripts/autonomous/fleet.py"
+PREDICATE="$FLEET_PY"
 if [ ! -f "$PREDICATE" ]; then
   echo "[!] predicate not found: $PREDICATE (install the skill scripts first)" >&2
   exit 2
