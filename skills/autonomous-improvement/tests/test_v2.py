@@ -5042,24 +5042,27 @@ class ModelPoolTests(RepoTestCase):
             res.stdout.split(), ["opencode/a-free", "opencode/b-free", "nvidia/z-ai/glm-5.3-flash"]
         )
 
+    def pool_json(self, repo, env, *args):
+        res = script(repo, "fleet.py", "pool", *args, "--json", env=env)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        return json.loads(res.stdout)
+
     def test_pool_static_entry_without_tier_defaults_to_premium(self):
         repo, env = self.stage({"fleet": {"model_pool": {"entries": [{"id": "x/y"}]}}})
         ladder = script(repo, "fleet.py", "pool", "ladder", env=env)
         self.assertEqual(ladder.returncode, 0, ladder.stdout + ladder.stderr)
         self.assertEqual(ladder.stdout.split(), ["x/y"])
-        shown = script(repo, "fleet.py", "pool", "show", env=env)
-        self.assertEqual(shown.returncode, 0, shown.stdout + shown.stderr)
-        self.assertIn("tier=premium", shown.stderr)
+        payload = self.pool_json(repo, env, "show")
+        self.assertEqual(payload["entries"], [{"id": "x/y", "tier": "premium", "source": "static"}])
 
     def test_pool_dynamic_source_without_keep_rules_keeps_nothing(self):
         repo, env = self.stage(
             {"fleet": {"model_pool": {"dynamic": [{"source": "opencode-models"}]}}},
             opencode_stub=self.MODELS_STUB,
         )
-        res = script(repo, "fleet.py", "pool", "ladder", env=env)
-        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
-        self.assertEqual(res.stdout.split(), [])
-        self.assertIn("no keep rules", res.stderr)
+        payload = self.pool_json(repo, env, "ladder")
+        self.assertEqual(payload["ladder"], [])
+        self.assertEqual(len(payload["warnings"]), 1)
 
     def test_pool_unavailable_dynamic_source_skips_with_warning(self):
         repo, env = self.stage(
@@ -5072,18 +5075,16 @@ class ModelPoolTests(RepoTestCase):
                 }
             }
         )
-        res = script(repo, "fleet.py", "pool", "ladder", env=env)
-        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
-        self.assertEqual(res.stdout.split(), ["fallback/only"])
-        self.assertIn("unavailable", res.stderr)
+        payload = self.pool_json(repo, env, "ladder")
+        self.assertEqual(payload["ladder"], ["fallback/only"])
+        self.assertEqual(len(payload["warnings"]), 1)
 
     def test_pool_show_empty_prints_the_onboarding_pointer(self):
         repo, env = self.stage({})
-        res = script(repo, "fleet.py", "pool", "show", env=env)
-        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
-        self.assertIn("model pool is empty", res.stderr)
-        self.assertIn("owner", res.stderr)
-        self.assertIn("fleet.model_pool", res.stderr)
+        payload = self.pool_json(repo, env, "show")
+        self.assertEqual(payload["entries"], [])
+        self.assertEqual(payload["ladder"], [])
+        self.assertEqual(payload["warnings"], [])
 
 
 if __name__ == "__main__":
