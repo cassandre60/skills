@@ -41,6 +41,7 @@ echo "ARGS: $*" >> "$WAKE_LOG"
 case "$*" in
   *quota-free*) echo "Error: Rate limit exceeded. Please try again later." ; exit 1 ;;
   *mention-free*) echo "wake: journal summary — rate limit hit twice yesterday" ; exit 0 ;;
+  *parse-error*) echo "Error: You must provide a message" ; exit 1 ;;
   *) echo "wake: housekeeping done" ; exit 0 ;;
 esac
 EOF
@@ -172,6 +173,55 @@ if [ -n "$RECORD" ]; then
   fi
 else
   fail "no run record appeared under .autonomous/run-records/"
+fi
+
+# --- case 7: a configured-but-missing prompt file is a loud misconfig ------
+# (issue #98: a fleet timer raced the config writer and every tick launched a
+# doomed run with an empty message, recorded as handled.)
+: >"$WAKE_LOG"
+rm -f "$TMP/state/wake.json"
+PATH="$TMP/bin:$PATH" \
+  ORCH_REPO="$SKILL_ROOT" \
+  ORCH_STATE_DIR="$TMP/state" \
+  ORCH_WAKE_CMD='fake-harness "$1" ${2:+-m "$2"}' \
+  ORCH_PROMPT_FILE="$TMP/state/no-such-prompt.md" \
+  ORCH_WAKE_TIMEOUT=20 \
+  ORCH_MIN_INTERVAL=0 \
+  GH_JSON="$TMP/prs-red.json" \
+  bash "$ASSETS" >/dev/null 2>&1
+RC=$?
+if [ "$RC" -eq 2 ]; then ok "a configured-but-missing prompt file exits 2 (misconfig)"; else fail "missing prompt file exited $RC (expected 2)"; fi
+if grep -q "ARGS:" "$WAKE_LOG" 2>/dev/null; then
+  fail "a wake was launched with no prompt file present"
+else
+  ok "no launch attempt happened without a prompt"
+fi
+
+# --- case 8: a non-quota harness failure retries via the total-failure lane -
+# (issue #97: exit 1 from the harness was recorded as done — exit 0, digest
+# kept — so a broken launcher parked the factory silently for hours.)
+: >"$WAKE_LOG"
+rm -f "$TMP/state/wake.json" "$TMP/state/wake_failures"
+PATH="$TMP/bin:$PATH" \
+  ORCH_REPO="$SKILL_ROOT" \
+  ORCH_STATE_DIR="$TMP/state" \
+  ORCH_WAKE_CMD='fake-harness "$1" ${2:+-m "$2"}' \
+  ORCH_MODEL_LADDER="opencode/parse-error" \
+  ORCH_WAKE_TIMEOUT=20 \
+  ORCH_MIN_INTERVAL=0 \
+  GH_JSON="$TMP/prs-red.json" \
+  bash "$ASSETS" >/dev/null 2>&1
+RC=$?
+if [ "$RC" -eq 3 ]; then ok "a non-quota harness failure exits 3 (total failure)"; else fail "non-quota harness failure exited $RC (expected 3)"; fi
+if [ -f "$TMP/state/wake.json" ] && grep -q '"cleared_by"' "$TMP/state/wake.json" 2>/dev/null; then
+  ok "the digest was cleared so the next tick retries the same state"
+else
+  fail "the digest survived a failed wake (next tick would go quiet)"
+fi
+if [ -s "$TMP/state/wake_failures" ]; then
+  fail "a non-quota failure parked the model in cooldown"
+else
+  ok "a non-quota failure parks nobody"
 fi
 
 if [ "$FAILED" -eq 0 ]; then
