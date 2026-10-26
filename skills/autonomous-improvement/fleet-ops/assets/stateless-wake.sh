@@ -18,7 +18,7 @@
 #   ORCH_REPO          repo to run the predicate in (default: cwd)
 #   ORCH_STATE_DIR     durable state dir holding wake.json (default: ~/.local/share/orchestrator)
 #   ORCH_WAKE_CMD      bash snippet; $1 = prompt text, $2 = model id ("" = harness default)
-#                      (default: opencode run --auto ${2:+-m "$2"} "$1")
+#                      (default: opencode run ${2:+-m "$2"} "$1" — positional message; see the adapter row for why --auto is NOT in the default)
 #   ORCH_PROMPT_FILE   file whose contents become $1 (default: $STATE_DIR/wake-prompt.md;
 #                      falls back to a built-in prompt naming the skill's wake protocol)
 #   ORCH_MODEL_LADDER  space-separated model ids, most-preferred first (empty = one attempt)
@@ -27,15 +27,19 @@
 #   ORCH_MODEL_COOLDOWN / ORCH_FAILURE_TTL  shared semantics with the watchdog
 #                      (wake_failures cooldown 3600s, prune older than 7 days)
 #
-# Exit codes: 0 = quiet (unchanged state) or a model woke the session;
-#             2 = misconfiguration (missing ORCH_REPO / predicate);
-#             3 = total failure (every attempted model failed) — wire
-#                 systemd OnFailure= or an owner notification to it.
+# Exit codes: 0 = quiet (unchanged state) or the harness run completed;
+#             2 = misconfiguration (missing ORCH_REPO / predicate / a
+#             configured ORCH_PROMPT_FILE that is unreadable or empty);
+#             3 = total failure (every attempted model failed, quota or
+#             otherwise) — wire systemd OnFailure= or an owner notification
+#             to it. Any failed attempt clears the recorded digest on the way
+#             out so the next tick retries the same state.
 #
 # Harness note: the ORCH_WAKE_CMD contract is the adapter row's one-shot
-# form. Verified for opencode (`opencode run --auto [-m model] "<prompt>"`,
-# `--format json` for machine-readable output; no turn/budget cap flag
-# exists there, so scope the prompt). Claude Code / Codex rows in
+# form. Verified for opencode (`opencode run [-m model] "<prompt>"`;
+# `--auto` is a top-level flag on builds that support it, never a `run`
+# flag — see the adapter row; no turn/budget cap flag exists, so scope the
+# prompt). Claude Code / Codex rows in
 # fleet-ops/references/05 are unverified — set ORCH_WAKE_CMD after checking your
 # installed version, and never pass a resume flag: this shape starts fresh.
 
@@ -62,7 +66,7 @@ MIN_INTERVAL="${ORCH_MIN_INTERVAL:-0}"
 COOLDOWN="${ORCH_MODEL_COOLDOWN:-3600}"
 FAIL_TTL="${ORCH_FAILURE_TTL:-604800}"
 PROMPT_FILE="${ORCH_PROMPT_FILE:-$STATE_DIR/wake-prompt.md}"
-WAKE_CMD="${ORCH_WAKE_CMD:-opencode run --auto \${2:+-m \"\$2\"} \"\$1\"}"
+WAKE_CMD="${ORCH_WAKE_CMD:-opencode run \${2:+-m \"\$2\"} \"\$1\"}"
 
 mkdir -p "$STATE_DIR"
 
@@ -159,11 +163,24 @@ ERROR_LINE_RE='^[[:space:]]*(Error|ERROR|error)\b|^[[:space:]]*HTTP[[:space:]]*4
 QUOTA_RE='rate limit|rate_limit|429|quota|too many requests|insufficient balance|balance is at|exceeded your current|overloaded'
 quota_failure() { grep -E "$ERROR_LINE_RE" "$1" 2>/dev/null | grep -Eiq "$QUOTA_RE"; }
 
-PROMPT="$(cat "$PROMPT_FILE" 2>/dev/null || true)"
-if [ -z "$PROMPT" ]; then
-  PROMPT="Read fleet-ops/references/05-unattended-operation.md §Stateless wake and run one wake: \
+# A prompt the OPERATOR pointed at (ORCH_PROMPT_FILE set) must be readable and
+# non-empty: launching a doomed run would otherwise be recorded as a completed
+# wake and park the factory (issues #97/#98). The built-in fallback applies
+# only when no file was named.
+if [ -n "${ORCH_PROMPT_FILE:-}" ]; then
+  PROMPT="$(cat "$PROMPT_FILE" 2>/dev/null || true)"
+  if [ -z "$PROMPT" ]; then
+    echo "[!] ORCH_PROMPT_FILE is set but unreadable or empty: $PROMPT_FILE" >&2
+    echo "$(date -Is) misconfiguration: ORCH_PROMPT_FILE unreadable/empty ($PROMPT_FILE); no launch" >>"$LOG"
+    exit 2
+  fi
+else
+  PROMPT="$(cat "$PROMPT_FILE" 2>/dev/null || true)"
+  if [ -z "$PROMPT" ]; then
+    PROMPT="Read fleet-ops/references/05-unattended-operation.md §Stateless wake and run one wake: \
 read state/*.json + the ledger + the journal tail, act on fleet.py needs-brain's reasons \
 (fix/triage red PRs, drive green PRs to merge), then exit. Do not resume a session."
+  fi
 fi
 
 candidates=()
@@ -193,13 +210,20 @@ for model in "${candidates[@]}"; do
     bash -c "$WAKE_CMD" _ "$PROMPT" "$model" >"$OUT" 2>&1
   RC=$?
   tail -c 800 "$OUT" >>"$LOG"
-  if quota_failure "$OUT"; then
-    echo "$(date -Is) model '$label' answered with a quota/balance failure; rotating" >>"$LOG"
-    [ -n "$model" ] && mark_failed "$model"
+  # ANY failed attempt rotates or falls through to total failure — a non-quota
+  # error (bad flags, empty message, missing binary, timeout) must never be
+  # recorded as a completed wake, or a broken launcher parks the factory (#97).
+  if [ "$RC" -ne 0 ]; then
+    if quota_failure "$OUT"; then
+      echo "$(date -Is) model '$label' answered with a quota/balance failure; rotating" >>"$LOG"
+      [ -n "$model" ] && mark_failed "$model"
+    else
+      echo "$(date -Is) wake on '$label' failed with exit $RC (non-quota); rotating" >>"$LOG"
+    fi
     continue
   fi
-  echo "$(date -Is) wake on '$label' finished with exit $RC; done" >>"$LOG"
-  record_wake "$RC" "$(( $(date +%s) - WAKE_START ))" "$label"
+  echo "$(date -Is) wake on '$label' finished; done" >>"$LOG"
+  record_wake 0 "$(( $(date +%s) - WAKE_START ))" "$label"
   exit 0
 done
 

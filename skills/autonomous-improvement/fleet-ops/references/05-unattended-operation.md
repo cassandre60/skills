@@ -78,7 +78,7 @@ headless run per wake:
 
 1. it consults `fleet.py needs-brain --json` first — unchanged state means
    it launches nothing at all (0 tokens, quiet hours stay free);
-2. it launches `$ORCH_WAKE_CMD` (default `opencode run --auto …`) with the
+2. it launches `$ORCH_WAKE_CMD` (default `opencode run …`) with the
    prompt from `$ORCH_PROMPT_FILE` and the ladder model, walking
    `ORCH_MODEL_LADDER` on quota failures (error-line anchored, same rule as
    the watchdog);
@@ -351,11 +351,13 @@ of interpolated user text.
 **Default (opencode-specific):**
 
 ```sh
-opencode run --auto -s "$1" ${3:+-m "$3"} "$2"
+opencode run -s "$1" ${3:+-m "$3"} "$2"
 ```
 
-`-s` continues a specific session; `--auto` avoids a headless stall on the first
-permission prompt. For another harness, read its docs for the headless
+`-s` continues a specific session. `--auto` ("auto-approve permissions") is a
+**top-level** flag on current opencode builds — `opencode --auto run …` — and
+is swallowed when placed after `run` (see the opencode row in
+`fleet-ops/references/harness-adapters.md`). For another harness, read its docs for the headless
 resume-session flags and set `ORCH_RESUME_CMD`; do not copy opencode flags.
 
 ### The recorded model pool: free-first, owner-accepted (issue #103)

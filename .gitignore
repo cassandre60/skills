@@ -13,3 +13,4 @@ skills/autonomous-improvement/evals/heldout.local.json
 
 # Synthetic CLIProxyAPI captures used as test fixtures.
 !skills/cliproxy-log-inspection/tests/fixtures/*.log
+.autonomous/
