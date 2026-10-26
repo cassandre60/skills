@@ -24,7 +24,7 @@ jobs:
         run: scripts/check_discovery.sh
       - name: Verify README dynamic sections are fresh
         run: python3 scripts/generate_readme.py --check
-      - name: Run the cliproxy-log-inspection test suite
+      - name: Run the context-optimization test suite
         run: python3 -m unittest discover -s skills/context-optimization/tests -v
       - name: Run the autonomous-improvement regression suite
         working-directory: skills/autonomous-improvement
