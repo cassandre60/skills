@@ -230,3 +230,182 @@ class AnalyzerTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+GENERIC_SKILLS_SYSTEM = (
+    "You are an AI agent running in a coding agent harness.\n"
+    "# Code Mode\nUse the execute tool for tool calls.\n"
+    "<available_skills>\n"
+    + skill_block("alpha", "x" * 100)
+    + skill_block("beta", "y" * 50)
+    + "</available_skills>\n\n"
+    "Instructions from: /home/x/.config/harness/AGENTS.md\nRULE LINE\n"
+    "Today's date: Sun Oct 26 2026\n<env>\nWorking directory: /home/x\n</env>\n"
+)
+
+GENERIC_REQUEST = json.dumps(
+    {
+        "model": "any-model-v1",
+        "messages": [
+            {"role": "system", "content": GENERIC_SKILLS_SYSTEM},
+            {"role": "user", "content": "why is this slow"},
+        ],
+        "tools": [
+            {"type": "function", "function": {"name": "read"}},
+            {"type": "function", "function": {"name": "write"}},
+            {"type": "function", "function": {"name": "shell"}},
+        ],
+    }
+)
+
+GENERIC_RESPONSE = json.dumps(
+    {
+        "model": "any-model-v1",
+        "usage": {
+            "prompt_tokens": 9000,
+            "completion_tokens": 120,
+            "total_tokens": 9120,
+            "prompt_tokens_details": {"cached_tokens": 7200},
+            "completion_tokens_details": {"reasoning_tokens": 40},
+        },
+    }
+)
+
+GENERIC_RESPONSE_LITELLM_SHAPED = json.dumps(
+    {
+        "model": "other-model",
+        "usage": {"input_tokens": 500, "output_tokens": 30, "total_tokens": 530},
+    }
+)
+
+
+class GenericPairAnalyzerTest(unittest.TestCase):
+    """Source-agnostic path: any OpenAI-compatible request/response pair."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.mod = load_analyzer()
+
+    def test_pair_sections_usage_and_caching_lever(self):
+        result = self.mod.analyze_pair(GENERIC_REQUEST, GENERIC_RESPONSE)
+        self.assertEqual(result["model"], "any-model-v1")
+        self.assertEqual(result["prompt_tokens"], 9000)
+        self.assertEqual(result["completion_tokens"], 120)
+        self.assertEqual(result["reasoning_tokens"], 40)
+        self.assertEqual(result["cached_tokens"], 7200)
+        self.assertEqual(result["tools_count"], 3)
+        self.assertGreater(result["sections"]["skills_catalog"]["chars"], 0)
+        self.assertGreater(result["sections"]["baseline_files"]["chars"], 0)
+        self.assertEqual(
+            result["system_message_chars"],
+            len(GENERIC_SKILLS_SYSTEM + "\n"),
+        )
+        levers = "\n".join(result["levers"])
+        self.assertIn("7200 of 9000", levers)
+        self.assertIn("cache", levers)
+        self.assertNotIn("trivial-turn", levers.lower())  # long enough prompt
+
+    def test_unmapped_system_fallback(self):
+        request = json.dumps(
+            {
+                "model": "any-model-v1",
+                "messages": [
+                    {"role": "system", "content": "You are a helpful assistant."},
+                    {"role": "user", "content": "hi"},
+                ],
+            }
+        )
+        result = self.mod.analyze_pair(request, GENERIC_RESPONSE)
+        sections = result["sections"]
+        self.assertGreater(sections["unmapped_system_message"]["chars"], 0)
+        for name in self.mod.SECTION_ORDER:
+            self.assertEqual(sections[name]["chars"], 0, name)
+        levers = "\n".join(result["levers"])
+        self.assertIn("Unmapped system body", levers)
+
+    def test_thinking_key_found_recursively(self):
+        request = json.dumps(
+            {
+                "model": "m",
+                "messages": [
+                    {"role": "system", "content": "hi"},
+                    {"role": "user", "content": "say hi"},
+                ],
+                "generation_config": {"thinking_config": {"thinkingLevel": "high"}},
+            }
+        )
+        sp = self.mod.parse_openai_request(request, request_bytes=10)
+        self.assertEqual(sp["thinking_level"], "high")
+        result = self.mod.analyze_pair(request, GENERIC_RESPONSE)
+        levers = "\n".join(result["levers"])
+        self.assertIn("Trivial-turn latency", levers)
+
+    def test_litellm_shaped_usage_accepted(self):
+        result = self.mod.analyze_pair(GENERIC_REQUEST, GENERIC_RESPONSE_LITELLM_SHAPED)
+        self.assertEqual(result["prompt_tokens"], 500)
+        self.assertEqual(result["completion_tokens"], 30)
+        self.assertEqual(result["errors"], [])
+
+    def test_cli_request_response_json(self):
+        with tempfile.TemporaryDirectory() as directory:
+            request_path = Path(directory) / "req.json"
+            response_path = Path(directory) / "resp.json"
+            request_path.write_text(GENERIC_REQUEST, encoding="utf-8")
+            response_path.write_text(GENERIC_RESPONSE, encoding="utf-8")
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--request",
+                    str(request_path),
+                    "--response",
+                    str(response_path),
+                    "--json",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        data = json.loads(proc.stdout)
+        self.assertEqual(data["prompt_tokens"], 9000)
+        self.assertEqual(data["cached_tokens"], 7200)
+        self.assertIn("skills_catalog", data["sections"])
+
+    def test_cli_requires_response_with_request(self):
+        with tempfile.TemporaryDirectory() as directory:
+            request_path = Path(directory) / "req.json"
+            request_path.write_text(GENERIC_REQUEST, encoding="utf-8")
+            proc = subprocess.run(
+                [sys.executable, str(SCRIPT), "--request", str(request_path)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        self.assertEqual(proc.returncode, 2)
+
+    def test_cli_latency_flag_becomes_server_ms(self):
+        with tempfile.TemporaryDirectory() as directory:
+            request_path = Path(directory) / "req.json"
+            response_path = Path(directory) / "resp.json"
+            request_path.write_text(GENERIC_REQUEST, encoding="utf-8")
+            response_path.write_text(GENERIC_RESPONSE, encoding="utf-8")
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--request",
+                    str(request_path),
+                    "--response",
+                    str(response_path),
+                    "--latency-ms",
+                    "900",
+                    "--json",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        data = json.loads(proc.stdout)
+        self.assertEqual(data["server_ms"], 900.0)

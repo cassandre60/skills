@@ -5,6 +5,24 @@ This reference records a verified optimization run (25 October 2026, one
 map, the levers, and the verification protocol. Every number here was measured
 off a rendered capture, not estimated.
 
+## 0. Capture sources
+
+The budget does not care where the turn came from. Any of these feeds
+`analyze_context_budget.py`:
+
+| Source | invocation | Notes |
+| --- | --- | --- |
+| rendered CLIProxyAPI bundle | `BUNDLE_DIR` or `--system-prompt/--transcript` | full fidelity chain: config check, faithful renderer, raw reference |
+| raw OpenAI-compatible pair | `--request req.json --response resp.json [--latency-ms N]` | any gateway or session log; redact secrets; usage includes cache details when present |
+| rendered Markdown docs | `--system-prompt sp.md --transcript tx.md` | when the bundle renderer never ran |
+
+What each source contributes: the pair path computes system chars and tool
+counts from `messages`/`tools`, reads usage and `prompt_tokens_details.cached_tokens`
+from `usage`, and takes latency from `--latency-ms` when the source recorded it.
+Section-specific work needs the section markers; a system message without the
+OpenCode taxonomy anchors bills as one `unmapped_system_message` total —
+measured, whole, and honest.
+
 ## 1. What a capture proves
 
 A successful `v1-*.log` capture is a complete bill for one model turn:

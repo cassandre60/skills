@@ -195,9 +195,9 @@ reads, not scripts. Their discipline:
 - **Reach for it when:** the cadence fires — at least every 12 months, plus
   harness prompt-shape changes, skill-library churn, or a first-time outsized
   token/latency bill on a trivial model turn. Runs through the sibling skill
-  `cliproxy-context-optimization` (formerly `cliproxy-log-inspection`).
+  `context-optimization` (formerly `cliproxy-log-inspection`).
 - **Finder:** the external skill's
-  `../cliproxy-context-optimization/scripts/find_request_logs.py`,
+  `../context-optimization/scripts/find_request_logs.py`,
   `render_request_log.py`, and `analyze_context_budget.py` on a fresh
   successful capture; per-section budget (skills catalog, baseline files,
   Code Mode catalog, date/env tail), skill ranking, duplicate flags, captured
@@ -209,7 +209,7 @@ reads, not scripts. Their discipline:
   records: capture id, model, prompt tokens, section budgets, each lever
   applied with before/after chars, and what was parked/restored.
 - **Output format:** a before/after table plus a lever log; no repo ledger row.
-  Full method and worked receipts: `../cliproxy-context-optimization/references/03-context-budget.md`
+  Full method and worked receipts: `../context-optimization/references/03-context-budget.md`
   in the sibling skill.
 - **Refutation:** read both skills before parking a duplicate pair; verify a
   parked skill is truly out of every discovery directory; re-measure with the

@@ -95,18 +95,18 @@ lens and one output format** — open-ended asks get generic advice.
 One improvement vector does not live in a repo's tests: the agent's own
 per-turn context. A capture-based environment pass bills where prompt tokens
 go and trims what the machine owns. It runs through the sibling skill
-`cliproxy-context-optimization` (formerly `cliproxy-log-inspection`), which
+`context-optimization` (formerly `cliproxy-log-inspection`), which
 renders a CLIProxyAPI capture into readable documents and reports a per-section
-budget (`../cliproxy-context-optimization/scripts/analyze_context_budget.py`;
+budget (`../context-optimization/scripts/analyze_context_budget.py`;
 method, ownership map, and worked receipts in its
-`../cliproxy-context-optimization/references/03-context-budget.md`).
+`../context-optimization/references/03-context-budget.md`).
 
 - **Cadence:** at least once every 12 months, and additionally when the harness
   releases change their prompt shape, the skill library churns, or a session
   shows a trivial turn paying an outsized token or latency bill for the first
   time. Record the run date in the agent-config repo so the next round can
   check the interval.
-- **Finder:** the sibling skill's `../cliproxy-context-optimization/scripts/find_request_logs.py`
+- **Finder:** the sibling skill's `../context-optimization/scripts/find_request_logs.py`
   + `render_request_log.py` + `analyze_context_budget.py` on a fresh
   successful capture; a failed-provider chain that yields only error captures
   is a finding to report, not a normal result.
@@ -208,8 +208,8 @@ anything on a timer.
 | `references/08-recursive-self-improvement.md` | The stream contract, autonomy tiers, and the stream catalog |
 | `references/09-session-history-review.md` | The method and evidence bar for skill-improvement proposals |
 | `references/10-toolbox.md` | Per-tool contracts and the lens menu; includes the scheduled environment pass |
-| `../cliproxy-context-optimization/SKILL.md` | The sibling skill the environment pass calls: capture rendering, budget analysis, levers |
-| `../cliproxy-context-optimization/references/03-context-budget.md` | Ownership map, lever receipts, and the verification protocol for context trims |
+| `../context-optimization/SKILL.md` | The sibling skill the environment pass calls: capture rendering, budget analysis, levers |
+| `../context-optimization/references/03-context-budget.md` | Ownership map, lever receipts, and the verification protocol for context trims |
 | `fleet-ops/references/harness-adapters.md` | Per-harness command table (resume, wake, session model) and verification status |
 | `SPEC.md` | The skill's own rule map: rule, enforcement, failing test; audit it with `docs_truth.py` |
 | `references/gates-and-vocabulary.md` | Gate ids, optional vocabulary, and the "no gates yet" fallback |

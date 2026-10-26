@@ -116,3 +116,18 @@ two shapes (table-based and prose-based) and the parser reads both; error
 captures carry no usage; section char counts never sum exactly to the header
 length; and the similarity threshold flags duplicates only as candidates to
 read, not verdicts.
+
+## v2.1.0 — the name generalizes (2026-10-26)
+
+The owner pushed back on `cliproxy-context-optimization`: the method bills any
+agent turn, not a CLIProxyAPI turn. Renamed to `context-optimization` and the
+analyzer gained a source-agnostic input contract (`--request/--response`
+OpenAI-compatible JSON pairs, `--latency-ms`), with provider cache visibility
+via `prompt_tokens_details.cached_tokens` added as a measured lever. The
+CLIProxyAPI scripts stay as the first capture adapter, and a system message
+that carries no known section taxonomy bills as one `unmapped_system_message`
+total instead of misattributing its chars.
+
+Blog-worthy naming lesson recorded: name the capability, not the first
+implementation's plumbing. The capability is context optimization; the plumbing
+is one adapter among future ones.
