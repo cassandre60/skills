@@ -56,7 +56,9 @@ printf '[{"number": 7, "headRefName": "task/pr-7", "headRefOid": "sha-7",
 printf '[]\n' >"$TMP/prs-clean.json"
 
 run_wake() { # $1 = PR fixture file, $2 = ladder
-  rm -f "$TMP/state/last_wake" "$TMP/state/watchdog.log"
+  rm -f "$TMP/state/last_wake" "$TMP/state/watchdog.log" "$TMP/state/daily_exhausted_until" "$TMP/state/wake_failures"
+  # wake.json is removed explicitly per case; run_wake does not wipe the quiet
+  # digest or case 2 would never see "unchanged" state.
   PATH="$TMP/bin:$PATH" \
     ORCH_REPO="$SKILL_ROOT" \
     ORCH_STATE_DIR="$TMP/state" \
@@ -298,7 +300,7 @@ fi
 
 # --- case 11: upstream model unavailable is recognized as quota/availability failure (issue #109) ---
 : >"$WAKE_LOG"
-rm -f "$TMP/state/wake.json" "$TMP/state/wake_failures"
+rm -f "$TMP/state/wake.json" "$TMP/state/wake_failures" "$TMP/state/daily_exhausted_until"
 PATH="$TMP/bin:$PATH" \
   ORCH_REPO="$SKILL_ROOT" \
   ORCH_STATE_DIR="$TMP/state" \

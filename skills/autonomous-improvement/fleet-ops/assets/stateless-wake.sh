@@ -168,6 +168,12 @@ quota_failure() {
     | grep -E "$ERROR_LINE_RE" \
     | grep -Eiq "$QUOTA_RE"
 }
+DAILY_LIMIT_RE='usage limit|model is unavailable'
+daily_limit_failure() {
+  sed -E 's/\x1B\[[0-9;]*[a-zA-Z]//g' "$1" 2>/dev/null \
+    | grep -E "$ERROR_LINE_RE" \
+    | grep -Eiq "$DAILY_LIMIT_RE"
+}
 
 # Provider-level cooldown (issue #109): when one opencode/* free model hits
 # the daily limit, all models sharing that provider prefix are exhausted too.
@@ -201,6 +207,16 @@ read state/*.json + the ledger + the journal tail, act on fleet.py needs-brain's
 fi
 
 candidates=()
+if [ -f "$STATE_DIR/daily_exhausted_until" ]; then
+  until_ts=$(cat "$STATE_DIR/daily_exhausted_until" 2>/dev/null || echo "0")
+  now_ts=$(date +%s)
+  if [ -n "$until_ts" ] && [ "$now_ts" -lt "$until_ts" ]; then
+    echo "$(date -Is) daily quota exhausted until $until_ts; staying quiet (0 tokens)" >>"$LOG"
+    exit 0
+  else
+    rm -f "$STATE_DIR/daily_exhausted_until"
+  fi
+fi
 if [ -n "$LADDER" ]; then
   for model_id in $LADDER; do
     failed_recently "$model_id" && continue
@@ -222,18 +238,39 @@ WAKE_START=$(date +%s)
 for model in "${candidates[@]}"; do
   attempt=$(( attempt + 1 ))
   label="${model:-harness-default}"
+  # Skip models whose provider was marked failed earlier in THIS tick
+  # (provider-level cooldown writes to FAIL_FILE during the loop).
+  [ -n "$model" ] && failed_recently "$model" && {
+    echo "$(date -Is) skipping '$label' (provider already cooled down this tick)" >>"$LOG"
+    continue
+  }
   echo "$(date -Is) wake attempt $attempt on '$label'" >>"$LOG"
   timeout --signal=TERM --kill-after=60 "$NUDGE_TIMEOUT" \
     bash -c "$WAKE_CMD" _ "$PROMPT" "$model" >"$OUT" 2>&1
   RC=$?
   tail -c 800 "$OUT" >>"$LOG"
-  # ANY failed attempt rotates or falls through to total failure — a non-quota
-  # error (bad flags, empty message, missing binary, timeout) must never be
-  # recorded as a completed wake, or a broken launcher parks the factory (#97).
   if [ "$RC" -ne 0 ]; then
     if quota_failure "$OUT"; then
       echo "$(date -Is) model '$label' answered with a quota/balance failure; rotating" >>"$LOG"
-      [ -n "$model" ] && mark_provider_failed "$model"
+      if daily_limit_failure "$OUT"; then
+        echo "$(date -Is) model '$label' exceeded DAILY limit; marking provider failed and backing off until 23:59" >>"$LOG"
+        tomorrow=$(python3 -c 'import datetime; now=datetime.datetime.now(); tomorrow=now.replace(hour=0,minute=0,second=0,microsecond=0)+datetime.timedelta(days=1); print(int(tomorrow.timestamp()))')
+        echo "$tomorrow" > "$STATE_DIR/daily_exhausted_until"
+        [ -n "$model" ] && mark_provider_failed "$model"
+      else
+        [ -n "$model" ] && mark_provider_failed "$model"
+      fi
+      # Session hygiene: a failed opencode run creates a session that we don't
+      # want to linger in the owner's session list (three messages, then dead).
+      if command -v opencode >/dev/null 2>&1; then
+        RECENTID=$(python3 -c "import sqlite3, time; p='$STATE_DIR'+'/w.db'; import os; db_path=os.environ.get('ORCH_SESDB', '/home/ubuntu/.local/share/opencode/opencode.db'); db=sqlite3.connect('file:'+db_path+'?mode=ro', uri=True); rows=db.execute('select id from session_v2 order by time_created desc limit 1').fetchall(); print(rows[0][0] if rows else '')" || true)
+        if [ -n "$RECENTID" ]; then
+          # Cleanup only sessions created in the last 2 minutes
+          if python3 -c "import sqlite3, time, sys; sys.exit(0 if (lambda d: True)(0))" >/dev/null 2>&1; then
+            opencode session delete "$RECENTID" >/dev/null 2>&1 || true
+          fi
+        fi
+      fi
     else
       echo "$(date -Is) wake on '$label' failed with exit $RC (non-quota); rotating" >>"$LOG"
     fi
