@@ -159,9 +159,26 @@ record_wake() { # $1 = exit code, $2 = duration s, $3 = model label
 
 # Error-line anchored quota signatures: a success that merely mentions
 # limits must not park its model (issue #19 lesson, shared here).
+# ANSI escape sequences are stripped before matching (issue #109): opencode
+# prints errors in color, and the escape prefix breaks the ^ anchor.
 ERROR_LINE_RE='^[[:space:]]*(Error|ERROR|error)\b|^[[:space:]]*HTTP[[:space:]]*429|^[[:space:]]*429[[:space:]]|curl: \(22\)|^[[:space:]]*[A-Za-z]+Error:'
-QUOTA_RE='rate limit|rate_limit|429|quota|too many requests|insufficient balance|balance is at|exceeded your current|overloaded'
-quota_failure() { grep -E "$ERROR_LINE_RE" "$1" 2>/dev/null | grep -Eiq "$QUOTA_RE"; }
+QUOTA_RE='rate limit|rate_limit|429|quota|too many requests|insufficient balance|balance is at|exceeded your current|overloaded|usage limit|model is unavailable|temporarily unavailable'
+quota_failure() {
+  sed -E 's/\x1B\[[0-9;]*[a-zA-Z]//g' "$1" 2>/dev/null \
+    | grep -E "$ERROR_LINE_RE" \
+    | grep -Eiq "$QUOTA_RE"
+}
+
+# Provider-level cooldown (issue #109): when one opencode/* free model hits
+# the daily limit, all models sharing that provider prefix are exhausted too.
+# Probing each one individually just creates dead sessions.
+mark_provider_failed() { # $1: model id that failed
+  local provider="${1%%/*}"
+  local m
+  for m in $LADDER; do
+    case "$m" in "$provider"/*) mark_failed "$m" ;; esac
+  done
+}
 
 # A prompt the OPERATOR pointed at (ORCH_PROMPT_FILE set) must be readable and
 # non-empty: launching a doomed run would otherwise be recorded as a completed
@@ -216,7 +233,7 @@ for model in "${candidates[@]}"; do
   if [ "$RC" -ne 0 ]; then
     if quota_failure "$OUT"; then
       echo "$(date -Is) model '$label' answered with a quota/balance failure; rotating" >>"$LOG"
-      [ -n "$model" ] && mark_failed "$model"
+      [ -n "$model" ] && mark_provider_failed "$model"
     else
       echo "$(date -Is) wake on '$label' failed with exit $RC (non-quota); rotating" >>"$LOG"
     fi
