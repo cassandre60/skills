@@ -42,6 +42,8 @@ case "$*" in
   *quota-free*) echo "Error: Rate limit exceeded. Please try again later." ; exit 1 ;;
   *mention-free*) echo "wake: journal summary — rate limit hit twice yesterday" ; exit 0 ;;
   *parse-error*) echo "Error: You must provide a message" ; exit 1 ;;
+  *ansi-free-limit*) printf '\x1b[91m\x1b[1mError: \x1b[0mFree usage limit reached. Connect a provider or subscribe to OpenCode Go to keep going, or switch models.\n' ; exit 1 ;;
+  *model-unavailable*) printf '\x1b[91m\x1b[1mError: \x1b[0mUpstream request failed: Model is unavailable.\n' ; exit 1 ;;
   *) echo "wake: housekeeping done" ; exit 0 ;;
 esac
 EOF
@@ -270,6 +272,47 @@ else
   fail "the env ladder did not take precedence over the recorded pool"
 fi
 rm -f "$TMP/bin/python3"
+
+# --- case 10: ANSI-escaped free usage limit is recognized as quota failure and cools down opencode/* (issue #109) ---
+: >"$WAKE_LOG"
+rm -f "$TMP/state/wake.json" "$TMP/state/wake_failures"
+PATH="$TMP/bin:$PATH" \
+  ORCH_REPO="$SKILL_ROOT" \
+  ORCH_STATE_DIR="$TMP/state" \
+  ORCH_WAKE_CMD='fake-harness "$1" ${2:+-m "$2"}' \
+  ORCH_MODEL_LADDER="opencode/beam-free-ansi-free-limit opencode/other-free" \
+  ORCH_WAKE_TIMEOUT=20 \
+  ORCH_MIN_INTERVAL=0 \
+  GH_JSON="$TMP/prs-red.json" \
+  bash "$ASSETS" >/dev/null 2>&1
+if grep -q '^opencode/beam-free-ansi-free-limit ' "$TMP/state/wake_failures" 2>/dev/null; then
+  ok "ANSI-colored free limit error recorded in wake_failures"
+else
+  fail "ANSI-colored free limit error was NOT recorded in wake_failures"
+fi
+if grep -q '^opencode/other-free ' "$TMP/state/wake_failures" 2>/dev/null; then
+  ok "sibling opencode/* free model also marked failed (provider-level cooldown)"
+else
+  fail "sibling opencode/* free model was NOT marked failed"
+fi
+
+# --- case 11: upstream model unavailable is recognized as quota/availability failure (issue #109) ---
+: >"$WAKE_LOG"
+rm -f "$TMP/state/wake.json" "$TMP/state/wake_failures"
+PATH="$TMP/bin:$PATH" \
+  ORCH_REPO="$SKILL_ROOT" \
+  ORCH_STATE_DIR="$TMP/state" \
+  ORCH_WAKE_CMD='fake-harness "$1" ${2:+-m "$2"}' \
+  ORCH_MODEL_LADDER="opencode/nemotron-model-unavailable" \
+  ORCH_WAKE_TIMEOUT=20 \
+  ORCH_MIN_INTERVAL=0 \
+  GH_JSON="$TMP/prs-red.json" \
+  bash "$ASSETS" >/dev/null 2>&1
+if grep -q '^opencode/nemotron-model-unavailable ' "$TMP/state/wake_failures" 2>/dev/null; then
+  ok "upstream unavailable model recorded in wake_failures"
+else
+  fail "upstream unavailable model was NOT recorded in wake_failures"
+fi
 
 if [ "$FAILED" -eq 0 ]; then
   echo "PASS: stateless wake launcher"
