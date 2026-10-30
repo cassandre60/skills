@@ -5036,10 +5036,9 @@ class ModelPoolTests(RepoTestCase):
         )
         res = script(repo, "fleet.py", "pool", "ladder", env=env)
         self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
-        # dynamic (free by the owner's filter) first, then static free; the
-        # premium model the CLI listed is NOT kept — it was never in the pool.
+        # entries-first (curated models outrank the enumerated pool): GLM, then the dynamic hits
         self.assertEqual(
-            res.stdout.split(), ["opencode/a-free", "opencode/b-free", "nvidia/z-ai/glm-5.3-flash"]
+            res.stdout.split(), ["nvidia/z-ai/glm-5.3-flash", "opencode/a-free", "opencode/b-free"]
         )
 
     def pool_json(self, repo, env, *args):
