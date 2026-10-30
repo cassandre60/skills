@@ -1909,6 +1909,18 @@ def _resolve_model_pool(cfg: Dict[str, Any]) -> Tuple[List[str], List[Dict[str, 
         annotations.append(record)
         (free if tier == "free" else premium).append(entry_id)
 
+    # Owner-curated entries first: these are the models the owner hand-listed
+    # (often a reliable workhorse GLM or Beam) and must be tried before the
+    # enumerated dynamic pool — ordering within free tier is curated-first,
+    # tier (free then premium) is still respected overall (issue #109).
+    for entry in pool.get("entries") or []:
+        if not isinstance(entry, dict) or not entry.get("id"):
+            warnings.append("model_pool entry without an id; skipped")
+            continue
+        # A static entry without an explicit tier is premium: conservative,
+        # least likely to be spent by accident.
+        add(str(entry["id"]), str(entry.get("tier") or "premium"), "static", str(entry.get("note") or ""))
+
     for src in pool.get("dynamic") or []:
         if not isinstance(src, dict):
             warnings.append("model_pool dynamic entry is not an object; skipped")
@@ -1926,14 +1938,6 @@ def _resolve_model_pool(cfg: Dict[str, Any]) -> Tuple[List[str], List[Dict[str, 
                     add(entry_id, "free", f"dynamic:{name}")
         else:
             warnings.append(f"unknown dynamic source {name!r}; skipped")
-
-    for entry in pool.get("entries") or []:
-        if not isinstance(entry, dict) or not entry.get("id"):
-            warnings.append("model_pool entry without an id; skipped")
-            continue
-        # A static entry without an explicit tier is premium: conservative,
-        # least likely to be spent by accident.
-        add(str(entry["id"]), str(entry.get("tier") or "premium"), "static", str(entry.get("note") or ""))
 
     return free + premium, annotations, warnings
 
