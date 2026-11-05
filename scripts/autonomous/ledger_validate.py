@@ -129,6 +129,10 @@ def validate_ledger(root, cfg: Dict[str, Any], ledger_path) -> Dict[str, Any]:
                     "line": index + 1,
                     "pr": pr,
                     "hash": hash_cell.strip().strip("`").strip(),
+                    # Keep the date: without it the "newest wins" comparison
+                    # below sees "" and any later row (the oldest in a
+                    # newest-first table) replaces this one.
+                    "date": cells[0].strip(),
                 }
             else:
                 # newest wins: date desc, then topmost on a tie

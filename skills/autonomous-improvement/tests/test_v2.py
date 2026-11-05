@@ -423,6 +423,27 @@ class ValidateTests(RepoTestCase):
         self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("stale", proc.stdout)
 
+    def test_newest_row_supersedes_an_older_stale_row(self) -> None:
+        """A re-audit row is authoritative over the row it replaces.
+
+        Regression: the first row stored for a target was recorded without its
+        date, so any later row won the comparison and the OLDEST row of a
+        newest-first table became authoritative - every re-audit row looked
+        unable to clear the stale row it superseded.
+        """
+        ledger = self.repo / "docs" / "AUTONOMOUS_WORK_LEDGER.md"
+        current = git(self.repo, "rev-parse", "HEAD:src/app.py").stdout.strip()[:9]
+        write(
+            ledger,
+            ledger_text(
+                row("src/app.py", current, date="2026-02-01"),
+                row("src/app.py", "000000000", date="2026-01-01"),
+            ),
+        )
+        proc = self._validate()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("every row is visible", proc.stdout)
+
     def test_a_well_formed_ledger_validates_clean(self) -> None:
         ledger = self.repo / "docs" / "AUTONOMOUS_WORK_LEDGER.md"
         source = script(self.repo, "ledger.py", "check", "--target", "src/app.py")
