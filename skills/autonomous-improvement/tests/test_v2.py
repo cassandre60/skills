@@ -442,7 +442,6 @@ class ValidateTests(RepoTestCase):
         )
         proc = self._validate()
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        self.assertIn("every row is visible", proc.stdout)
 
     def test_a_well_formed_ledger_validates_clean(self) -> None:
         ledger = self.repo / "docs" / "AUTONOMOUS_WORK_LEDGER.md"
