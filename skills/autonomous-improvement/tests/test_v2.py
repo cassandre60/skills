@@ -10,6 +10,7 @@ import sys
 import tempfile
 import time
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from support import (
@@ -2433,6 +2434,12 @@ class FleetTests(RepoTestCase):
         env = env_with_path(bin_dir, GH_JSON=str(json_path))
 
         def fleet_payload(n_open: int, n_merged: int, n_closed: int) -> list:
+            # Relative to now: a hardcoded date ages out of the 14-day window
+            # and turns this test red on a calendar boundary (it did on
+            # 2026-11-05, when 2026-10-21 became 15 days old).
+            recent = (datetime.now(timezone.utc) - timedelta(days=2)).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            )
             entries = [
                 {"number": i, "headRefName": f"pr-{i}", "headRefOid": f"sha-{i}"}
                 for i in range(1, n_open + 1)
@@ -2442,8 +2449,8 @@ class FleetTests(RepoTestCase):
                     {
                         "number": 100,
                         "state": "MERGED",
-                        "createdAt": "2026-10-21T01:00:00Z",
-                        "mergedAt": "2026-10-21T02:00:00Z",
+                        "createdAt": recent,
+                        "mergedAt": recent,
                     }
                 )
             for _ in range(n_closed):
@@ -2451,7 +2458,7 @@ class FleetTests(RepoTestCase):
                     {
                         "number": 200,
                         "state": "CLOSED",
-                        "createdAt": "2026-10-21T01:00:00Z",
+                        "createdAt": recent,
                         "mergedAt": None,
                     }
                 )
@@ -2473,13 +2480,16 @@ class FleetTests(RepoTestCase):
         self.assertTrue(json.loads(res_allowed.stdout)["dispatch"])
 
         # Fresh fleet: only PRs settled outside the 14d window -> no signal, dispatch stays open
+        old = (datetime.now(timezone.utc) - timedelta(days=60)).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
         fresh = [
             {"number": 1, "headRefName": "pr-1", "headRefOid": "sha-1"},
             {
                 "number": 2,
                 "state": "MERGED",
-                "createdAt": "2026-08-15T00:00:00Z",
-                "mergedAt": "2026-08-16T00:00:00Z",
+                "createdAt": old,
+                "mergedAt": old,
             },
         ]
         json_path.write_text(json.dumps(fresh) + "\n")
