@@ -90,6 +90,29 @@ if [ ! -d "$REPO" ]; then
   echo "[!] ORCH_REPO does not exist: $REPO" >&2
   exit 2
 fi
+
+# 1b. Disk headroom floor: never launch into an almost-full filesystem (issue #115).
+MIN_FREE_GB="${ORCH_MIN_FREE_GB:-5}"
+FREE_KB="$(df -k "$REPO" 2>/dev/null | awk 'NR==2 {print $4}')"
+if [ -n "$FREE_KB" ]; then
+  FREE_GB=$(( FREE_KB / 1024 / 1024 ))
+  if [ "$FREE_GB" -lt "$MIN_FREE_GB" ]; then
+    echo "$(date -Is) disk headroom exhausted (${FREE_GB} GiB free < ${MIN_FREE_GB} GiB floor); not launching a wake" >>"$LOG"
+    exit 0
+  fi
+fi
+
+# 1c. Routine worktree prune and concurrent worktree cap (issue #115).
+MAX_WORKTREES="${ORCH_MAX_WORKTREES:-5}"
+if [ -d "$REPO/.git" ] || git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
+  git -C "$REPO" worktree prune 2>/dev/null || true
+  WT_COUNT="$(git -C "$REPO" worktree list --porcelain 2>/dev/null | grep -c '^worktree ' || echo 0)"
+  if [ "$WT_COUNT" -gt "$MAX_WORKTREES" ]; then
+    echo "$(date -Is) active worktrees ($WT_COUNT) exceed max_worktrees ($MAX_WORKTREES); not launching a wake" >>"$LOG"
+    exit 0
+  fi
+fi
+
 PREDICATE="$FLEET_PY"
 if [ ! -f "$PREDICATE" ]; then
   echo "[!] predicate not found: $PREDICATE (install the skill scripts first)" >&2

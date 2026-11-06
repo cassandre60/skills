@@ -889,7 +889,50 @@ def cmd_govern(args: argparse.Namespace) -> int:
                 eprint(f"[!] Governor: DISPATCH BLOCKED ({payload['reason']})")
             return EXIT_NEGATIVE
 
-    # 1b. Doctor gate (opt-in): on a deployment with doctor.enforce=true, a
+    # 1b. Disk headroom floor (issue #115: protect host against out-of-disk failure)
+    min_free_gb = float(
+        fleet_cfg.get("min_free_gb", (cfg.get("doctor", {}) or {}).get("min_free_gb", 5))
+    )
+    try:
+        usage = shutil.disk_usage(str(root))
+        free_gb = usage.free / (1024**3)
+    except OSError:
+        free_gb = min_free_gb
+    if free_gb < min_free_gb:
+        payload = {
+            "dispatch": False,
+            "reason": f"disk headroom exhausted ({free_gb:.1f} GiB free < {min_free_gb:.1f} GiB floor)",
+            "open_prs": 0,
+            "tend": [],
+        }
+        if args.json:
+            print(json.dumps(payload, indent=2))
+        else:
+            eprint(f"[!] Governor: DISPATCH BLOCKED ({payload['reason']})")
+        return EXIT_NEGATIVE
+
+    # 1c. Concurrent worktree cap (issue #115: prevent unbounded worktree buildup)
+    max_worktrees = int(fleet_cfg.get("max_worktrees", 5))
+    run(["git", "worktree", "prune"], cwd=root, quiet=True)
+    wt_proc = run(["git", "worktree", "list", "--porcelain"], cwd=root, quiet=True)
+    if wt_proc.returncode == 0:
+        wt_count = sum(
+            1 for line in (wt_proc.stdout or "").splitlines() if line.startswith("worktree ")
+        )
+        if wt_count > max_worktrees:
+            payload = {
+                "dispatch": False,
+                "reason": f"active worktree cap exceeded ({wt_count} > {max_worktrees})",
+                "open_prs": 0,
+                "tend": [],
+            }
+            if args.json:
+                print(json.dumps(payload, indent=2))
+            else:
+                eprint(f"[!] Governor: DISPATCH BLOCKED ({payload['reason']})")
+            return EXIT_NEGATIVE
+
+    # 1d. Doctor gate (opt-in): on a deployment with doctor.enforce=true, a
     #     hard preflight failure blocks dispatch the same way the kill switch
     #     does — blocked-with-reason, never a silent continue.
     if (fleet_cfg.get("doctor", {}) or {}).get("enforce"):
@@ -1073,6 +1116,38 @@ def cmd_needs_brain(args: argparse.Namespace) -> int:
     if gh_warn:
         eprint(f"[warn] {gh_warn}")
     open_states = [evaluate_pr_checks(p) for p in prs_data]
+    wake_path = state_dir / "wake.json"
+
+    fleet_cfg = cfg.get("fleet", {}) or {}
+    min_free_gb = float(
+        fleet_cfg.get("min_free_gb", (cfg.get("doctor", {}) or {}).get("min_free_gb", 5))
+    )
+    try:
+        usage = shutil.disk_usage(str(root))
+        free_gb = usage.free / (1024**3)
+    except OSError:
+        free_gb = min_free_gb
+    if free_gb < min_free_gb:
+        payload: Dict[str, Any] = {
+            "tool": "fleet.py needs-brain",
+            "needs_brain": False,
+            "reasons": [],
+            "previous_reason": None,
+            "reason": (
+                f"disk headroom exhausted ({free_gb:.1f} GiB free < {min_free_gb:.1f} GiB floor); quiet"
+            ),
+            "digest": None,
+            "previous_digest": None,
+            "open_prs": len(open_states),
+            "state_file": str(wake_path),
+            "note": "stateless: halted by disk headroom floor",
+        }
+        if args.json:
+            print(json.dumps(payload, indent=2))
+        else:
+            print(f"[quiet] {payload['reason']}")
+        return EXIT_OK
+
     reasons = _wake_reasons(open_states)
     kill_switch_file = str((cfg.get("fleet", {}) or {}).get("kill_switch_file") or ".autonomous/STOP")
     kill_switch_paths = [
@@ -1285,6 +1360,15 @@ def _needs_brain_from_states(
     max_open = int(fleet_cfg.get("max_open_prs", 5))
     kill_file = str(fleet_cfg.get("kill_switch_file") or ".autonomous/STOP")
     killed = (root / kill_file).exists() or (root / ".autonomous" / "STOP").exists()
+    min_free_gb = float(
+        fleet_cfg.get("min_free_gb", (cfg.get("doctor", {}) or {}).get("min_free_gb", 5))
+    )
+    try:
+        usage = shutil.disk_usage(str(root))
+        free_gb = usage.free / (1024**3)
+    except OSError:
+        free_gb = min_free_gb
+    disk_exhausted = free_gb < min_free_gb
 
     tend: List[int] = []
     green: List[int] = []
@@ -1303,12 +1387,17 @@ def _needs_brain_from_states(
         if state.get("checks") == "green":
             green.append(number)
             reasons.append(f"green-unmerged:#{number}")
-    can_dispatch = len(open_states) < max_open
+    can_dispatch = len(open_states) < max_open and not disk_exhausted
     if can_dispatch:
         reasons.append("queue-headroom")
+    active_reasons = (
+        ["disk-headroom-exhausted"]
+        if disk_exhausted
+        else (["kill-switch"] if killed else reasons)
+    )
     return {
-        "needs_brain": (not killed) and bool(reasons),
-        "reasons": ["kill-switch"] if killed else reasons,
+        "needs_brain": (not killed) and (not disk_exhausted) and bool(reasons),
+        "reasons": active_reasons,
         "tend": sorted(set(tend)),
         "green_unmerged": sorted(green),
         "open_prs": len(open_states),
@@ -1555,6 +1644,36 @@ def cmd_claim(args: argparse.Namespace) -> int:
     registry = load_worktree_registry(root)
     if any(entry.get("slug") == slug for entry in registry):
         raise Fatal(f"slug already claimed locally: {slug}")
+
+    fleet_cfg = cfg.get("fleet", {}) or {}
+    min_free_gb = float(
+        fleet_cfg.get("min_free_gb", (cfg.get("doctor", {}) or {}).get("min_free_gb", 5))
+    )
+    try:
+        usage = shutil.disk_usage(str(root))
+        free_gb = usage.free / (1024**3)
+    except OSError:
+        free_gb = min_free_gb
+    if free_gb < min_free_gb:
+        eprint(
+            f"[!] disk headroom exhausted ({free_gb:.1f} GiB free < {min_free_gb:.1f} GiB floor); "
+            "refusing to claim"
+        )
+        return EXIT_NEGATIVE
+
+    max_worktrees = int(fleet_cfg.get("max_worktrees", 5))
+    run(["git", "worktree", "prune"], cwd=root, quiet=True)
+    wt_proc = run(["git", "worktree", "list", "--porcelain"], cwd=root, quiet=True)
+    if wt_proc.returncode == 0:
+        wt_count = sum(
+            1 for line in (wt_proc.stdout or "").splitlines() if line.startswith("worktree ")
+        )
+        if wt_count >= max_worktrees:
+            eprint(
+                f"[!] active worktree cap reached ({wt_count} >= {max_worktrees}); "
+                "refusing to claim"
+            )
+            return EXIT_NEGATIVE
 
     orchestrator = Path(__file__).with_name("orchestrator.py")
     run(

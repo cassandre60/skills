@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime as dt
 import importlib
 import json
 import os
@@ -2417,6 +2418,41 @@ class FleetTests(RepoTestCase):
         self.assertFalse(data_kill["dispatch"])
         self.assertIn("kill switch", data_kill["reason"].lower())
 
+    def test_govern_enforces_disk_headroom_and_worktree_cap(self):
+        repo, _ = self.make()
+        bin_dir = path_with_only(self.tmp, ("git",))
+        gh = write(
+            bin_dir / "gh",
+            "#!/bin/sh\nwhile IFS= read -r line; do printf '%s\\n' \"$line\"; done < \"$GH_JSON\"\n",
+        )
+        gh.chmod(0o755)
+        json_path = self.tmp / "prs_gov_disk.json"
+        json_path.write_text("[]\n")
+        env = env_with_path(bin_dir, GH_JSON=str(json_path))
+
+        cfg_path = repo / "scripts" / "autonomous" / "config.json"
+        data = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
+        data.setdefault("fleet", {})["min_free_gb"] = 999999
+        cfg_path.write_text(json.dumps(data))
+
+        res_disk = script(repo, "fleet.py", "govern", "--json", env=env)
+        self.assertEqual(res_disk.returncode, 1)
+        data_disk = json.loads(res_disk.stdout)
+        self.assertFalse(data_disk["dispatch"])
+        self.assertTrue("disk headroom exhausted" in data_disk["reason"].lower())
+
+        # Reset disk limit and test max_worktrees
+        data["fleet"]["min_free_gb"] = 0
+        data["fleet"]["max_worktrees"] = 0
+        cfg_path.write_text(json.dumps(data))
+
+        res_wt = script(repo, "fleet.py", "govern", "--json", env=env)
+        self.assertEqual(res_wt.returncode, 1)
+        data_wt = json.loads(res_wt.stdout)
+        self.assertFalse(data_wt["dispatch"])
+        self.assertTrue("worktree cap exceeded" in data_wt["reason"].lower())
+
+
     def test_govern_enforces_acceptance_floor(self):
         # Issue #13: min_acceptance_rate_14d parsed by cmd_govern must actually
         # gate dispatch. The stub serves one JSON payload to both governor
@@ -2432,6 +2468,10 @@ class FleetTests(RepoTestCase):
         gh.chmod(0o755)
         json_path = self.tmp / "prs_floor.json"
         env = env_with_path(bin_dir, GH_JSON=str(json_path))
+
+        recent = (
+            dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=1)
+        ).isoformat()
 
         def fleet_payload(n_open: int, n_merged: int, n_closed: int) -> list:
             # Relative to now: a hardcoded date ages out of the 14-day window
@@ -5009,6 +5049,19 @@ class StatelessWakeTests(RepoTestCase):
         payload = json.loads(res.stdout)
         self.assertTrue(payload["needs_brain"])
         self.assertIn("queue-idle", payload["reasons"][0])
+
+    def test_disk_headroom_exhausted_stays_quiet(self):
+        repo, env, _ = self.stage([self.red_pr()])
+        cfg_path = repo / "scripts" / "autonomous" / "config.json"
+        data = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
+        data.setdefault("fleet", {})["min_free_gb"] = 999999
+        cfg_path.write_text(json.dumps(data))
+        res = script(repo, "fleet.py", "needs-brain", "--json", env=env)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        payload = json.loads(res.stdout)
+        self.assertFalse(payload["needs_brain"])
+        self.assertTrue("disk headroom exhausted" in payload["reason"].lower())
+
 
 
 
