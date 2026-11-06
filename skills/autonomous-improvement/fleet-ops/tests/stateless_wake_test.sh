@@ -316,6 +316,46 @@ else
   fail "upstream unavailable model was NOT recorded in wake_failures"
 fi
 
+# --- case 12: disk headroom below floor stays quiet (0 tokens, no launch) (issue #115) ---
+: >"$WAKE_LOG"
+rm -f "$TMP/state/wake.json" "$TMP/state/wake_failures"
+PATH="$TMP/bin:$PATH" \
+  ORCH_REPO="$SKILL_ROOT" \
+  ORCH_STATE_DIR="$TMP/state" \
+  ORCH_WAKE_CMD='fake-harness "$1" ${2:+-m "$2"}' \
+  ORCH_MODEL_LADDER="opencode/alpha-free" \
+  ORCH_MIN_FREE_GB=999999 \
+  ORCH_WAKE_TIMEOUT=20 \
+  ORCH_MIN_INTERVAL=0 \
+  GH_JSON="$TMP/prs-red.json" \
+  bash "$ASSETS" >/dev/null 2>&1
+RC=$?
+if [ "$RC" -eq 0 ] && ! grep -q "ARGS:" "$WAKE_LOG" 2>/dev/null && grep -qi "disk headroom exhausted" "$TMP/state/wake.log" 2>/dev/null; then
+  ok "disk headroom below floor stays quiet and does not launch"
+else
+  fail "disk headroom floor did NOT prevent wake launch"
+fi
+
+# --- case 13: worktrees exceeding max_worktrees stays quiet (0 tokens, no launch) (issue #115) ---
+: >"$WAKE_LOG"
+rm -f "$TMP/state/wake.json" "$TMP/state/wake_failures"
+PATH="$TMP/bin:$PATH" \
+  ORCH_REPO="$SKILL_ROOT" \
+  ORCH_STATE_DIR="$TMP/state" \
+  ORCH_WAKE_CMD='fake-harness "$1" ${2:+-m "$2"}' \
+  ORCH_MODEL_LADDER="opencode/alpha-free" \
+  ORCH_MAX_WORKTREES=0 \
+  ORCH_WAKE_TIMEOUT=20 \
+  ORCH_MIN_INTERVAL=0 \
+  GH_JSON="$TMP/prs-red.json" \
+  bash "$ASSETS" >/dev/null 2>&1
+RC=$?
+if [ "$RC" -eq 0 ] && ! grep -q "ARGS:" "$WAKE_LOG" 2>/dev/null && grep -qi "active worktrees .* exceed max_worktrees" "$TMP/state/wake.log" 2>/dev/null; then
+  ok "worktree cap prevents wake launch when exceeded"
+else
+  fail "worktree cap did NOT prevent wake launch"
+fi
+
 if [ "$FAILED" -eq 0 ]; then
   echo "PASS: stateless wake launcher"
   exit 0

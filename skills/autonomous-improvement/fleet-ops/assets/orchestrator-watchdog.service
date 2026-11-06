@@ -10,5 +10,5 @@ EnvironmentFile=-%h/.local/share/orchestrator/watchdog.env
 ExecStart=%h/.local/share/orchestrator/watchdog.sh
 # Backstop if the script itself wedges; the script also wraps the nudge in `timeout`.
 TimeoutStartSec=2h
-# Do not kill the nudge if the oneshot's main process exits early.
-KillMode=process
+# mixed: kill children when service stops or times out, avoiding orphan background workers.
+KillMode=mixed

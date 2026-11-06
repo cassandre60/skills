@@ -6,4 +6,4 @@ Type=oneshot
 EnvironmentFile=-%h/.local/share/orchestrator/watchdog.env
 ExecStart=%h/.local/share/orchestrator/wake.sh
 TimeoutStartSec=2h
-KillMode=process
+KillMode=mixed
