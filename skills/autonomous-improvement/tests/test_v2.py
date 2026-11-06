@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import datetime
+import datetime as dt
 import importlib
 import json
 import os
@@ -2418,7 +2418,7 @@ class FleetTests(RepoTestCase):
         self.assertEqual(res_disk.returncode, 1)
         data_disk = json.loads(res_disk.stdout)
         self.assertFalse(data_disk["dispatch"])
-        self.assertIn("disk headroom exhausted", data_disk["reason"].lower())
+        self.assertTrue("disk headroom exhausted" in data_disk["reason"].lower())
 
         # Reset disk limit and test max_worktrees
         data["fleet"]["min_free_gb"] = 0
@@ -2429,7 +2429,7 @@ class FleetTests(RepoTestCase):
         self.assertEqual(res_wt.returncode, 1)
         data_wt = json.loads(res_wt.stdout)
         self.assertFalse(data_wt["dispatch"])
-        self.assertIn("worktree cap exceeded", data_wt["reason"].lower())
+        self.assertTrue("worktree cap exceeded" in data_wt["reason"].lower())
 
 
     def test_govern_enforces_acceptance_floor(self):
@@ -2449,7 +2449,7 @@ class FleetTests(RepoTestCase):
         env = env_with_path(bin_dir, GH_JSON=str(json_path))
 
         recent = (
-            datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=1)
+            dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=1)
         ).isoformat()
 
         def fleet_payload(n_open: int, n_merged: int, n_closed: int) -> list:
@@ -5030,7 +5030,7 @@ class StatelessWakeTests(RepoTestCase):
         self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
         payload = json.loads(res.stdout)
         self.assertFalse(payload["needs_brain"])
-        self.assertIn("disk headroom exhausted", payload["reason"].lower())
+        self.assertTrue("disk headroom exhausted" in payload["reason"].lower())
 
 
 
