@@ -169,12 +169,67 @@ reads, not scripts. Their discipline:
 | odd inputs | empty, huge, malformed, unusual characters, wrong types |
 | failing surroundings | offline, slow network, permission denied, disk full |
 | failure paths | for each way an action can fail: what the user sees, and can they recover? |
+| implicit state machines | booleans, nullable fields, enums, and status flags that jointly encode a mode or lifecycle — which states are reachable, which transitions are unguarded, and which impossible combinations the code permits |
 
 - **Finder:** the tool's own shortlist where one exists; otherwise the lens
   names the files (bounded by the machine budget).
 - **Oracle:** a failing test for each surviving finding.
 - **Evidence:** file, line, concrete trigger, failing test.
 - **Output format:** `file:line — lens — trigger — failing test name`.
+
+**Implicit state machines.** Prompt origin: Steve Ruiz (@steveruizok), "good
+prompt: find all of the implicit state machines in my app" (X, 31 Oct 2026).
+The deliverable is a map plus one proven fix, never a state-library rewrite:
+
+> Find every implicit state machine in this app: the clusters of booleans,
+> nullable fields, enums, status strings, and flags that together encode a
+> mode, lifecycle, or workflow. For each machine, map the states that are
+> actually representable (not the intended ones), the events that move between
+> them, the guards, and the side effects, citing `file:line` for every state
+> and every transition. Then report only the defects the implicit shape hides:
+> impossible combinations the code permits, transitions with no guard or a
+> guard duplicated elsewhere, states that are unreachable or have no exit,
+> state that is reset on one path and stale on another, and two fields that
+> are supposed to agree but can drift. For each finding give `file:line`, a
+> concrete user- or API-level trigger, and a failing test that drives the
+> machine through a real entry point. Output one table: machine, encoded at,
+> states, events, finding, trigger, failing test. Then fix the single
+> highest-severity finding that survives refutation with the smallest change
+> that makes its failing test pass — a guard, a reset, a derived value, or the
+> smallest local type change that makes the bad combination unrepresentable.
+> Keep the diff inside that machine and its test. Do not add a state-machine
+> library, a generic framework, or a new indirection layer; do not fix more
+> than one machine in this pass. If the smallest correct fix is a redesign,
+> stop and file the finding as an issue with the map and the failing test.
+
+- **Finder:** grep production modules for state-shaped names (`is[A-Z]`,
+  `has[A-Z]`, `can[A-Z]`, `status`, `state`, `phase`, `mode`, `step`,
+  `pending`, `loading`, `error`); read only modules where three or more
+  co-vary. The grep nominates; it never proves a machine.
+- **Map:** states, events, guards, side effects, and the `file:line` where
+  each state and transition is written; name the entry points that can drive
+  it.
+- **Findings:** an impossible combination the code permits; an unguarded or
+  duplicated transition; an unreachable or inescapable state; state reset on
+  one path and stale on another; two fields that can disagree.
+- **Oracle:** a failing test per finding that drives a real entry point into
+  the bad state or transition. A combination reachable only through a private
+  setter is a note, not a finding.
+- **Remediation:** map all machines, fix at most one proven defect. The fix
+  is the smallest change that turns the failing test green: add the missing
+  guard, reset the stale field, derive the duplicate boolean, or make the
+  invalid combination unrepresentable with the types already in the codebase.
+  No state-machine library, no generic framework, no new indirection layer for
+  one machine. If the smallest correct fix is a redesign, file the finding as
+  an issue with the map and the test instead of half-rewriting it.
+- **Output format:** `machine <name> — encoded at <file:line,...> — states
+  <...> — events <...> — finding <...> — trigger <...> — failing test <...>`.
+- **Refutation:** re-derive from the code, find the guard that already handles
+  it, try the trigger on the current base; drop anything needing an impossible
+  sequence, a mock, or a private call.
+- **Scope:** map all machines in the modules the finder nominates, but fix at
+  most one; on a large app, split the map across passes. The machine budget
+  still binds. No rewrite, no new dependency.
 
 ### meta (stream L — gated)
 
