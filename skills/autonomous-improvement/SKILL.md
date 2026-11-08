@@ -83,7 +83,7 @@ a second call tries to disprove each finding; only survivors count.
 | security & deps (H+K) | secrets, advisories, risky bumps | `advisory.py secrets / deps / bump` → scan diff, oracle-first bump |
 | simplification (J) | dead code is suspected | `simplify_gate.py finder / oracle` → green tests, non-falling mutation score |
 | fuzz (C) | a parser or consumer needs crashing | `fuzz_shrink.py run / replay` → shrunk counterexample |
-| lens pass (B-shaped) | one risk class needs one focused read | the lens menu (`10`) → refuted findings only |
+| lens pass (B-shaped) | one risk class needs one focused read, or the state-machine backlog has open rows | the lens menu (`10`) → refuted findings only |
 | meta (L, gated) | the fleet reviews its own rules | `meta.py replay / lessons` → replay-gated, issue-only |
 
 Two rules bind every tool: a finding counts only when it carries the **file,

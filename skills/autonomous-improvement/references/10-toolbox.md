@@ -200,7 +200,11 @@ The deliverable is a map plus one proven fix, never a state-library rewrite:
 > Keep the diff inside that machine and its test. Do not add a state-machine
 > library, a generic framework, or a new indirection layer; do not fix more
 > than one machine in this pass. If the smallest correct fix is a redesign,
-> stop and file the finding as an issue with the map and the failing test.
+> record it in the backlog and stop; do not half-rewrite it. Record every
+> finding in `docs/STATE_MACHINE_BACKLOG.md` with a stable id, severity,
+> `file:line`, trigger, and failing test. Fix the highest-severity one, mark
+> it `FIXED #<pr>` in the same PR, and leave the rest `OPEN`; later passes
+> take the highest-severity open row and repeat until none remain.
 
 - **Finder:** grep production modules for state-shaped names (`is[A-Z]`,
   `has[A-Z]`, `can[A-Z]`, `status`, `state`, `phase`, `mode`, `step`,
@@ -220,8 +224,19 @@ The deliverable is a map plus one proven fix, never a state-library rewrite:
   guard, reset the stale field, derive the duplicate boolean, or make the
   invalid combination unrepresentable with the types already in the codebase.
   No state-machine library, no generic framework, no new indirection layer for
-  one machine. If the smallest correct fix is a redesign, file the finding as
-  an issue with the map and the test instead of half-rewriting it.
+  one machine. If the smallest correct fix is a redesign, record it in the
+  backlog instead of half-rewriting it.
+- **Backlog:** the map is the queue. Create `docs/STATE_MACHINE_BACKLOG.md`
+  from `assets/STATE_MACHINE_BACKLOG.template.md` when absent, then write
+  every finding with a stable id, severity, `file:line`, trigger, failing
+  test, and status. Rows are append-only; only the status cell is rewritten,
+  and rows dedup by id. Later passes take the highest-severity `OPEN` row,
+  claim it with a draft PR, fix it, and flip the status to `FIXED #<pr>` in
+  the same PR. The lens is complete only when no `OPEN` row remains;
+  `WONTFIX` and `SUPERSEDED` require a reason. `survey.py` treats an `OPEN`
+  row as a 0-token signal and schedules this lens pass until the queue is
+  empty. The tracked file is the source of truth; mirror it to the issue
+  tracker only when the repo already uses one.
 - **Output format:** `machine <name> — encoded at <file:line,...> — states
   <...> — events <...> — finding <...> — trigger <...> — failing test <...>`.
 - **Refutation:** re-derive from the code, find the guard that already handles
