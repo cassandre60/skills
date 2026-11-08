@@ -47,6 +47,7 @@ THRESHOLD = 0.25
 DEFAULT_WEIGHTS: dict[str, float] = {
     "defect-repair": 1.0,
     "security": 0.9,
+    "lens": 0.85,
     "docs-reconcile": 0.8,
     "flake": 0.7,
     "adversarial": 0.6,
@@ -69,6 +70,13 @@ TOOL_METADATA: dict[str, dict[str, Any]] = {
         "finder_cmd": ["python3", "scripts/autonomous/advisory.py", "secrets"],
         "oracle_cmd": ["python3", "scripts/autonomous/advisory.py", "secrets"],
         "tier": "T2",
+        "needs_config": False,
+    },
+    "lens": {
+        "stream": "B",
+        "finder_cmd": ["grep", "-n", "| OPEN |$", "docs/STATE_MACHINE_BACKLOG.md"],
+        "oracle_cmd": ["python3", "scripts/autonomous/orchestrator.py", "verify-gate"],
+        "tier": "T3",
         "needs_config": False,
     },
     "docs-reconcile": {
@@ -358,6 +366,25 @@ def check_flake(root: Path) -> tuple[float, dict[str, Any]]:
     return 0.0, {}
 
 
+def check_lens_backlog(root: Path) -> tuple[float, dict[str, Any]]:
+    """Check for open findings in the state-machine backlog."""
+    backlog = root / "docs" / "STATE_MACHINE_BACKLOG.md"
+    if not backlog.is_file():
+        return 0.0, {}
+    open_rows = 0
+    for line in backlog.read_text(encoding="utf-8", errors="replace").splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("|") or not stripped.endswith("|"):
+            continue
+        # Only the last cell matters, so pipes in finding text cannot shift it.
+        status = stripped[:-1].rsplit("|", 1)[-1].strip().upper()
+        if status == "OPEN":
+            open_rows += 1
+    if open_rows:
+        return 1.0, {"open_state_machine_findings": open_rows}
+    return 0.0, {}
+
+
 def check_benchmarks(root: Path) -> tuple[float, dict[str, Any]]:
     for candidate in ("benchmarks", "benches", "perf"):
         if (root / candidate).is_dir():
@@ -410,11 +437,13 @@ def survey_repo(
     smell_strength, smell_sigs = check_adversarial(root, cfg)
     mut_strength, mut_needs_cfg, mut_sigs = check_mutation(root, cfg, bool(cfg_file))
     flake_strength, flake_sigs = check_flake(root)
+    lens_strength, lens_sigs = check_lens_backlog(root)
     bench_strength, bench_sigs = check_benchmarks(root)
 
     signal_strengths: dict[str, tuple[float, dict[str, Any]]] = {
         "defect-repair": (red_ci_strength, red_ci_sigs),
         "security": (sec_strength, sec_sigs),
+        "lens": (lens_strength, lens_sigs),
         "docs-reconcile": (drift_strength, drift_sigs),
         "flake": (flake_strength, flake_sigs),
         "adversarial": (smell_strength, smell_sigs),
@@ -491,6 +520,8 @@ def survey_repo(
             reason = "adversarial chosen: test smells detected"
         elif tool_name == "mutation":
             reason = "mutation chosen: unaudited targets present"
+        elif tool_name == "lens":
+            reason = "lens chosen: state-machine backlog has open findings"
         else:
             reason = f"{tool_name} chosen: highest scoring pass"
 

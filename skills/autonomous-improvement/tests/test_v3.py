@@ -95,6 +95,23 @@ class SurveyTests(unittest.TestCase):
         support.git(repo, "commit", "-qm", "ledger sound")
         return repo
 
+    def _backlog_repo(
+        self, status: str = "OPEN", finding: str = "impossible combo"
+    ) -> Path:
+        repo = self._clean_repo()
+        support.write(
+            repo / "docs" / "STATE_MACHINE_BACKLOG.md",
+            "# State Machine Backlog\n\n"
+            "| Id | Machine | Severity | Encoded At | Finding | Trigger | "
+            "Failing Test | Status |\n"
+            "|---|---|---|---|---|---|---|---|\n"
+            f"| drag-1 | drag | high | `src/app.py:1` | {finding} | "
+            f"drag while saving | `tests/test_app.py::test_f` | {status} |\n",
+        )
+        support.git(repo, "add", "-A")
+        support.git(repo, "commit", "-qm", "backlog")
+        return repo
+
     def _red_ci_repo(self) -> Path:
         repo, _ = support.python_repo(self.tmp, name="redci")
         fix_root = Path(__file__).resolve().parent.parent / "evals" / "fixtures"
@@ -133,6 +150,32 @@ class SurveyTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         payload = json.loads(proc.stdout)
         self.assertIsNone(payload["chosen"])
+
+    def test_open_state_machine_backlog_selects_lens(self) -> None:
+        repo = self._backlog_repo()
+        proc = self.survey(repo)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        payload = json.loads(proc.stdout)
+        self.assertIsNotNone(payload["chosen"])
+        self.assertEqual(payload["chosen"]["tool"], "lens")
+        self.assertEqual(payload["chosen"]["signals"]["open_state_machine_findings"], 1)
+
+    def test_backlog_finding_with_pipe_still_counts(self) -> None:
+        repo = self._backlog_repo(finding="isSaving | isEditing")
+        proc = self.survey(repo)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        payload = json.loads(proc.stdout)
+        self.assertIsNotNone(payload["chosen"])
+        self.assertEqual(payload["chosen"]["tool"], "lens")
+        self.assertEqual(payload["chosen"]["signals"]["open_state_machine_findings"], 1)
+
+    def test_closed_state_machine_backlog_is_not_selected(self) -> None:
+        repo = self._backlog_repo(status="FIXED #12")
+        proc = self.survey(repo)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        payload = json.loads(proc.stdout)
+        if payload["chosen"] is not None:
+            self.assertNotEqual(payload["chosen"]["tool"], "lens")
 
     def test_identical_input_gives_byte_identical_output(self) -> None:
         repo, env = self._red_ci_repo()

@@ -61,7 +61,7 @@ skills/
     LICENSE
     README.md
     SPEC.md
-    assets/     # 5 files
+    assets/     # 6 files
     docs/       # 2 files
     evals/      # 149 files
     examples/   # 2 files
