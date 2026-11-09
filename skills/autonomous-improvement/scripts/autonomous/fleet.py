@@ -1002,10 +1002,15 @@ def cmd_govern(args: argparse.Namespace) -> int:
                 eprint(f"    Tend queue: {', '.join(f'PR #{n}' for n in tend)}")
         return EXIT_NEGATIVE
 
-    # 4. Check new PRs per day (last 24 hours)
+    # 4. Check new PRs per day (last 24 hours, including merged/closed PRs)
+    all_prs_data, all_warn = fetch_gh_prs(
+        root, state="all", limit=200, require_gh=args.require_gh
+    )
+    if all_warn and not gh_warn:
+        eprint(f"[warn] {all_warn}")
     now = datetime.datetime.now(datetime.timezone.utc)
     count_24h = 0
-    for p in prs_data:
+    for p in all_prs_data or prs_data:
         created_str = p.get("createdAt")
         if created_str:
             try:
@@ -1032,11 +1037,7 @@ def cmd_govern(args: argparse.Namespace) -> int:
     # no settled PRs has no evidence yet and must keep dispatching -- the
     # governor measures outcomes, it does not prevent the first one.
     if min_acceptance_rate_14d > 0:
-        settled_data, settle_warn = fetch_gh_prs(
-            root, state="all", limit=200, require_gh=args.require_gh
-        )
-        if settle_warn:
-            eprint(f"[warn] {settle_warn}")
+        settled_data = all_prs_data
         now = datetime.datetime.now(datetime.timezone.utc)
         merged_14d = 0
         closed_unmerged_14d = 0
@@ -2216,12 +2217,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             return cmd_needs_brain(args)
         if args.command == "stats":
             return cmd_stats(args)
-        if args.command == "needs-brain":
-            return cmd_needs_brain(args)
         if args.command == "wake":
             return cmd_wake(args)
-        if args.command == "doctor":
-            return cmd_doctor(args)
         if args.command == "claim":
             return cmd_claim(args)
         if args.command == "publish":
