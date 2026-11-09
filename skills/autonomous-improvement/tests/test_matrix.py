@@ -377,10 +377,6 @@ class ReportAndControlTests(unittest.TestCase):
         self.assertAlmostEqual(delta["mean_delta"], 0.05)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class InstrumentFixTests(unittest.TestCase):
     """PR #90's findings: the timer marker fired on quoted docs, and the tool
     extractor let generic toolbox words (present in any transcript that
@@ -455,3 +451,7 @@ class InstrumentFixTests(unittest.TestCase):
 
     def matrix(self):
         return matrix.load_matrix()
+
+
+if __name__ == "__main__":
+    unittest.main()

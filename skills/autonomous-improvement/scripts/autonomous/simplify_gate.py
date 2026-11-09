@@ -447,7 +447,7 @@ def score_summary(result: Dict[str, Any]) -> Dict[str, Any]:
     killed = _count(result, "killed")
     survived = _count(result, "survived")
     timeout = _count(result, "timeout")
-    unconfirmed = _count(result, "unconfirmed")
+    unconfirmed = _count(result, "unconfirmed") or _count(result, "unverified")
     uncompilable = _count(result, "uncompilable")
     total = _count(result, "total") or (
         killed + survived + timeout + unconfirmed + uncompilable
