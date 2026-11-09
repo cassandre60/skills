@@ -263,5 +263,44 @@ class DeterminismTests(ConventionsTestCase):
         self.assertEqual(first.stdout, second.stdout)
 
 
+class StreamBScanTests(ConventionsTestCase):
+    def test_unittest_assert_equal_mock_assert_and_self_fail_recognized(self) -> None:
+        import stream_b_scan
+
+        src = (
+            "import unittest\n"
+            "from unittest.mock import MagicMock\n\n"
+            "class SampleTest(unittest.TestCase):\n"
+            "    def test_mock_echo(self):\n"
+            "        m = MagicMock(return_value=42)\n"
+            "        self.assertEqual(m(), 42)\n\n"
+            "    def test_branch_with_fail(self):\n"
+            "        if False:\n"
+            "            self.fail('unreachable')\n"
+        )
+        findings = stream_b_scan._python_findings("tests/test_sample.py", src)
+        kinds_by_line = {(f["kind"], f["line"]): f for f in findings}
+        self.assertIn(("mock-assert", 7), kinds_by_line)
+        self.assertNotIn(("no-assertion", 9), kinds_by_line)
+
+    def test_ledger_validate_detects_stale_unbackticked_target(self) -> None:
+        import ledger_validate
+
+        repo = self.make()
+        write(repo / "src" / "app.py", "x = 1\n")
+        commit(repo, "feat: add app")
+        ledger_path = repo / "docs" / "AUTONOMOUS_WORK_LEDGER.md"
+        write(
+            ledger_path,
+            "# Ledger\n\n"
+            "| Date | Stream | Target | Content Hash | Status | PR | Summary | Trigger |\n"
+            "|---|---|---|---|---|---|---|---|\n"
+            "| 2026-10-01 | Stream A | src/app.py | `000000000:-` | COMPLETED | #1 | ok | manual |\n",
+        )
+        report = ledger_validate.validate_ledger(repo, {}, ledger_path)
+        self.assertEqual(len(report["stale"]), 1)
+        self.assertEqual(report["stale"][0]["target"], "src/app.py")
+
+
 if __name__ == "__main__":
     unittest.main()

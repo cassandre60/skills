@@ -120,8 +120,8 @@ def validate_ledger(root, cfg: Dict[str, Any], ledger_path) -> Dict[str, Any]:
             )
             continue
 
-        if len(paths) == 1 and token in AUDITED_STATUSES:
-            target = paths[0]
+        target = paths[0] if len(paths) == 1 else target_cell.strip().strip("`").strip()
+        if target and len(paths) <= 1 and token in AUDITED_STATUSES:
             current = visible_targets.get(target)
             if current is None:
                 visible_targets[target] = {
@@ -138,7 +138,7 @@ def validate_ledger(root, cfg: Dict[str, Any], ledger_path) -> Dict[str, Any]:
                 # newest wins: date desc, then topmost on a tie
                 current_date = current.get("date", "")
                 row_date = cells[0].strip()
-                if (row_date, -index) > (current_date, -current["line"]):
+                if (row_date, -(index + 1)) > (current_date, -current["line"]):
                     current.update(
                         {
                             "line": index + 1,
