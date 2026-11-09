@@ -24,6 +24,10 @@ FLEET_OPS = SKILL_ROOT / "fleet-ops"
 FLEET_OPS_ASSETS = FLEET_OPS / "assets"
 PYTHON = sys.executable
 
+# In test fixtures (which often live in /tmp/tmpfs with limited capacity),
+# default disk headroom requirement to 0 so tests do not flake on host disk usage.
+os.environ.setdefault("ORCH_MIN_FREE_GB", "0")
+
 
 def write(path: Path, text: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
