@@ -90,5 +90,64 @@ class SupersededRunTests(unittest.TestCase):
         self.assertEqual(result["checks"], "red")
 
 
+class GovernorDailyCapTests(unittest.TestCase):
+    def test_daily_cap_counts_merged_and_closed_prs_within_24h(self) -> None:
+        import argparse
+        import datetime
+        import io
+        import json
+        import tempfile
+        from unittest import mock
+
+        now_iso = (
+            datetime.datetime.now(datetime.timezone.utc)
+            - datetime.timedelta(hours=1)
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        def fake_fetch_gh_prs(root, state="open", limit=100, require_gh=False):
+            if state == "open":
+                return [], None
+            return [
+                {
+                    "number": 10,
+                    "state": "MERGED",
+                    "createdAt": now_iso,
+                    "mergedAt": now_iso,
+                },
+                {
+                    "number": 11,
+                    "state": "CLOSED",
+                    "createdAt": now_iso,
+                    "mergedAt": None,
+                },
+            ], None
+
+        cfg = {
+            "fleet": {
+                "max_open_prs": 5,
+                "max_new_prs_per_day": 2,
+                "min_acceptance_rate_14d": 0.0,
+                "min_free_gb": 0,
+            }
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            args = argparse.Namespace(
+                config=None, json=True, require_gh=False
+            )
+            stdout = io.StringIO()
+            with (
+                mock.patch.object(fleet, "main_repo_root", return_value=root),
+                mock.patch.object(fleet, "load_config", return_value=cfg),
+                mock.patch.object(fleet, "fetch_gh_prs", side_effect=fake_fetch_gh_prs),
+                mock.patch("sys.stdout", stdout),
+            ):
+                rc = fleet.cmd_govern(args)
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(rc, fleet.EXIT_NEGATIVE, payload)
+            self.assertFalse(payload["dispatch"])
+            self.assertIn("daily new PR cap reached (2 >= 2)", payload["reason"])
+
+
 if __name__ == "__main__":
     unittest.main()
