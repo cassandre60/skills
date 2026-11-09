@@ -3769,10 +3769,6 @@ class VerdictReliabilityTests(RepoTestCase):
         )
 
 
-@unittest.skipUnless(
-    all(shutil.which(tool) for tool in ("bash", "flock", "timeout", "stat", "date")),
-    "watchdog shell dependencies are not installed",
-)
 class EvalHarnessTests(unittest.TestCase):
     """evals/run.py: deterministic halves plus the red-proof they can fail.
 
@@ -4129,10 +4125,6 @@ class DocsTruthStreamTests(unittest.TestCase):
         self.assertEqual(json.loads(res.stdout)["candidates"], [])
 
 
-@unittest.skipUnless(
-    all(shutil.which(tool) for tool in ("bash", "flock", "timeout", "stat", "date")),
-    "watchdog shell dependencies are not installed",
-)
 class RepairStreamTests(RepoTestCase):
     """Stream E (issue #22): defect-repair intake + red/green oracle.
 
@@ -4437,10 +4429,6 @@ class SecurityStreamTests(RepoTestCase):
             self.assertEqual(res.returncode, 0, res.stderr)
 
 
-@unittest.skipUnless(
-    all(shutil.which(tool) for tool in ("bash", "flock", "timeout", "stat", "date")),
-    "watchdog shell dependencies are not installed",
-)
 class FuzzSeedTests(RepoTestCase):
     """Stream C (issue #25): recorded-seed fuzz + deterministic shrink.
 
@@ -4577,10 +4565,6 @@ class PerfGateTests(RepoTestCase):
             self.assertEqual(res.returncode, 0, res.stderr)
 
 
-@unittest.skipUnless(
-    all(shutil.which(tool) for tool in ("bash", "flock", "timeout", "stat", "date")),
-    "watchdog shell dependencies are not installed",
-)
 class StreamLTests(RepoTestCase):
     """Stream L (issue #26): meta self-improvement, capped and kill-switched.
 
