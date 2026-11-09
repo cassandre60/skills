@@ -341,7 +341,7 @@ def cmd_verify_gate(args: argparse.Namespace) -> int:
                 "[warn] no evidence artifact (.autonomous/evidence.json); "
                 "generate one with evidence.py before claiming the contract"
             )
-        elif problems:
+        elif problems or data is None:
             # A present-but-invalid artifact always fails: stale evidence is
             # worse than none, because it looks like proof.
             raise Fatal("evidence artifact invalid:\n  " + "\n  ".join(problems))

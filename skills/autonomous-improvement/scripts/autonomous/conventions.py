@@ -236,7 +236,7 @@ def fills_pr_template(
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else "")
     sub = parser.add_subparsers(dest="cmd", required=True)
     reader = sub.add_parser("read", help="print the repo's conventions as JSON")
     reader.add_argument("--json", action="store_true", help="JSON output (default)")

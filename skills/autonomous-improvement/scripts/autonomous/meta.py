@@ -473,7 +473,8 @@ def cmd_lessons(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[1])
+    desc = __doc__.split("\n\n")[1] if __doc__ and "\n\n" in __doc__ else (__doc__ or "")
+    parser = argparse.ArgumentParser(description=desc)
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     replay_p = sub.add_parser("replay", help="replay an L3 proposal against recorded fleet history")

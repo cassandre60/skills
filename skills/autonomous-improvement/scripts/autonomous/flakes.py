@@ -272,7 +272,8 @@ def cmd_oracle(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[1])
+    desc = __doc__.split("\n\n")[1] if __doc__ and "\n\n" in __doc__ else (__doc__ or "")
+    parser = argparse.ArgumentParser(description=desc)
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     f = sub.add_parser("finder", help="emit flake candidates (static idioms + run history)")

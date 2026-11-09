@@ -290,5 +290,73 @@ class FleetTierTests(unittest.TestCase):
         self.assertNotIn("eligible for T2", proc.stdout)
 
 
+class Python39AndOptimizePortabilityTests(unittest.TestCase):
+    def test_docs_truth_symbol_drift_works_without_stdlib_module_names(self) -> None:
+        import sys
+        import tempfile
+
+        sys.path.insert(0, str(SCRIPTS))
+        import docs_truth
+
+        saved = getattr(sys, "stdlib_module_names", None)
+        try:
+            if hasattr(sys, "stdlib_module_names"):
+                delattr(sys, "stdlib_module_names")
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                doc = root / "README.md"
+                doc.write_text("```python\nimport json\nfrom pathlib import Path\n```\n", encoding="utf-8")
+                blocks = docs_truth.parse_fences(doc.read_text(encoding="utf-8"))
+                findings = docs_truth.scan_symbol_drift(doc, root, blocks, [root])
+                self.assertEqual(findings, [])
+        finally:
+            if saved is not None:
+                sys.stdlib_module_names = saved  # type: ignore[attr-defined]
+
+    def test_docs_truth_executable_blocks_use_sys_executable(self) -> None:
+        import subprocess
+        import sys
+        import tempfile
+        from unittest import mock
+
+        sys.path.insert(0, str(SCRIPTS))
+        import docs_truth
+
+        blocks = [{"lang": "python", "runnable": True, "code": "print(1)", "start_line": 1}]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            doc = root / "README.md"
+            completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="1\n", stderr="")
+            with mock.patch.object(docs_truth.subprocess, "run", return_value=completed) as run_mock:
+                findings = docs_truth.scan_runnable(doc, root, blocks, timeout=5)
+                self.assertEqual(findings, [])
+                called_argv = run_mock.call_args[0][0]
+                self.assertEqual(called_argv[0], sys.executable)
+
+    def test_scripts_help_works_under_python_oo_stripped_docstrings(self) -> None:
+        for name in (
+            "advisory.py",
+            "conventions.py",
+            "docs_truth.py",
+            "flakes.py",
+            "fuzz_shrink.py",
+            "meta.py",
+            "onboard.py",
+            "perf_gate.py",
+            "pins.py",
+            "profile.py",
+            "ratchet.py",
+            "repair.py",
+            "runrecord.py",
+            "survey.py",
+        ):
+            with self.subTest(script=name):
+                proc = support.run(
+                    [support.PYTHON, "-OO", str(SCRIPTS / name), "--help"],
+                    cwd=SCRIPTS.parent.parent,
+                )
+                self.assertEqual(proc.returncode, 0, f"{name}: {proc.stderr}")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -408,7 +408,7 @@ def _verify(root: Path, timeout: int) -> int:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else "")
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("detect", help="print the detection JSON; change nothing")
     write = sub.add_parser("write", help="write .autonomous/config.json from the detection")

@@ -63,8 +63,8 @@ def scan_pins(tests_dir: Path = TESTS_DIR) -> List[Dict[str, Any]]:
         except SyntaxError:
             continue
         stack: List[str] = []
-        classes: Dict[ast.AST, str] = {}
-        functions: Dict[ast.AST, str] = {}
+        classes: Dict[ast.ClassDef, str] = {}
+        functions: Dict[ast.FunctionDef | ast.AsyncFunctionDef, str] = {}
 
         for node in ast.walk(tree):
             if isinstance(node, ast.ClassDef):
@@ -136,7 +136,7 @@ def check_maps(
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else "")
     sub = parser.add_subparsers(dest="cmd", required=True)
     scan = sub.add_parser("scan", help="list every doc pin the suite carries")
     scan.add_argument("--json", action="store_true")
