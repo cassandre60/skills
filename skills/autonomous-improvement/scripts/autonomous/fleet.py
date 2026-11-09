@@ -80,6 +80,27 @@ def _resolve_state_dir(root: Path, explicit: Optional[str] = None) -> Path:
     return root / ".autonomous" / "state"
 
 
+def _resolve_min_free_gb(cfg: Dict[str, Any], doctor_cfg: Optional[Dict[str, Any]] = None) -> float:
+    """Resolve disk headroom floor: config takes precedence, then ORCH_MIN_FREE_GB, default 5 GiB."""
+    fleet_cfg = cfg.get("fleet", {}) or {}
+    explicit = fleet_cfg.get("min_free_gb")
+    if explicit is None:
+        doc = doctor_cfg if doctor_cfg is not None else (cfg.get("doctor", {}) or {})
+        explicit = doc.get("min_free_gb")
+    if explicit is not None:
+        try:
+            return float(explicit)
+        except (ValueError, TypeError):
+            pass
+    env_val = os.environ.get("ORCH_MIN_FREE_GB")
+    if env_val is not None:
+        try:
+            return float(env_val)
+        except ValueError:
+            pass
+    return 5.0
+
+
 def fetch_gh_prs(
     root: Path,
     state: str = "open",
@@ -717,7 +738,7 @@ def run_doctor_checks(root: Path, cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
         )
 
     # 7. Disk headroom for N worktrees
-    min_free_gb = float(doctor_cfg.get("min_free_gb", 5))
+    min_free_gb = _resolve_min_free_gb(cfg, doctor_cfg)
     usage = shutil.disk_usage(str(root))
     free_gb = usage.free / (1024**3)
     checks.append(
@@ -890,9 +911,7 @@ def cmd_govern(args: argparse.Namespace) -> int:
             return EXIT_NEGATIVE
 
     # 1b. Disk headroom floor (issue #115: protect host against out-of-disk failure)
-    min_free_gb = float(
-        fleet_cfg.get("min_free_gb", (cfg.get("doctor", {}) or {}).get("min_free_gb", 5))
-    )
+    min_free_gb = _resolve_min_free_gb(cfg)
     try:
         usage = shutil.disk_usage(str(root))
         free_gb = usage.free / (1024**3)
@@ -1119,9 +1138,7 @@ def cmd_needs_brain(args: argparse.Namespace) -> int:
     wake_path = state_dir / "wake.json"
 
     fleet_cfg = cfg.get("fleet", {}) or {}
-    min_free_gb = float(
-        fleet_cfg.get("min_free_gb", (cfg.get("doctor", {}) or {}).get("min_free_gb", 5))
-    )
+    min_free_gb = _resolve_min_free_gb(cfg)
     try:
         usage = shutil.disk_usage(str(root))
         free_gb = usage.free / (1024**3)
@@ -1360,9 +1377,7 @@ def _needs_brain_from_states(
     max_open = int(fleet_cfg.get("max_open_prs", 5))
     kill_file = str(fleet_cfg.get("kill_switch_file") or ".autonomous/STOP")
     killed = (root / kill_file).exists() or (root / ".autonomous" / "STOP").exists()
-    min_free_gb = float(
-        fleet_cfg.get("min_free_gb", (cfg.get("doctor", {}) or {}).get("min_free_gb", 5))
-    )
+    min_free_gb = _resolve_min_free_gb(cfg)
     try:
         usage = shutil.disk_usage(str(root))
         free_gb = usage.free / (1024**3)
@@ -1646,9 +1661,7 @@ def cmd_claim(args: argparse.Namespace) -> int:
         raise Fatal(f"slug already claimed locally: {slug}")
 
     fleet_cfg = cfg.get("fleet", {}) or {}
-    min_free_gb = float(
-        fleet_cfg.get("min_free_gb", (cfg.get("doctor", {}) or {}).get("min_free_gb", 5))
-    )
+    min_free_gb = _resolve_min_free_gb(cfg)
     try:
         usage = shutil.disk_usage(str(root))
         free_gb = usage.free / (1024**3)

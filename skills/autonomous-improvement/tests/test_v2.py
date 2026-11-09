@@ -5062,6 +5062,15 @@ class StatelessWakeTests(RepoTestCase):
         self.assertFalse(payload["needs_brain"])
         self.assertTrue("disk headroom exhausted" in payload["reason"].lower())
 
+    def test_orch_min_free_gb_env_var_overrides_default(self):
+        repo, env, _ = self.stage([self.red_pr()])
+        env["ORCH_MIN_FREE_GB"] = "999999"
+        res = script(repo, "fleet.py", "needs-brain", "--json", env=env)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        payload = json.loads(res.stdout)
+        self.assertFalse(payload["needs_brain"])
+        self.assertTrue("disk headroom exhausted" in payload["reason"].lower())
+
 
 
 
