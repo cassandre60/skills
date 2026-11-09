@@ -82,7 +82,7 @@ def _python_findings(rel: str, source: str) -> List[Dict[str, Any]]:
                     name = func.attr
                 elif isinstance(func, ast.Name):
                     name = func.id
-                if name.startswith("assert") or name in ("expect", "require"):
+                if name.startswith("assert") or name in ("expect", "require", "fail"):
                     has_assert = True
             elif isinstance(sub, ast.With):
                 # pytest.raises(...) is an assertion about behavior.
@@ -122,6 +122,25 @@ def _python_findings(rel: str, source: str) -> List[Dict[str, Any]]:
                         findings.append(
                             _finding(rel, sub.lineno, "mock-assert", lines[sub.lineno - 1])
                         )
+                elif isinstance(sub, ast.Call) and len(sub.args) >= 2:
+                    func = sub.func
+                    call_name = (
+                        func.attr
+                        if isinstance(func, ast.Attribute)
+                        else (func.id if isinstance(func, ast.Name) else "")
+                    )
+                    if call_name in ("assertEqual", "assertEquals"):
+                        sides = [
+                            _segment(source, sub.args[0]),
+                            _segment(source, sub.args[1]),
+                        ]
+                        nodes = [sub.args[0], sub.args[1]]
+                        if any(side in returned for side in sides) and any(
+                            isinstance(item, ast.Call) for item in nodes
+                        ):
+                            findings.append(
+                                _finding(rel, sub.lineno, "mock-assert", lines[sub.lineno - 1])
+                            )
     return findings
 
 
