@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import datetime
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -28,7 +29,7 @@ from typing import List, Optional
 
 EVALS_DIR = Path(__file__).resolve().parent
 SKILL_ROOT = EVALS_DIR.parent
-REPO_ROOT = SKILL_ROOT.parent
+REPO_ROOT = SKILL_ROOT.parent.parent
 RESULTS_DIR = EVALS_DIR / "results"
 GATES_JSON = EVALS_DIR / "gates.json"
 NEGATIVE_LEDGER = SKILL_ROOT / ".autonomous" / "negative-ledger.md"
@@ -40,7 +41,14 @@ PROTECTED_PREFIXES = (
     "skills/autonomous-improvement/tests/pins.json",
     "skills/autonomous-improvement/tests/pins.baseline.json",
     "skills/autonomous-improvement/tests/test_weakening_check.py",
+    "skills/autonomous-improvement/scripts/autonomous/test_weakening_check.py",
     "skills/autonomous-improvement/assets/protected-paths.fragment.txt",
+    "evals/",
+    "tests/pins.json",
+    "tests/pins.baseline.json",
+    "tests/test_weakening_check.py",
+    "scripts/autonomous/test_weakening_check.py",
+    "assets/protected-paths.fragment.txt",
 )
 LAWS_SECTION = "## The five laws"
 CONTRACT_MARKERS = ("stream contract", "tier floors", "autonomy tiers")
@@ -92,11 +100,19 @@ def _diff_paths(patch_text: str) -> List[str]:
 
 
 def _protected_hits(patch_text: str) -> List[str]:
-    hits = [p for p in _diff_paths(patch_text) if p.startswith(PROTECTED_PREFIXES)]
-    if any(p.endswith("references/08-recursive-self-improvement.md") for p in _diff_paths(patch_text)):
+    paths = _diff_paths(patch_text)
+    hits = [p for p in paths if p.startswith(PROTECTED_PREFIXES)]
+    if any(p.endswith("references/08-recursive-self-improvement.md") for p in paths):
         # The laws/contract/tier sections of reference 08 are referee text:
         # a diff that edits that file may only be judged by the owner.
         hits.append("references/08-recursive-self-improvement.md (stream contract / tiers — owner-only)")
+    lowered = patch_text.lower()
+    if any(p.endswith("SKILL.md") for p in paths) and LAWS_SECTION.lower() in lowered:
+        hits.append(f"SKILL.md ({LAWS_SECTION} — protected referee section)")
+    if any(m in lowered for m in CONTRACT_MARKERS) and any(
+        p.endswith(".md") for p in paths
+    ):
+        hits.append("markdown contract/tier markers (owner-only referee text)")
     return hits
 
 
@@ -175,16 +191,20 @@ def cmd_revert(args: argparse.Namespace) -> int:
         ["git", "branch", "-D", "autoplan/selfimprove-iteration"],
         cwd=str(REPO_ROOT), capture_output=True, check=False,
     )
-    NEGATIVE_LEDGER.parent.mkdir(parents=True, exist_ok=True)
+    ledger_override = getattr(args, "ledger", None) or os.environ.get(
+        "SELFIMPROVE_NEGATIVE_LEDGER"
+    )
+    ledger_path = Path(ledger_override) if ledger_override else NEGATIVE_LEDGER
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
     stamp = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
-    with open(NEGATIVE_LEDGER, "a", encoding="utf-8") as handle:
+    with open(ledger_path, "a", encoding="utf-8") as handle:
         handle.write(f"- {stamp} reverted: {args.why}\n")
-    print(f"[+] reverted; negative-ledger line appended to {NEGATIVE_LEDGER}")
+    print(f"[+] reverted; negative-ledger line appended to {ledger_path}")
     return 0
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else "")
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("propose", help="list below-threshold runs and the protocol")
     apply_p = sub.add_parser("apply", help="apply one non-protected diff in a worktree")
@@ -197,6 +217,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     revert_p = sub.add_parser("revert", help="drop the worktree and record why it lost")
     revert_p.add_argument("--worktree", required=True)
     revert_p.add_argument("--why", required=True, help="what was tried and why it lost")
+    revert_p.add_argument("--ledger", default=None, help="negative ledger path override")
     args = parser.parse_args(argv)
     if args.cmd == "propose":
         return cmd_propose(args)
