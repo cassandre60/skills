@@ -45,7 +45,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import EXIT_OK, Fatal, eprint, load_config  # noqa: E402
+from common import EXIT_OK, Fatal, eprint, load_config, load_run_records  # noqa: E402
 
 SCHEMA = "stream-l/1"
 STOP_FILE = "STOP-STREAM-L"
@@ -377,11 +377,7 @@ def records_to_history_rows(records_dir: Path) -> List[Dict[str, Any]]:
     record cannot know are 0, never invented.
     """
     rows: List[Dict[str, Any]] = []
-    for path in sorted(records_dir.glob("rr-*.json")):
-        try:
-            record = json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            continue
+    for record in load_run_records(records_dir, pattern="rr-*.json"):
         verdict = str(record.get("verdict") or "").strip().lower()
         if verdict in ("merged", "accepted"):
             outcome = "accepted"

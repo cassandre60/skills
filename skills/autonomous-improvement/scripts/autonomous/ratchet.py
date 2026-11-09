@@ -41,15 +41,13 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import eprint, load_config, repo_root  # noqa: E402
+from common import eprint, git, load_config, repo_root  # noqa: E402
 
 SCHEMA = "ratchet/1"
 
 
 def _git(root: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["git", *args], cwd=str(root), capture_output=True, text=True, check=False
-    )
+    return git(args, cwd=root)
 
 
 def _worktree_of(root: Path, ref: str, parent: Path) -> Optional[Path]:
