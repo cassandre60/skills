@@ -378,3 +378,42 @@ consent, and a later agent can see the basis.
 If main changed in the audited area, re-run the premise before polishing. If the
 gap is gone, close the PR as superseded and record that. A stale-base proof is
 not evidence; see `07-moving-main.md`.
+
+## Field reports: reporting skill friction from target repos
+
+When an agent working in a target repository (e.g. ChessSRS) encounters a limitation,
+bug, or friction in the `autonomous-improvement` skill itself (e.g. rate-limit regex
+mismatch, timer skew, worktree cleanup quirks):
+
+1. **Issue only, never a PR.** The field agent has live failure evidence but not the
+   skill's test suite in context. Filing an issue avoids distracting the agent from
+   its primary task and prevents broken or untested skill patches.
+2. **Cap: max 1 field report per wake cycle.** Prevents runaway loops or repetitive failures
+   from spamming the skills repository.
+3. **Structured schema:** Use the title format `[field-report] <symptom>` and label with `field-report`:
+   ```markdown
+   ## Source
+   - Repo: <owner/repo>
+   - Session/Wake: <id or timestamp>
+   - Model: <model ID>
+
+   ## Symptom
+   <concise summary of what went wrong>
+
+   ## Expected Behavior
+   <what the skill or script should have done>
+
+   ## Evidence
+   <exact error message, log snippet, or reproduction command>
+
+   ## Workaround Used
+   <how the agent unblocked its primary task>
+
+   ## Proposed Fix (Optional)
+   <brief suggestion for the fix>
+   ```
+4. **Resume primary task immediately:** File the issue via `gh issue create -R cassandre60/skills ...`
+   and return to the target repo work.
+5. **Owner merge authority:** The owner holds exclusive merge power on both repos. A dedicated
+   session in `cassandre60/skills` will implement the fix with proper regression tests.
+
