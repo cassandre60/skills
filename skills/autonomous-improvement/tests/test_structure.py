@@ -13,14 +13,30 @@ import unittest
 from pathlib import Path
 
 TESTS = Path(__file__).resolve().parent
+SCRIPTS = TESTS.parent / "scripts" / "autonomous"
 
 
 def _test_modules():
     return sorted(TESTS.glob("test_*.py"))
 
 
+def _script_modules():
+    return sorted(SCRIPTS.glob("*.py"))
+
+
 def _parse(path: Path) -> ast.Module:
     return ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+
+def _is_main_guard(node: ast.stmt) -> bool:
+    if not isinstance(node, ast.If):
+        return False
+    test = node.test
+    return (
+        isinstance(test, ast.Compare)
+        and isinstance(test.left, ast.Name)
+        and test.left.id == "__name__"
+    )
 
 
 class SuiteStructureTests(unittest.TestCase):
@@ -37,6 +53,33 @@ class SuiteStructureTests(unittest.TestCase):
                         f"already defined at line {seen[node.name]}"
                     )
                 seen[node.name] = node.lineno
+        self.assertEqual([], problems, "\n".join(problems))
+
+    def test_no_script_module_redefines_a_top_level_name(self) -> None:
+        problems = []
+        for path in _script_modules():
+            seen: dict[str, int] = {}
+            for node in _parse(path).body:
+                if not isinstance(node, (ast.ClassDef, ast.FunctionDef)):
+                    continue
+                if node.name in seen:
+                    problems.append(
+                        f"{path.name}: {node.name} defined at line {node.lineno}, "
+                        f"already defined at line {seen[node.name]}"
+                    )
+                seen[node.name] = node.lineno
+        self.assertEqual([], problems, "\n".join(problems))
+
+    def test_main_guard_is_only_final_statement_in_test_modules(self) -> None:
+        problems = []
+        for path in _test_modules():
+            body = _parse(path).body
+            for idx, node in enumerate(body[:-1]):
+                if _is_main_guard(node):
+                    problems.append(
+                        f"{path.name}: mid-file __main__ guard at line {node.lineno} "
+                        f"(statement {idx + 1} of {len(body)})"
+                    )
         self.assertEqual([], problems, "\n".join(problems))
 
     def test_no_test_class_redefines_a_method(self) -> None:

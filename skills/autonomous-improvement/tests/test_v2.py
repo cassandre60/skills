@@ -3425,6 +3425,39 @@ class StreamSimplifyTests(RepoTestCase):
         self.assertEqual(payload["verdict"], "refused")
         self.assertTrue(any("score" in reason for reason in payload["reasons"]))
 
+    def test_compare_refuses_unverified_survivors_from_regex_engine(self):
+        repo, _ = python_repo(self.tmp)
+        clean_rep = self._report(killed=4, survived=0)
+        flaky_rep = self._report(killed=4, survived=0)
+        flaky_rep["counts"]["unverified"] = 2
+        flaky_rep["unverified"] = [
+            {
+                "line": 3,
+                "original": "    return a == b",
+                "mutated": "    return a != b",
+                "description": "invert equality",
+            }
+        ] * 2
+        before = write(repo / "before.json", json.dumps(clean_rep))
+        after = write(repo / "after.json", json.dumps(flaky_rep))
+        result = script(
+            repo,
+            "simplify_gate.py",
+            "compare",
+            "--before-json",
+            str(before),
+            "--after-json",
+            str(after),
+            "--json",
+        )
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["verdict"], "refused")
+        self.assertTrue(
+            any("unconfirmed survivor" in reason for reason in payload["reasons"]),
+            payload["reasons"],
+        )
+
     def test_finder_coverage_marks_missing_and_suppresses_executed_body(self):
         repo, _ = python_repo(self.tmp)
         fixture = self.fixture()
@@ -3560,11 +3593,6 @@ class StreamSimplifyTests(RepoTestCase):
         payload = json.loads(result.stdout)
         self.assertEqual(payload["verdict"], "refused")
         self.assertEqual(payload["deleted_test_files"], ["tests/test_app.py"])
-
-
-if __name__ == "__main__":
-    unittest.main()
-
 
 
 class VerdictReliabilityTests(RepoTestCase):
