@@ -34,10 +34,10 @@ except ImportError:
     EXIT_OK = 0
     STREAMS = {}
 
-    def repo_root(cwd: Path | None = None) -> Path:
-        return Path(cwd or Path.cwd()).resolve()
+    def repo_root(start: os.PathLike | str | None = None) -> Path:
+        return Path(start or Path.cwd()).resolve()
 
-    def load_config(root: Path, path: Path | None = None) -> dict[str, Any]:
+    def load_config(root: Path, explicit: os.PathLike | str | None = None) -> dict[str, Any]:
         return {}
 
 
@@ -541,7 +541,7 @@ def survey_repo(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0] if __doc__ else "")
     parser.add_argument("--json", action="store_true", help="output survey as JSON")
     parser.add_argument(
         "--limit", type=int, default=None, help="limit number of picks in output"

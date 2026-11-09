@@ -68,7 +68,7 @@ SECRET_PATTERNS = [
 ]
 
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".autonomous", ".venv", "venv"}
-BINARY_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".zip", ".gz", ".whl", ".png", ".pdf"}
+BINARY_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".zip", ".gz", ".whl", ".pdf"}
 
 DEFAULT_SECRET_PATHS = ["."]
 
@@ -457,7 +457,8 @@ again only when the target's hash changes.
 """
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[1])
+    desc = __doc__.split("\n\n")[1] if __doc__ and "\n\n" in __doc__ else (__doc__ or "")
+    parser = argparse.ArgumentParser(description=desc)
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     secrets_p = sub.add_parser("secrets", help="format-rule secret scan; issue-only, redacted by construction")

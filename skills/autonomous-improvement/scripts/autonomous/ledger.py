@@ -943,12 +943,10 @@ def cmd_sync_rejections(args: argparse.Namespace) -> int:
             source_hash = hash_at_head(root, target)
             if not source_hash:
                 continue
-            companion: Optional[str] = None
             companion_hash: Optional[str] = None
             if stream == "A":
                 mapped = test_for_source(root, cfg, target)
                 if mapped and path_at_head(root, mapped):
-                    companion = mapped
                     companion_hash = hash_at_head(root, mapped)
             composite = composite_hash(source_hash, companion_hash)
 

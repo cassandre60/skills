@@ -213,7 +213,7 @@ def build_profile(
             "suppressed_until": suppressed,
             "consecutive_rejections": streak,
         }
-        if not decided:
+        if not decided or last is None:
             continue
         revalidate_by = last + datetime.timedelta(days=LESSON_VALIDITY_DAYS)
         lesson = {
@@ -298,7 +298,7 @@ def cmd_update(args: argparse.Namespace) -> int:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else "")
     sub = parser.add_subparsers(dest="cmd", required=True)
     updater = sub.add_parser(
         "update", help="write the per-repo pass profile (schema profile/1)"

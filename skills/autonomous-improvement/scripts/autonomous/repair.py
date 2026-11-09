@@ -99,8 +99,9 @@ def parse_report(path: Path) -> Dict[str, Any]:
     for line in text.splitlines():
         match = SECTION_RE.match(line)
         if match:
-            current = match.group(1).lower().strip()
-            sections.setdefault(current, [])
+            sec = match.group(1).lower().strip()
+            current = sec
+            sections.setdefault(sec, [])
             continue
         if current is not None:
             sections[current].append(line)
@@ -343,7 +344,8 @@ def cmd_verify_green(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[1])
+    desc = __doc__.split("\n\n")[1] if __doc__ and "\n\n" in __doc__ else (__doc__ or "")
+    parser = argparse.ArgumentParser(description=desc)
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     intake = sub.add_parser("intake", help="mine bug reports into candidates / bounces")
