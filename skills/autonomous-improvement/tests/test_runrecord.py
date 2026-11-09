@@ -217,5 +217,55 @@ class MetaRecordsTests(unittest.TestCase):
             self.assertEqual(rows["rr-0002"]["tokens"], 0)
 
 
+class MatrixRunRecordExtractionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        import sys
+
+        evals_dir = str(support.SKILL_ROOT / "evals")
+        if evals_dir not in sys.path:
+            sys.path.insert(0, evals_dir)
+
+    def test_extract_artifacts_reads_tokens_and_package_from_transcript(self) -> None:
+        import matrix
+
+        transcript = (
+            "session start\n"
+            "Auditing packages/pycalc with mutation_engine.py.\n"
+            "Final report: pass picked mutation on package pycalc; tokens: 14,250\n"
+            "-- stderr --\n"
+        )
+        artifacts = matrix._extract_artifacts(transcript)
+        self.assertEqual(artifacts["chosen_tool"], "mutation")
+        self.assertEqual(artifacts["package_named"], "pycalc")
+        self.assertEqual(artifacts["tokens"], 14250)
+
+    def test_extract_artifacts_merges_run_record_from_repo(self) -> None:
+        import tempfile
+        import matrix
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            records = repo / ".autonomous" / "run-records"
+            records.mkdir(parents=True)
+            (records / "rr-0001.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "run-record/1",
+                        "id": "rr-0001",
+                        "chosen": "security",
+                        "tokens": 8900,
+                        "questions_asked": 0,
+                        "artifacts": ["#1"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            artifacts = matrix._extract_artifacts(
+                "Final report: completed pass.\n-- stderr --\n", repo=repo
+            )
+            self.assertEqual(artifacts["chosen_tool"], "security")
+            self.assertEqual(artifacts["tokens"], 8900)
+
+
 if __name__ == "__main__":
     unittest.main()
