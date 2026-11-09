@@ -74,17 +74,64 @@ class SelfImproveTests(unittest.TestCase):
 
     def test_revert_writes_negative_ledger_line(self) -> None:
         why = "tried X to lift m-ts-weak; deterministic layer could not verify it"
+        ledger = self.tmp / "negative-ledger.md"
         proc = self.run_tool(
-            "revert", "--worktree", str(self.tmp / "never-existed"), "--why", why
+            "revert",
+            "--worktree",
+            str(self.tmp / "never-existed"),
+            "--why",
+            why,
+            "--ledger",
+            str(ledger),
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        ledger = support.SKILL_ROOT / ".autonomous" / "negative-ledger.md"
         self.assertIn(why, ledger.read_text(encoding="utf-8"))
 
     def test_propose_lists_protocol_and_never_spends(self) -> None:
         proc = self.run_tool("propose")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("one change", proc.stdout)
+
+    def test_repo_root_points_to_git_top_level(self) -> None:
+        import sys
+
+        evals_dir = str(EVALS)
+        if evals_dir not in sys.path:
+            sys.path.insert(0, evals_dir)
+        import selfimprove
+
+        self.assertEqual(selfimprove.REPO_ROOT, support.SKILL_ROOT.parent.parent)
+
+    def test_skill_relative_and_real_weakening_check_paths_are_refused(self) -> None:
+        for protected in (
+            "skills/autonomous-improvement/scripts/autonomous/test_weakening_check.py",
+            "evals/evals.json",
+            "tests/pins.json",
+            "scripts/autonomous/test_weakening_check.py",
+        ):
+            with self.subTest(protected=protected):
+                patch = self._patch(f"rel-{Path(protected).name}.patch", protected)
+                proc = self.run_tool(
+                    "apply", "--diff", str(patch), "--motivation", "test guard"
+                )
+                self.assertEqual(proc.returncode, 2, f"{protected}: {proc.stderr}")
+
+    def test_five_laws_section_edit_in_skill_md_is_refused(self) -> None:
+        patch = self.tmp / "laws.patch"
+        patch.write_text(
+            "diff --git a/skills/autonomous-improvement/SKILL.md b/skills/autonomous-improvement/SKILL.md\n"
+            "--- a/skills/autonomous-improvement/SKILL.md\n"
+            "+++ b/skills/autonomous-improvement/SKILL.md\n"
+            "@@ -56,3 +56,3 @@\n"
+            " ## The five laws\n"
+            "-| **1. Fail-to-pass** |\n"
+            "+| **1. Optional test** |\n",
+            encoding="utf-8",
+        )
+        proc = self.run_tool(
+            "apply", "--diff", str(patch), "--motivation", "weaken five laws"
+        )
+        self.assertEqual(proc.returncode, 2, proc.stderr)
 
 
 if __name__ == "__main__":
