@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import eprint, repo_root  # noqa: E402
+from common import eprint, git, load_run_records, repo_root  # noqa: E402
 
 SCHEMA = "run-record/1"
 OUTCOMES = (
@@ -83,13 +83,7 @@ def _skill_ref() -> str:
 
 
 def _repo_slug(root: Path) -> str:
-    proc = subprocess.run(
-        ["git", "remote", "get-url", "origin"],
-        cwd=str(root),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    proc = git(["remote", "get-url", "origin"], cwd=root)
     url = proc.stdout.strip() if proc.returncode == 0 else ""
     if url:
         match = re.search(r"[:/]([^/:]+?)(?:\.git)?/?$", url)
@@ -108,13 +102,7 @@ def _next_id(directory: Path) -> str:
 
 
 def _load_records(directory: Path) -> List[Dict[str, Any]]:
-    out = []
-    for path in sorted(directory.glob("rr-*.json")):
-        try:
-            out.append(json.loads(path.read_text(encoding="utf-8")))
-        except (json.JSONDecodeError, OSError):
-            continue
-    return out
+    return load_run_records(directory, pattern="rr-*.json")
 
 
 def cmd_write(args: argparse.Namespace) -> int:

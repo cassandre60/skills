@@ -267,5 +267,52 @@ class MatrixRunRecordExtractionTests(unittest.TestCase):
             self.assertEqual(artifacts["tokens"], 8900)
 
 
+class CommonHelperConsolidationTests(unittest.TestCase):
+    def test_runrecord_and_meta_skip_non_dict_json_files_via_common_loader(self) -> None:
+        import sys
+        import tempfile
+
+        if str(SCRIPTS) not in sys.path:
+            sys.path.insert(0, str(SCRIPTS))
+        import common
+        import meta
+        import runrecord
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            records = Path(tmpdir) / "run-records"
+            records.mkdir(parents=True)
+            (records / "rr-0001.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "run-record/1",
+                        "id": "rr-0001",
+                        "chosen": "mutation",
+                        "tokens": 500,
+                        "verdict": "merged",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (records / "rr-0002.json").write_text("[1, 2, 3]\n", encoding="utf-8")
+
+            loaded = common.load_run_records(records)
+            self.assertEqual(len(loaded), 1)
+            self.assertEqual(runrecord._load_records(records), loaded)
+            rows = meta.records_to_history_rows(records)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["id"], "rr-0001")
+
+    def test_orchestrator_delegates_worktree_registry_to_common(self) -> None:
+        import sys
+
+        if str(SCRIPTS) not in sys.path:
+            sys.path.insert(0, str(SCRIPTS))
+        import common
+        import orchestrator
+
+        self.assertIs(orchestrator._load_registry, common.load_worktree_registry)
+        self.assertIs(orchestrator._registry_path, common.worktree_registry_path)
+
+
 if __name__ == "__main__":
     unittest.main()

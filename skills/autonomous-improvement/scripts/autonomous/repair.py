@@ -45,7 +45,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import EXIT_OK, Fatal, UsageError, eprint  # noqa: E402
+from common import EXIT_OK, Fatal, UsageError, eprint, git  # noqa: E402
 
 SCHEMA = "stream-e/1"
 SECTION_RE = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
@@ -66,9 +66,7 @@ changes were made to this repository.)
 
 
 def git_out(base_cwd: Path, *args: str) -> str:
-    proc = subprocess.run(
-        ["git", *args], cwd=str(base_cwd), capture_output=True, text=True
-    )
+    proc = git(args, cwd=base_cwd)
     if proc.returncode != 0:
         raise Fatal(f"git {' '.join(args)}: {(proc.stderr or proc.stdout).strip()}")
     return proc.stdout.strip()

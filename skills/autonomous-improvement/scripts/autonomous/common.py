@@ -233,6 +233,27 @@ def load_worktree_registry(root: Path) -> List[Dict[str, Any]]:
     return [item for item in data if isinstance(item, dict)]
 
 
+def load_run_records(
+    records_dir: Path, pattern: str = "rr-*.json", warn: bool = False
+) -> List[Dict[str, Any]]:
+    """Load valid JSON object run records from ``records_dir`` in filename order."""
+    if not records_dir.is_dir():
+        return []
+    records: List[Dict[str, Any]] = []
+    for path in sorted(records_dir.glob(pattern)):
+        if not path.is_file():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            if warn:
+                eprint(f"[!] skipping unreadable run record {path.name}: {exc}")
+            continue
+        if isinstance(data, dict):
+            records.append(data)
+    return records
+
+
 def _deep_merge(defaults: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
     result = dict(defaults)
     for key, value in override.items():

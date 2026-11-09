@@ -42,6 +42,7 @@ from common import (  # noqa: E402
     UsageError,
     eprint,
     format_exit,
+    load_run_records,
     repo_root,
     split_table_row,
 )
@@ -97,20 +98,7 @@ def _parse_ts(value: Any) -> Optional[datetime.datetime]:
 
 def _load_records(records_dir: Path) -> List[Dict[str, Any]]:
     """Every readable JSON object under records_dir, in filename order."""
-    if not records_dir.is_dir():
-        return []
-    records: List[Dict[str, Any]] = []
-    for path in sorted(records_dir.glob("*.json")):
-        if not path.is_file():
-            continue
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            eprint(f"[!] skipping unreadable run record {path.name}: {exc}")
-            continue
-        if isinstance(data, dict):
-            records.append(data)
-    return records
+    return load_run_records(records_dir, pattern="*.json", warn=True)
 
 
 def _ledger_rejections(ledger_path: Path) -> List[Dict[str, Any]]:
