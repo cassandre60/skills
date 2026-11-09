@@ -282,7 +282,7 @@ def grade_run_dir(
         "diff_files": len(paths),
         "tokens": artifacts.get("tokens"),
         "wall_s": artifacts.get("wall_s"),
-        "graded_at": datetime.datetime.now(datetime.UTC).isoformat(),
+        "graded_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     }
 
 
@@ -502,7 +502,33 @@ def _ambiguous(text: str) -> bool:
     return len(tools) > 3
 
 
-def _extract_artifacts(transcript: str) -> dict[str, Any]:
+def _extract_tokens(text: str) -> int | None:
+    for pattern in (
+        r"\btokens\s*[:=]\s*([\d,]+)",
+        r"\b([\d,]+)\s+tokens\b",
+    ):
+        matches = re.findall(pattern, text, flags=re.IGNORECASE)
+        if matches:
+            try:
+                value = int(matches[-1].replace(",", ""))
+                if value > 0:
+                    return value
+            except ValueError:
+                pass
+    return None
+
+
+def _extract_package(text: str) -> str | None:
+    pkg_match = re.search(r"\bpackages/([A-Za-z0-9_.-]+)", text)
+    if pkg_match:
+        return pkg_match.group(1)
+    known = re.search(r"\b(pycalc|tsutils)\b", text, flags=re.IGNORECASE)
+    if known:
+        return known.group(1).lower()
+    return None
+
+
+def _extract_artifacts(transcript: str, repo: Path | None = None) -> dict[str, Any]:
     """Heuristic first-pass artifacts from the transcript (review by hand).
 
     opencode run prints the assistant's text on stdout and diagnostics on
@@ -522,6 +548,25 @@ def _extract_artifacts(transcript: str) -> dict[str, Any]:
         # The final message names most of the toolbox: that is the injected
         # skill body echoing, not a report. No confident tool call.
         chosen = None
+    tokens = _extract_tokens(transcript)
+    package_named = _extract_package(stdout)
+    if repo is not None:
+        records_dir = repo / ".autonomous" / "run-records"
+        if records_dir.is_dir():
+            for rr_path in sorted(records_dir.glob("rr-*.json"), reverse=True):
+                try:
+                    rec = json.loads(rr_path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    continue
+                if not isinstance(rec, dict):
+                    continue
+                if chosen is None and isinstance(rec.get("chosen"), str):
+                    chosen = rec["chosen"]
+                if tokens is None and isinstance(rec.get("tokens"), int):
+                    tokens = rec["tokens"]
+                if isinstance(rec.get("questions_asked"), int):
+                    questions = max(questions, rec["questions_asked"])
+                break
     evidence_complete = "evidence.py" in lowered
     return {
         "prs": [],
@@ -530,7 +575,8 @@ def _extract_artifacts(transcript: str) -> dict[str, Any]:
         "questions_asked": questions,
         "final_message": final_message,
         "evidence": {"complete": evidence_complete, "checks": []},
-        "package_named": None,
+        "package_named": package_named,
+        "tokens": tokens,
     }
 
 
@@ -589,11 +635,14 @@ def _run_once(
             )
             transcript = (proc.stdout or "") + "\n-- stderr --\n" + (proc.stderr or "")
         except subprocess.TimeoutExpired as exc:
-            transcript = (
-                ((exc.stdout or "") + "\n[timeout]")
-                if isinstance(exc.stdout, str)
-                else "[timeout]"
-            )
+            raw_out = exc.stdout
+            if isinstance(raw_out, bytes):
+                out_str = raw_out.decode("utf-8", errors="replace")
+            elif isinstance(raw_out, str):
+                out_str = raw_out
+            else:
+                out_str = ""
+            transcript = (out_str + "\n[timeout]") if out_str else "[timeout]"
         wall_s = round(time.monotonic() - started, 1)
         (run_dir / "transcript.txt").write_text(transcript, encoding="utf-8")
         subprocess.run(["git", "add", "-A"], cwd=str(repo), check=True)
@@ -623,8 +672,8 @@ def _run_once(
             "run_index": index,
         }
         (run_dir / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
-        artifacts = _extract_artifacts(transcript)
-        artifacts["tokens"] = None
+        artifacts = _extract_artifacts(transcript, repo=repo)
+        artifacts.setdefault("tokens", None)
         artifacts["wall_s"] = wall_s
         (run_dir / "artifacts.json").write_text(
             json.dumps(artifacts, indent=2), encoding="utf-8"
@@ -753,7 +802,7 @@ def cmd_negative_control(_: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else "")
     parser.add_argument(
         "--negative-control",
         action="store_true",
