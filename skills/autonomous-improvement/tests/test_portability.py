@@ -357,6 +357,41 @@ class Python39AndOptimizePortabilityTests(unittest.TestCase):
                 )
                 self.assertEqual(proc.returncode, 0, f"{name}: {proc.stderr}")
 
+    def test_docs_truth_self_check_on_skill_spec_is_clean(self) -> None:
+        skill_root = SCRIPTS.parent.parent
+        proc = support.run(
+            [
+                support.PYTHON,
+                str(SCRIPTS / "docs_truth.py"),
+                "check",
+                "--paths",
+                ".",
+                "--spec",
+                "SPEC.md",
+                "--json",
+            ],
+            cwd=skill_root,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(json.loads(proc.stdout)["candidates"], [])
+
+    def test_pure_python_test_classes_do_not_require_linux_flock(self) -> None:
+        import ast
+
+        tree = ast.parse((SCRIPTS.parent.parent / "tests" / "test_v2.py").read_text(encoding="utf-8"))
+        pure_python_classes = {
+            "EvalHarnessTests",
+            "RepairStreamTests",
+            "FuzzSeedTests",
+            "StreamLTests",
+        }
+        flagged = []
+        for node in tree.body:
+            if isinstance(node, ast.ClassDef) and node.name in pure_python_classes:
+                if node.decorator_list:
+                    flagged.append(node.name)
+        self.assertEqual(flagged, [])
+
 
 if __name__ == "__main__":
     unittest.main()
