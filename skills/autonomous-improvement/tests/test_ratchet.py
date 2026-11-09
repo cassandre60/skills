@@ -194,6 +194,53 @@ class RatchetTests(unittest.TestCase):
         self.assertIn("Proposal only", proc.stdout)
         self.assertIn("todos", proc.stdout)
 
+    def test_ratchet_todos_fixture_end_to_end(self) -> None:
+        import shutil
+
+        fixture = support.SKILL_ROOT / "evals" / "fixtures" / "ratchet-todos"
+        fixture_repo = Path(self._tmp.name) / "ratchet-todos-repo"
+        shutil.copytree(fixture, fixture_repo)
+        support.run(["git", "init", "-q", "-b", "main"], cwd=fixture_repo)
+        support.git(fixture_repo, "config", "user.email", "test@example.com")
+        support.git(fixture_repo, "config", "user.name", "Test User")
+        support.write(
+            fixture_repo / ".autonomous" / "config.json", json.dumps(CONFIG, indent=2)
+        )
+        support.commit(fixture_repo, "base")
+
+        scan_proc = self.run_tool("scan", "--ratchet", "todos", cwd=fixture_repo)
+        self.assertEqual(scan_proc.returncode, 0, scan_proc.stdout + scan_proc.stderr)
+        scan_payload = json.loads(scan_proc.stdout)
+        self.assertEqual(scan_payload["base_value"], 3)
+        self.assertEqual(scan_payload["head_value"], 3)
+
+        orig_app = (fixture_repo / "src" / "app.py").read_text(encoding="utf-8")
+        improved_app = orig_app.replace("    # TODO: add logging\n", "")
+        patch = _make_diff(fixture_repo, {"src/app.py": improved_app})
+        check_proc = self.run_tool(
+            "check", "--ratchet", "todos", "--diff", str(patch), cwd=fixture_repo
+        )
+        self.assertEqual(check_proc.returncode, 0, check_proc.stdout + check_proc.stderr)
+        check_payload = json.loads(check_proc.stdout)
+        self.assertEqual(check_payload["verdict"], "improving")
+        self.assertEqual(check_payload["new_value"], 2)
+        self.assertEqual(check_payload["tests"], "pass")
+
+    def test_every_eval_fixture_dir_is_referenced_by_tests_or_evals(self) -> None:
+        evals_dir = support.SKILL_ROOT / "evals"
+        tests_dir = support.SKILL_ROOT / "tests"
+        corpus = "\n".join(
+            p.read_text(encoding="utf-8")
+            for p in list(tests_dir.glob("test_*.py")) + list(evals_dir.glob("*.json"))
+        )
+        orphans = [
+            d.name
+            for sub in ("fixtures", "heldout")
+            for d in sorted((evals_dir / sub).iterdir())
+            if d.is_dir() and d.name not in corpus
+        ]
+        self.assertEqual(orphans, [])
+
 
 if __name__ == "__main__":
     unittest.main()
