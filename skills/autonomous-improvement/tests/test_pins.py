@@ -126,6 +126,27 @@ class PinCheckLogicTests(unittest.TestCase):
         )
         self.assertEqual(self._check(), [])
 
+    def test_repo_test_case_behavioral_asserts_are_not_scanned_as_doc_pins(self) -> None:
+        import importlib.util
+
+        (self.tmp / "tests" / "test_sample.py").write_text(
+            "# reads " + "SKILL" + ".md\n"
+            "import unittest\n\n"
+            "class DocTests(unittest.TestCase):\n"
+            "    def test_doc(self):\n"
+            "        self.assertIn('toolbox of passes', 'x')\n\n"
+            "class CliBehaviorTests(RepoTestCase):\n"
+            "    def test_cli(self):\n"
+            "        self.assertIn('exit status 0', 'x')\n",
+            encoding="utf-8",
+        )
+        spec = importlib.util.spec_from_file_location("mini_pins", self.mini / "pins.py")
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        scanned = module.scan_pins(self.tmp / "tests")
+        self.assertEqual([p["pin"] for p in scanned], ["toolbox of passes"])
+
 
 if __name__ == "__main__":
     unittest.main()
