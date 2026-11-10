@@ -42,7 +42,19 @@ SCHEMA = "ci-audit/1"
 def audit_ci(root: Path, cfg: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     findings: List[Dict[str, Any]] = []
 
-    gh_workflows = root / ".github" / "workflows"
+    gh_dir = root / ".github"
+    gh_workflows = gh_dir / "workflows"
+
+    # Only audit if the repo is a GitHub project (.github exists or origin points to github)
+    has_github = gh_dir.is_dir()
+    if not has_github and cfg:
+        origin = cfg.get("origin_url") or ""
+        if "github" in origin.lower():
+            has_github = True
+
+    if not has_github:
+        return findings
+
     if not gh_workflows.is_dir():
         findings.append(
             {

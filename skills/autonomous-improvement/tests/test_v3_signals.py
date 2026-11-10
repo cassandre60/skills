@@ -55,7 +55,10 @@ class SurveySignalsTests(unittest.TestCase):
 
     def test_missing_ci_workflows_scores_ci_audit(self) -> None:
         repo, _ = support.python_repo(self.tmp, name="ciaudit")
-        # Repo has no .github/workflows
+        # Repo has .github but no .github/workflows
+        (repo / ".github").mkdir(parents=True, exist_ok=True)
+        support.git(repo, "add", "-A")
+        support.git(repo, "commit", "-qm", "add .github")
         proc = self.survey(repo)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         payload = json.loads(proc.stdout)
