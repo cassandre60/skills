@@ -184,6 +184,219 @@ def fetch_gh_prs(
     return [item for item in data if isinstance(item, dict)], None
 
 
+def fetch_gh_issues(
+    root: Path,
+    labels: Tuple[str, ...] = ("autonomous-improvement", "owner-ask"),
+    limit: int = 50,
+    require_gh: bool = False,
+) -> List[Dict[str, Any]]:
+    """Fetch open issues carrying target labels."""
+    argv = [
+        "gh",
+        "issue",
+        "list",
+        "--state",
+        "open",
+        "--json",
+        "number,title,labels,updatedAt",
+        "--limit",
+        str(limit),
+    ]
+    try:
+        proc = run(argv, cwd=root, quiet=True)
+        if proc.returncode == 0 and proc.stdout.strip():
+            data = json.loads(proc.stdout)
+            if isinstance(data, list):
+                matched = []
+                target_labels = [l.lower() for l in labels]
+                for item in data:
+                    if not isinstance(item, dict):
+                        continue
+                    item_labels = [
+                        (l.get("name") if isinstance(l, dict) else str(l)).lower()
+                        for l in item.get("labels", [])
+                    ]
+                    if any(tl in item_labels for tl in target_labels):
+                        matched.append(item)
+                return matched
+    except Exception as exc:
+        if require_gh:
+            raise EnvError(f"gh not available: {exc}")
+    return []
+
+
+def get_main_sha(root: Path) -> str:
+    """Resolve current main/HEAD SHA without network stall."""
+    try:
+        proc = run(["git", "rev-parse", "HEAD"], cwd=root, quiet=True)
+        if proc.returncode == 0 and proc.stdout.strip():
+            return proc.stdout.strip()
+    except Exception:
+        pass
+    return ""
+
+
+ORCH_MODEL_COOLDOWN_DEFAULT = 3600  # 1 hour
+ORCH_RETRY_AFTER_EXHAUSTION_DEFAULT = 1800  # 30 min
+ORCH_FAILURE_TTL_DEFAULT = 7 * 86400  # 7 days
+
+OUTAGE_PATTERN = re.compile(
+    r"503|Endpoint is unavailable|upstream request failed|connection reset|overloaded",
+    re.IGNORECASE,
+)
+QUOTA_PATTERN = re.compile(
+    r"rate limit|rate_limit|429|too many requests|insufficient balance|balance is at|exceeded your current|usage limit|subscribe to opencode",
+    re.IGNORECASE,
+)
+DEAD_MODEL_PATTERN = re.compile(
+    r"Model unavailable|no such model|unknown model|model disabled",
+    re.IGNORECASE,
+)
+
+
+def _model_failures_path(state_dir: Path) -> Path:
+    return state_dir / "model_failures"
+
+
+def _load_cooling_models(
+    state_dir: Path, cooldown_sec: int = ORCH_MODEL_COOLDOWN_DEFAULT
+) -> set[str]:
+    fail_file = _model_failures_path(state_dir)
+    cooling: set[str] = set()
+    if not fail_file.is_file():
+        return cooling
+    now = time.time()
+    try:
+        lines = fail_file.read_text(encoding="utf-8").splitlines()
+        for line in lines:
+            parts = line.strip().split()
+            if len(parts) >= 2:
+                model, ts_str = parts[0], parts[1]
+                try:
+                    ts = float(ts_str)
+                    if now - ts < cooldown_sec:
+                        cooling.add(model)
+                except ValueError:
+                    continue
+    except Exception:
+        pass
+    return cooling
+
+
+def _record_model_failure(state_dir: Path, model: str, reason: str = "") -> None:
+    if not model:
+        return
+    fail_file = _model_failures_path(state_dir)
+    now = int(time.time())
+    try:
+        entries = []
+        if fail_file.is_file():
+            for line in fail_file.read_text(encoding="utf-8").splitlines():
+                parts = line.strip().split()
+                if len(parts) >= 2:
+                    try:
+                        ts = float(parts[1])
+                        if now - ts < ORCH_FAILURE_TTL_DEFAULT:
+                            entries.append(f"{parts[0]} {int(ts)}")
+                    except ValueError:
+                        continue
+        entries.append(f"{model} {now}")
+        state_dir.mkdir(parents=True, exist_ok=True)
+        fail_file.write_text("\n".join(entries) + "\n", encoding="utf-8")
+    except Exception as exc:
+        eprint(f"[warn] failed to record model failure: {exc}")
+
+
+def _circuit_breaker_path(state_dir: Path) -> Path:
+    return state_dir / "CIRCUIT_BREAKER"
+
+
+def _check_consecutive_failed_wakes(state_dir: Path) -> bool:
+    wakes_file = state_dir / "wakes.jsonl"
+    if not wakes_file.is_file():
+        return False
+    records = []
+    try:
+        for line in wakes_file.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line:
+                records.append(json.loads(line))
+    except Exception:
+        return False
+
+    turn_records = [
+        r
+        for r in records
+        if r.get("action") not in ("quiet", "cooling", "no-gap", "prompt-only")
+    ]
+    if len(turn_records) < 3:
+        return False
+
+    last_three = turn_records[-3:]
+    all_failed = all(r.get("action") == "launch-failed" for r in last_three)
+    if all_failed:
+        cb_path = _circuit_breaker_path(state_dir)
+        cb_path.write_text(
+            json.dumps(
+                {
+                    "schema": "circuit-breaker/1",
+                    "tripped_at": datetime.datetime.now(
+                        datetime.timezone.utc
+                    ).isoformat(),
+                    "reason": "3 consecutive failed wakes (launch-failed)",
+                    "last_records": last_three,
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        return True
+    return False
+
+
+def _auto_clear_circuit_breaker(root: Path, cb_path: Path) -> bool:
+    if not cb_path.is_file():
+        return False
+    try:
+        data = json.loads(cb_path.read_text(encoding="utf-8"))
+        tripped_str = data.get("tripped_at")
+        if tripped_str:
+            tripped_dt = datetime.datetime.fromisoformat(tripped_str)
+            proc = run(["git", "log", "-1", "--format=%cI"], cwd=root, quiet=True)
+            if proc.returncode == 0 and proc.stdout.strip():
+                commit_dt = datetime.datetime.fromisoformat(proc.stdout.strip())
+                if commit_dt > tripped_dt:
+                    cb_path.unlink(missing_ok=True)
+                    return True
+    except Exception:
+        pass
+    return False
+
+
+def cmd_reset_circuit(args: argparse.Namespace) -> int:
+    root = main_repo_root()
+    state_dir = _resolve_state_dir(root, getattr(args, "state_dir", None))
+    cb_path = _circuit_breaker_path(state_dir)
+    cleared = False
+    if cb_path.is_file():
+        cb_path.unlink()
+        cleared = True
+    payload = {
+        "tool": "fleet.py reset-circuit",
+        "cleared": cleared,
+        "circuit_breaker": str(cb_path),
+        "status": "ready" if cleared else "was-not-tripped",
+    }
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        if cleared:
+            print("[+] Circuit breaker reset: dispatch re-armed")
+        else:
+            print("[*] Circuit breaker was not tripped")
+    return EXIT_OK
+
+
 def _rollup_item_sha(item: Dict[str, Any]) -> Optional[str]:
     oid = item.get("oid") or item.get("commit_sha") or item.get("headSha")
     if not oid and isinstance(item.get("commit"), dict):
@@ -360,6 +573,7 @@ def evaluate_pr_checks(pr: Dict[str, Any]) -> Dict[str, Any]:
         "red_kind": red_kind,
         "iterations": iterations,
         "owner_ask_pending": owner_ask_pending,
+        "updated_at": pr.get("updatedAt") or "",
     }
 
 
@@ -910,6 +1124,23 @@ def cmd_govern(args: argparse.Namespace) -> int:
                 eprint(f"[!] Governor: DISPATCH BLOCKED ({payload['reason']})")
             return EXIT_NEGATIVE
 
+    # 1a. Circuit-breaker check
+    state_dir = _resolve_state_dir(root, getattr(args, "state_dir", None))
+    cb_path = _circuit_breaker_path(state_dir)
+    if cb_path.is_file():
+        if not _auto_clear_circuit_breaker(root, cb_path):
+            payload = {
+                "dispatch": False,
+                "reason": "circuit breaker tripped (consecutive failed wakes; run reset-circuit)",
+                "open_prs": 0,
+                "tend": [],
+            }
+            if args.json:
+                print(json.dumps(payload, indent=2))
+            else:
+                eprint(f"[!] Governor: DISPATCH BLOCKED ({payload['reason']})")
+            return EXIT_NEGATIVE
+
     # 1b. Disk headroom floor (issue #115: protect host against out-of-disk failure)
     min_free_gb = _resolve_min_free_gb(cfg)
     try:
@@ -1093,7 +1324,10 @@ def cmd_govern(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-def _wake_reasons(open_states: List[Dict[str, Any]]) -> List[str]:
+def _wake_reasons(
+    open_states: List[Dict[str, Any]],
+    issues: Optional[List[Dict[str, Any]]] = None,
+) -> List[str]:
     """Reasons a wake would need a model turn, from state alone (issue #18)."""
     reasons: List[str] = []
     for state in sorted(open_states, key=lambda item: int(item.get("pr") or 0)):
@@ -1105,16 +1339,32 @@ def _wake_reasons(open_states: List[Dict[str, Any]]) -> List[str]:
             reasons.append(f"red-pr #{pr} (fix or triage; red_kind={kind})")
         elif state.get("checks") == "green":
             reasons.append(f"green-unmerged-pr #{pr} (drive to merge)")
-    if not open_states:
+    if issues:
+        for iss in sorted(issues, key=lambda item: int(item.get("number") or 0)):
+            num = iss.get("number")
+            reasons.append(f"issue #{num} (open labelled issue)")
+    if not open_states and not issues:
         reasons.append("queue-idle (no open fleet PRs; generate or widen targets)")
     return reasons
 
 
-def _wake_digest(open_states: List[Dict[str, Any]], reasons: List[str]) -> str:
-    basis = "\n".join(
-        [f"{s.get('pr')}|{s.get('head_sha')}|{s.get('checks')}|{s.get('checks_sha')}" for s in open_states]
-        + list(reasons)
-    )
+def _wake_digest(
+    open_states: List[Dict[str, Any]],
+    reasons: List[str],
+    main_sha: str = "",
+    issues: Optional[List[Dict[str, Any]]] = None,
+) -> str:
+    basis_parts = [
+        f"{s.get('pr')}|{s.get('head_sha')}|{s.get('checks')}|{s.get('checks_sha')}|{s.get('updated_at', '')}"
+        for s in open_states
+    ]
+    if main_sha:
+        basis_parts.append(f"main:{main_sha}")
+    if issues:
+        for iss in sorted(issues, key=lambda x: int(x.get("number") or 0)):
+            basis_parts.append(f"issue:{iss.get('number')}:{iss.get('updatedAt', '')}")
+    basis_parts.extend(reasons)
+    basis = "\n".join(basis_parts)
     return hashlib.sha256(basis.encode("utf-8")).hexdigest()[:16]
 
 
@@ -1136,6 +1386,7 @@ def cmd_needs_brain(args: argparse.Namespace) -> int:
     if gh_warn:
         eprint(f"[warn] {gh_warn}")
     open_states = [evaluate_pr_checks(p) for p in prs_data]
+    issues_data = fetch_gh_issues(root, require_gh=args.require_gh)
     wake_path = state_dir / "wake.json"
 
     fleet_cfg = cfg.get("fleet", {}) or {}
@@ -1166,7 +1417,7 @@ def cmd_needs_brain(args: argparse.Namespace) -> int:
             print(f"[quiet] {payload['reason']}")
         return EXIT_OK
 
-    reasons = _wake_reasons(open_states)
+    reasons = _wake_reasons(open_states, issues=issues_data)
     kill_switch_file = str((cfg.get("fleet", {}) or {}).get("kill_switch_file") or ".autonomous/STOP")
     kill_switch_paths = [
         root / kill_switch_file,
@@ -1175,7 +1426,8 @@ def cmd_needs_brain(args: argparse.Namespace) -> int:
     ]
     if any(path.exists() for path in kill_switch_paths):
         reasons.append("kill-switch-present (tend the queue only; do not generate)")
-    digest = _wake_digest(open_states, reasons)
+    main_sha = get_main_sha(root)
+    digest = _wake_digest(open_states, reasons, main_sha=main_sha, issues=issues_data)
 
     wake_path = state_dir / "wake.json"
     previous: Dict[str, Any] = {}
@@ -1504,6 +1756,14 @@ def cmd_wake(args: argparse.Namespace) -> int:
     state_dir = _resolve_state_dir(root, args.state_dir)
     state_dir.mkdir(parents=True, exist_ok=True)
 
+    cb_path = _circuit_breaker_path(state_dir)
+    if cb_path.is_file():
+        if not _auto_clear_circuit_breaker(root, cb_path):
+            eprint(
+                "[!] Circuit breaker tripped: wake blocked until reset-circuit or new commit on main"
+            )
+            return EXIT_NEGATIVE
+
     cmd_snapshot(
         argparse.Namespace(
             config=args.config,
@@ -1556,8 +1816,27 @@ def cmd_wake(args: argparse.Namespace) -> int:
                 ladder = [str(m) for m in fleet_cfg["model_ladder"]]
             else:
                 ladder = [""]
+
+            cooldown_sec = int(
+                fleet_cfg.get("model_cooldown")
+                or os.environ.get("ORCH_MODEL_COOLDOWN", ORCH_MODEL_COOLDOWN_DEFAULT)
+            )
+            cooling = _load_cooling_models(state_dir, cooldown_sec=cooldown_sec)
+            candidate_ladder = (
+                [m for m in ladder if m not in cooling] if ladder != [""] else ladder
+            )
+            if ladder != [""] and not candidate_ladder:
+                print(
+                    f"[*] All models in ladder are in cooldown ({', '.join(ladder)}); quiet"
+                )
+                record["action"] = "cooling"
+                with open(state_dir / "wakes.jsonl", "a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(record) + "\n")
+                print(f"[*] Wake recorded: {record['action']}")
+                return EXIT_OK
+
             launched = False
-            for model in ladder:
+            for model in candidate_ladder:
                 argv = _render_harness_argv(template, prompt_file, prompt, model)
                 try:
                     proc = run(argv, cwd=root, quiet=True)
@@ -1572,11 +1851,31 @@ def cmd_wake(args: argparse.Namespace) -> int:
                     record["model"] = model or None
                     launched = True
                     break
-                eprint(
-                    f"[warn] harness exited {proc.returncode}"
-                    + (f" on model {model!r}" if model else "")
-                    + "; trying next ladder entry"
-                )
+
+                combined_out = (proc.stdout or "") + "\n" + (proc.stderr or "")
+                if OUTAGE_PATTERN.search(combined_out):
+                    eprint(
+                        f"[warn] harness exited {proc.returncode}"
+                        + (f" on model {model!r}" if model else "")
+                        + "; infrastructure outage detected (not parking model)"
+                    )
+                elif (
+                    QUOTA_PATTERN.search(combined_out)
+                    or DEAD_MODEL_PATTERN.search(combined_out)
+                ):
+                    eprint(
+                        f"[warn] harness exited {proc.returncode}"
+                        + (f" on model {model!r}" if model else "")
+                        + "; quota/dead-model error detected; parking in cooldown"
+                    )
+                    if model:
+                        _record_model_failure(state_dir, model)
+                else:
+                    eprint(
+                        f"[warn] harness exited {proc.returncode}"
+                        + (f" on model {model!r}" if model else "")
+                        + "; trying next ladder entry"
+                    )
             if not launched:
                 record["action"] = "launch-failed"
                 exit_code = EXIT_NEGATIVE
@@ -1589,6 +1888,7 @@ def cmd_wake(args: argparse.Namespace) -> int:
 
     with open(state_dir / "wakes.jsonl", "a", encoding="utf-8") as handle:
         handle.write(json.dumps(record) + "\n")
+    _check_consecutive_failed_wakes(state_dir)
     print(
         f"[*] Wake recorded: {record['action']}"
         + (f" ({', '.join(brain['reasons'])})" if brain["reasons"] else "")
@@ -2138,6 +2438,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     # govern
     p_gov = subparsers.add_parser("govern", help="evaluate governor dispatch limits")
     p_gov.add_argument("--config", help="path to config.json")
+    p_gov.add_argument("--state-dir", help="directory for fleet state")
     p_gov.add_argument("--json", action="store_true", help="emit JSON")
     p_gov.add_argument("--require-gh", action="store_true", help="fail if gh is unavailable")
 
@@ -2202,6 +2503,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_pool.add_argument("--config", help="path to config.json")
     p_pool.add_argument("--json", action="store_true")
 
+    # reset-circuit
+    p_reset = subparsers.add_parser(
+        "reset-circuit", help="re-arm the wake circuit breaker after consecutive failures"
+    )
+    p_reset.add_argument("--config", help="path to config.json")
+    p_reset.add_argument("--state-dir", help="directory holding CIRCUIT_BREAKER")
+    p_reset.add_argument("--json", action="store_true", help="emit JSON")
+
     args = parser.parse_args(argv)
 
     try:
@@ -2225,6 +2534,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             return cmd_publish(args)
         if args.command == "pool":
             return cmd_pool(args)
+        if args.command == "reset-circuit":
+            return cmd_reset_circuit(args)
         raise UsageError(f"unknown command: {args.command}")
     except (UsageError, EnvError, Fatal) as exc:
         return format_exit(exc)
