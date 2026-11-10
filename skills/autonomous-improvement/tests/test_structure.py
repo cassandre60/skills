@@ -105,6 +105,28 @@ class SuiteStructureTests(unittest.TestCase):
         classes = [node.name for node in _parse(path).body if isinstance(node, ast.ClassDef)]
         self.assertEqual(1, classes.count("RepoTestCase"))
 
+    def test_fleet_and_mutation_engine_submodules_extracted(self) -> None:
+        import sys
+
+        for name in ("fleet_doctor.py", "fleet_pool.py", "mutation_stryker.py"):
+            self.assertTrue((SCRIPTS / name).is_file(), f"missing submodule {name}")
+        fleet_lines = len((SCRIPTS / "fleet.py").read_text(encoding="utf-8").splitlines())
+        mutation_lines = len((SCRIPTS / "mutation_engine.py").read_text(encoding="utf-8").splitlines())
+        self.assertLess(fleet_lines, 1750)
+        self.assertLess(mutation_lines, 1060)
+
+        if str(SCRIPTS) not in sys.path:
+            sys.path.insert(0, str(SCRIPTS))
+        import fleet
+        import fleet_doctor
+        import fleet_pool
+        import mutation_engine
+        import mutation_stryker
+
+        self.assertIs(fleet.run_doctor_checks, fleet_doctor.run_doctor_checks)
+        self.assertIs(fleet._resolve_model_pool, fleet_pool._resolve_model_pool)
+        self.assertIs(mutation_engine.run_stryker_backend, mutation_stryker.run_stryker_backend)
+
 
 if __name__ == "__main__":
     unittest.main()
