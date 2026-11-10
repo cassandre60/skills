@@ -22,7 +22,7 @@ import ast
 import json
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 SKILL_ROOT = Path(__file__).resolve().parents[2]
 TESTS_DIR = SKILL_ROOT / "tests"
@@ -62,13 +62,20 @@ def scan_pins(tests_dir: Path = TESTS_DIR) -> List[Dict[str, Any]]:
             tree = ast.parse(source, filename=str(path))
         except SyntaxError:
             continue
-        stack: List[str] = []
         classes: Dict[ast.ClassDef, str] = {}
+        repo_classes: set[str] = set()
         functions: Dict[ast.FunctionDef | ast.AsyncFunctionDef, str] = {}
+        func_nodes: Dict[Tuple[Optional[str], str], ast.AST] = {}
 
         for node in ast.walk(tree):
             if isinstance(node, ast.ClassDef):
                 classes[node] = node.name
+                if any(
+                    (getattr(base, "id", None) or getattr(base, "attr", None))
+                    == "RepoTestCase"
+                    for base in node.bases
+                ):
+                    repo_classes.add(node.name)
             elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 functions[node] = node.name
 
@@ -83,7 +90,9 @@ def scan_pins(tests_dir: Path = TESTS_DIR) -> List[Dict[str, Any]]:
                         if cls.lineno <= func.lineno <= getattr(
                             cls, "end_lineno", cls.lineno
                         ):
+                            func_nodes[(cname, name)] = func
                             return cname, name
+                    func_nodes[(None, name)] = func
                     return None, name
             return None, None
 
@@ -98,6 +107,13 @@ def scan_pins(tests_dir: Path = TESTS_DIR) -> List[Dict[str, Any]]:
             if literal is None or not literal.strip():
                 continue
             cls, fn = enclosing(node)
+            if cls in repo_classes:
+                fnode = func_nodes.get((cls, fn or ""))
+                fsrc = (ast.get_source_segment(source, fnode) or "") if fnode else ""
+                if "SKILL.md" not in fsrc and not (
+                    "references" in fsrc and "read_text" in fsrc
+                ):
+                    continue
             entry = {
                 "file": f"tests/{path.name}",
                 "class": cls,
