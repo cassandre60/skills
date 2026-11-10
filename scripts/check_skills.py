@@ -94,9 +94,16 @@ def check_frontmatter(skill_dir: Path, skill_md: Path, issues: list):
 
     return text
 
+def _is_ignored_rel_path(path: Path, skill_dir: Path) -> bool:
+    return any(
+        part.startswith(".") or part == "__pycache__"
+        for part in path.relative_to(skill_dir).parts
+    )
+
+
 def check_secrets(skill_dir: Path, issues: list):
     for path in skill_dir.rglob("*"):
-        if not path.is_file() or path.name.startswith("."):
+        if not path.is_file() or _is_ignored_rel_path(path, skill_dir):
             continue
         try:
             content = path.read_text(encoding="utf-8", errors="ignore")
@@ -117,7 +124,7 @@ def check_relative_references(skill_dir: Path, issues: list):
     link_pattern = re.compile(r"\[(?:[^\]]+)\]\((?!https?://|#|mailto:)([^\)]+)\)")
 
     for path in skill_dir.rglob("*.md"):
-        if not path.is_file():
+        if not path.is_file() or _is_ignored_rel_path(path, skill_dir):
             continue
         content = path.read_text(encoding="utf-8", errors="ignore")
 
