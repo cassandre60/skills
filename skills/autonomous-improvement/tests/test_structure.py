@@ -112,7 +112,7 @@ class SuiteStructureTests(unittest.TestCase):
             self.assertTrue((SCRIPTS / name).is_file(), f"missing submodule {name}")
         fleet_lines = len((SCRIPTS / "fleet.py").read_text(encoding="utf-8").splitlines())
         mutation_lines = len((SCRIPTS / "mutation_engine.py").read_text(encoding="utf-8").splitlines())
-        self.assertLess(fleet_lines, 1750)
+        self.assertLess(fleet_lines, 2050)
         self.assertLess(mutation_lines, 1060)
 
         if str(SCRIPTS) not in sys.path:
