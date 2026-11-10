@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -49,9 +50,12 @@ DEFAULT_WEIGHTS: dict[str, float] = {
     "security": 0.9,
     "lens": 0.85,
     "docs-reconcile": 0.8,
+    "ci-audit": 0.8,
+    "test-gap": 0.75,
     "flake": 0.7,
     "adversarial": 0.6,
     "mutation": 0.5,
+    "complexity": 0.4,
     "simplification": 0.3,
     "fuzz": 0.3,
     "performance": 0.0,
@@ -86,6 +90,20 @@ TOOL_METADATA: dict[str, dict[str, Any]] = {
         "tier": "T3",
         "needs_config": False,
     },
+    "ci-audit": {
+        "stream": "I",
+        "finder_cmd": ["python3", "scripts/autonomous/ci_audit.py"],
+        "oracle_cmd": ["python3", "scripts/autonomous/docs_truth.py", "check"],
+        "tier": "T1",
+        "needs_config": False,
+    },
+    "test-gap": {
+        "stream": "A",
+        "finder_cmd": ["python3", "scripts/autonomous/test_gap.py"],
+        "oracle_cmd": ["python3", "scripts/autonomous/evidence.py", "mutant"],
+        "tier": "T2",
+        "needs_config": False,
+    },
     "flake": {
         "stream": "F",
         "finder_cmd": ["python3", "scripts/autonomous/flakes.py", "finder"],
@@ -107,6 +125,13 @@ TOOL_METADATA: dict[str, dict[str, Any]] = {
         "tier": "T3",
         "needs_config": True,
     },
+    "complexity": {
+        "stream": "M",
+        "finder_cmd": ["python3", "scripts/autonomous/complexity.py"],
+        "oracle_cmd": ["python3", "scripts/autonomous/ratchet.py", "check"],
+        "tier": "T1",
+        "needs_config": False,
+    },
     "simplification": {
         "stream": "J",
         "finder_cmd": ["python3", "scripts/autonomous/simplify_gate.py", "finder"],
@@ -119,7 +144,7 @@ TOOL_METADATA: dict[str, dict[str, Any]] = {
         "finder_cmd": ["python3", "scripts/autonomous/fuzz_shrink.py", "run"],
         "oracle_cmd": ["python3", "scripts/autonomous/fuzz_shrink.py", "replay"],
         "tier": "T1",
-        "needs_config": True,
+        "needs_config": False,
     },
     "performance": {
         "stream": "G",
@@ -392,6 +417,98 @@ def check_benchmarks(root: Path) -> tuple[float, dict[str, Any]]:
     return 0.0, {}
 
 
+def check_test_gap(root: Path, cfg: dict[str, Any]) -> tuple[float, dict[str, Any]]:
+    """Check for untested production files via test_gap.py."""
+    tg_script = SCRIPT_DIR / "test_gap.py"
+    if not tg_script.is_file():
+        return 0.0, {}
+    code, out = _run_cmd([sys.executable, str(tg_script), "--json"], root)
+    if out.strip():
+        try:
+            data = json.loads(out)
+            candidates = data.get("candidates", [])
+            if candidates:
+                return 1.0, {"untested_count": len(candidates), "top_targets": [c["source"] for c in candidates[:5]]}
+        except Exception:
+            pass
+    return 0.0, {}
+
+
+def check_ci_audit(root: Path, cfg: dict[str, Any]) -> tuple[float, dict[str, Any]]:
+    """Check for missing CI workflows and PR checks via ci_audit.py."""
+    ci_script = SCRIPT_DIR / "ci_audit.py"
+    if not ci_script.is_file():
+        return 0.0, {}
+    code, out = _run_cmd([sys.executable, str(ci_script), "--json"], root)
+    if out.strip():
+        try:
+            data = json.loads(out)
+            candidates = data.get("candidates", [])
+            if candidates:
+                return 1.0, {"ci_issues_count": len(candidates), "issues": candidates}
+        except Exception:
+            pass
+    return 0.0, {}
+
+
+def check_complexity(root: Path, cfg: dict[str, Any]) -> tuple[float, dict[str, Any]]:
+    """Check for oversized files or high complexity via complexity.py."""
+    cx_script = SCRIPT_DIR / "complexity.py"
+    if not cx_script.is_file():
+        return 0.0, {}
+    code, out = _run_cmd([sys.executable, str(cx_script), "--json"], root)
+    if out.strip():
+        try:
+            data = json.loads(out)
+            candidates = data.get("candidates", [])
+            if candidates:
+                return 1.0, {"complex_count": len(candidates), "top_targets": [c["file"] for c in candidates[:5]]}
+        except Exception:
+            pass
+    return 0.0, {}
+
+
+def check_simplification(root: Path) -> tuple[float, dict[str, Any]]:
+    """Check for dead code candidates via simplify_gate.py finder."""
+    simp_script = SCRIPT_DIR / "simplify_gate.py"
+    if not simp_script.is_file():
+        return 0.0, {}
+    code, out = _run_cmd([sys.executable, str(simp_script), "finder", "--json"], root)
+    if out.strip():
+        try:
+            data = json.loads(out)
+            if isinstance(data, list) and data:
+                return 1.0, {"dead_code_count": len(data), "candidates": [f.get("file") for f in data[:5] if isinstance(f, dict)]}
+        except Exception:
+            pass
+    return 0.0, {}
+
+
+def check_fuzz(root: Path, cfg: dict[str, Any]) -> tuple[float, dict[str, Any]]:
+    """Check for parser-shaped, decoder, or tokenizer targets suitable for fuzzing."""
+    parser_patterns = re.compile(r"(?:parse|decode|lexer|token|grammar|deserializ)", re.IGNORECASE)
+    matches: list[str] = []
+    for d in ("src", "lib"):
+        p = root / d
+        if p.is_dir():
+            for f in p.rglob("*"):
+                if f.is_file() and f.suffix.lower() in (".py", ".dart", ".ts", ".js", ".go", ".rs"):
+                    if "test" in f.name.lower():
+                        continue
+                    if parser_patterns.search(f.name):
+                        matches.append(str(f.relative_to(root)))
+                        continue
+                    try:
+                        content = f.read_text(encoding="utf-8", errors="replace")
+                        if re.search(r"\b(?:def\s+parse_|class\s+.*Parser|fn\s+parse_|function\s+parse)", content):
+                            matches.append(str(f.relative_to(root)))
+                    except Exception:
+                        pass
+    if matches:
+        return 1.0, {"parser_count": len(matches), "targets": matches[:5]}
+    return 0.0, {}
+
+
 def survey_repo(
     root: Path,
     profile_path: Path | None = None,
@@ -439,17 +556,25 @@ def survey_repo(
     flake_strength, flake_sigs = check_flake(root)
     lens_strength, lens_sigs = check_lens_backlog(root)
     bench_strength, bench_sigs = check_benchmarks(root)
+    ci_strength, ci_sigs = check_ci_audit(root, cfg)
+    tg_strength, tg_sigs = check_test_gap(root, cfg)
+    cx_strength, cx_sigs = check_complexity(root, cfg)
+    simp_strength, simp_sigs = check_simplification(root)
+    fuzz_strength, fuzz_sigs = check_fuzz(root, cfg)
 
     signal_strengths: dict[str, tuple[float, dict[str, Any]]] = {
         "defect-repair": (red_ci_strength, red_ci_sigs),
         "security": (sec_strength, sec_sigs),
         "lens": (lens_strength, lens_sigs),
         "docs-reconcile": (drift_strength, drift_sigs),
+        "ci-audit": (ci_strength, ci_sigs),
+        "test-gap": (tg_strength, tg_sigs),
         "flake": (flake_strength, flake_sigs),
         "adversarial": (smell_strength, smell_sigs),
         "mutation": (mut_strength, mut_sigs),
-        "simplification": (0.0, {}),
-        "fuzz": (0.0, {}),
+        "complexity": (cx_strength, cx_sigs),
+        "simplification": (simp_strength, simp_sigs),
+        "fuzz": (fuzz_strength, fuzz_sigs),
         "performance": (bench_strength if bench_strength > 0 else 0.0, bench_sigs),
     }
 
@@ -520,6 +645,16 @@ def survey_repo(
             reason = "adversarial chosen: test smells detected"
         elif tool_name == "mutation":
             reason = "mutation chosen: unaudited targets present"
+        elif tool_name == "test-gap":
+            reason = "test-gap chosen: untested production files detected"
+        elif tool_name == "ci-audit":
+            reason = "ci-audit chosen: CI workflows missing or incomplete"
+        elif tool_name == "complexity":
+            reason = "complexity chosen: oversized or complex modules detected"
+        elif tool_name == "simplification":
+            reason = "simplification chosen: dead code candidates detected"
+        elif tool_name == "fuzz":
+            reason = "fuzz chosen: parser-shaped targets detected"
         elif tool_name == "lens":
             reason = "lens chosen: state-machine backlog has open findings"
         else:
