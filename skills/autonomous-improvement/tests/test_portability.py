@@ -392,6 +392,30 @@ class Python39AndOptimizePortabilityTests(unittest.TestCase):
                     flagged.append(node.name)
         self.assertEqual(flagged, [])
 
+    def test_check_skills_ignores_dot_autonomous_runtime_subdir(self) -> None:
+        import importlib.util
+        import tempfile
+
+        repo_root = SCRIPTS.parent.parent.parent.parent
+        spec = importlib.util.spec_from_file_location(
+            "check_skills", repo_root / "scripts" / "check_skills.py"
+        )
+        assert spec is not None and spec.loader is not None
+        check_skills = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(check_skills)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fake_root = Path(tmpdir)
+            skill_dir = fake_root / "skills" / "sample"
+            (skill_dir / ".autonomous").mkdir(parents=True)
+            (skill_dir / ".autonomous" / "plan-progress.md").write_text(
+                "Run `scripts/check_discovery.sh` at repo root.\n", encoding="utf-8"
+            )
+            check_skills.ROOT = fake_root
+            issues: list = []
+            check_skills.check_relative_references(skill_dir, issues)
+            self.assertEqual(issues, [])
+
 
 if __name__ == "__main__":
     unittest.main()
