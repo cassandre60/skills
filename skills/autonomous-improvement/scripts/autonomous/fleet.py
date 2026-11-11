@@ -200,7 +200,7 @@ def fetch_gh_issues(
                     if not isinstance(item, dict):
                         continue
                     item_labels = [
-                        (l.get("name") if isinstance(l, dict) else str(l)).lower()
+                        (str(l.get("name") or "") if isinstance(l, dict) else str(l)).lower()
                         for l in item.get("labels", [])
                     ]
                     if any(tl in item_labels for tl in target_labels):
