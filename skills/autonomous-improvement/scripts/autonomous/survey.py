@@ -28,6 +28,7 @@ try:
         EXIT_OK,
         STREAMS,
         load_config,
+        load_run_records,
         repo_root,
     )
 except ImportError:
@@ -40,6 +41,9 @@ except ImportError:
 
     def load_config(root: Path, explicit: os.PathLike | str | None = None) -> dict[str, Any]:
         return {}
+
+    def load_run_records(records_dir: Path, pattern: str = "rr-*.json", warn: bool = False) -> list[dict[str, Any]]:
+        return []
 
 
 SCHEMA = "survey/1"
@@ -59,6 +63,22 @@ DEFAULT_WEIGHTS: dict[str, float] = {
     "simplification": 0.3,
     "fuzz": 0.3,
     "performance": 0.0,
+}
+
+TOOL_TRACK: dict[str, str] = {
+    "defect-repair": "bug",
+    "security": "bug",
+    "flake": "bug",
+    "adversarial": "bug",
+    "lens": "refactor",
+    "simplification": "refactor",
+    "complexity": "refactor",
+    "test-gap": "test",
+    "mutation": "test",
+    "fuzz": "test",
+    "ci-audit": "ci",
+    "docs-reconcile": "ci",
+    "performance": "refactor",
 }
 
 TOOL_METADATA: dict[str, dict[str, Any]] = {
@@ -578,6 +598,19 @@ def survey_repo(
         "performance": (bench_strength if bench_strength > 0 else 0.0, bench_sigs),
     }
 
+    # Load recent run records for anti-starvation & recency penalties (V3 M4 §8.2)
+    records_dir = root / ".autonomous" / "run-records"
+    past_tracks: list[str] = []
+    if records_dir.is_dir():
+        try:
+            recs = load_run_records(records_dir)
+            for r in recs:
+                ch = r.get("chosen")
+                if ch:
+                    past_tracks.append(TOOL_TRACK.get(ch, ch))
+        except Exception:
+            pass
+
     picks: list[dict[str, Any]] = []
     for tool, meta in TOOL_METADATA.items():
         if tool in suppressed:
@@ -604,10 +637,34 @@ def survey_repo(
         else:
             score = round(weight * strength * prior, 4)
 
+        track = TOOL_TRACK.get(tool, tool)
+
+        # Anti-starvation guard & recency penalties (V3 M4 §8.2)
+        if not needs_cfg:
+            # 1. Recency penalty: picked in last k=3 dispatches gets decaying penalty
+            if past_tracks:
+                recent_3 = past_tracks[-3:]
+                if track in recent_3:
+                    dist = list(reversed(recent_3)).index(track) + 1  # 1 = most recent
+                    penalty = 0.4 + 0.15 * dist  # 1: 0.55, 2: 0.70, 3: 0.85
+                    score = round(score * penalty, 4)
+
+            # 2. Anti-starvation floor boost: eligible items not picked in last n=10 dispatches
+            if len(past_tracks) >= 10:
+                recent_10 = past_tracks[-10:]
+                if track not in recent_10 and score > 0:
+                    score = round(max(score + 0.15, 0.35), 4)
+
+            # 3. Track caps check
+            track_caps = (cfg.get("fleet") or {}).get("track_caps") or {}
+            if track in track_caps and track_caps[track] <= 0:
+                score = 0.0
+
         picks.append(
             {
                 "tool": tool,
                 "stream": stream_letter,
+                "track": track,
                 "score": score,
                 "signals": sigs,
                 "finder_cmd": list(meta["finder_cmd"]),

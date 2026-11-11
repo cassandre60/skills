@@ -83,6 +83,7 @@ from fleet_pool import (
     _opencode_model_ids,
     _resolve_model_pool,
     cmd_pool,
+    evaluate_track_caps,
 )
 
 
@@ -680,6 +681,29 @@ def cmd_snapshot(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _block_govern(
+    args: argparse.Namespace,
+    reason: str,
+    open_prs: int = 0,
+    tend: Optional[List[int]] = None,
+    **extra: Any,
+) -> int:
+    payload: Dict[str, Any] = {
+        "dispatch": False,
+        "reason": reason,
+        "open_prs": open_prs,
+        "tend": tend or [],
+    }
+    payload.update(extra)
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        eprint(f"[!] Governor: DISPATCH BLOCKED ({reason})")
+        if tend:
+            eprint(f"    Tend queue: {', '.join(f'PR #{n}' for n in tend)}")
+    return EXIT_NEGATIVE
+
+
 def cmd_govern(args: argparse.Namespace) -> int:
     root = main_repo_root()
     cfg = load_config(root, args.config)
@@ -698,54 +722,26 @@ def cmd_govern(args: argparse.Namespace) -> int:
     ]
     for kp in kill_switch_paths:
         if kp.exists():
-            payload = {
-                "dispatch": False,
-                "reason": f"kill switch present ({kill_switch_file})",
-                "open_prs": 0,
-                "tend": [],
-            }
-            if args.json:
-                print(json.dumps(payload, indent=2))
-            else:
-                eprint(f"[!] Governor: DISPATCH BLOCKED ({payload['reason']})")
-            return EXIT_NEGATIVE
+            return _block_govern(args, f"kill switch present ({kill_switch_file})")
 
     # 1a. Circuit-breaker check
     state_dir = _resolve_state_dir(root, getattr(args, "state_dir", None))
     cb_path = _circuit_breaker_path(state_dir)
-    if cb_path.is_file():
-        if not _auto_clear_circuit_breaker(root, cb_path):
-            payload = {
-                "dispatch": False,
-                "reason": "circuit breaker tripped (consecutive failed wakes; run reset-circuit)",
-                "open_prs": 0,
-                "tend": [],
-            }
-            if args.json:
-                print(json.dumps(payload, indent=2))
-            else:
-                eprint(f"[!] Governor: DISPATCH BLOCKED ({payload['reason']})")
-            return EXIT_NEGATIVE
+    if cb_path.is_file() and not _auto_clear_circuit_breaker(root, cb_path):
+        return _block_govern(
+            args, "circuit breaker tripped (consecutive failed wakes; run reset-circuit)"
+        )
 
     # 1b. Disk headroom floor (issue #115: protect host against out-of-disk failure)
     min_free_gb = _resolve_min_free_gb(cfg)
     try:
-        usage = shutil.disk_usage(str(root))
-        free_gb = usage.free / (1024**3)
+        free_gb = shutil.disk_usage(str(root)).free / (1024**3)
     except OSError:
         free_gb = min_free_gb
     if free_gb < min_free_gb:
-        payload = {
-            "dispatch": False,
-            "reason": f"disk headroom exhausted ({free_gb:.1f} GiB free < {min_free_gb:.1f} GiB floor)",
-            "open_prs": 0,
-            "tend": [],
-        }
-        if args.json:
-            print(json.dumps(payload, indent=2))
-        else:
-            eprint(f"[!] Governor: DISPATCH BLOCKED ({payload['reason']})")
-        return EXIT_NEGATIVE
+        return _block_govern(
+            args, f"disk headroom exhausted ({free_gb:.1f} GiB free < {min_free_gb:.1f} GiB floor)"
+        )
 
     # 1c. Concurrent worktree cap (issue #115: prevent unbounded worktree buildup)
     max_worktrees = int(fleet_cfg.get("max_worktrees", 5))
@@ -756,17 +752,9 @@ def cmd_govern(args: argparse.Namespace) -> int:
             1 for line in (wt_proc.stdout or "").splitlines() if line.startswith("worktree ")
         )
         if wt_count > max_worktrees:
-            payload = {
-                "dispatch": False,
-                "reason": f"active worktree cap exceeded ({wt_count} > {max_worktrees})",
-                "open_prs": 0,
-                "tend": [],
-            }
-            if args.json:
-                print(json.dumps(payload, indent=2))
-            else:
-                eprint(f"[!] Governor: DISPATCH BLOCKED ({payload['reason']})")
-            return EXIT_NEGATIVE
+            return _block_govern(
+                args, f"active worktree cap exceeded ({wt_count} > {max_worktrees})"
+            )
 
     # 1d. Doctor gate (opt-in): on a deployment with doctor.enforce=true, a
     #     hard preflight failure blocks dispatch the same way the kill switch
@@ -774,19 +762,11 @@ def cmd_govern(args: argparse.Namespace) -> int:
     if (fleet_cfg.get("doctor", {}) or {}).get("enforce"):
         doctor = doctor_summary(run_doctor_checks(root, cfg))
         if not doctor["dispatch_ok"]:
-            payload = {
-                "dispatch": False,
-                "reason": f"doctor preflight failed ({', '.join(doctor['hard_failures'])})",
-                "open_prs": 0,
-                "tend": [],
-                "doctor": doctor,
-            }
-            if args.json:
-                print(json.dumps(payload, indent=2))
-            else:
-                eprint(f"[!] Governor: DISPATCH BLOCKED ({payload['reason']})")
-                eprint("    Fix the doctor failure or set fleet.doctor.enforce=false deliberately.")
-            return EXIT_NEGATIVE
+            return _block_govern(
+                args,
+                f"doctor preflight failed ({', '.join(doctor['hard_failures'])})",
+                doctor=doctor,
+            )
 
     # 2. Query open PRs
     prs_data, gh_warn = fetch_gh_prs(root, state="open", require_gh=args.require_gh)
@@ -795,29 +775,24 @@ def cmd_govern(args: argparse.Namespace) -> int:
     open_states = [evaluate_pr_checks(p) for p in prs_data]
     open_count = len(open_states)
 
-    tend: List[int] = []
-    for s in open_states:
-        pr_num = s.get("pr")
-        if pr_num is not None:
-            if s.get("checks") == "red" or s.get("owner_ask_pending"):
-                tend.append(pr_num)
-    tend = sorted(tend)
+    tend: List[int] = sorted(
+        int(s["pr"])
+        for s in open_states
+        if s.get("pr") is not None and (s.get("checks") == "red" or s.get("owner_ask_pending"))
+    )
+
+    track_caps = fleet_cfg.get("track_caps") or {}
+    caps_report = evaluate_track_caps(track_caps, prs_data)
 
     # 3. Check open PR limit
     if open_count >= max_open_prs:
-        payload = {
-            "dispatch": False,
-            "reason": f"open fleet PR cap reached ({open_count} >= {max_open_prs})",
-            "open_prs": open_count,
-            "tend": tend,
-        }
-        if args.json:
-            print(json.dumps(payload, indent=2))
-        else:
-            eprint(f"[!] Governor: DISPATCH BLOCKED ({payload['reason']})")
-            if tend:
-                eprint(f"    Tend queue: {', '.join(f'PR #{n}' for n in tend)}")
-        return EXIT_NEGATIVE
+        return _block_govern(
+            args,
+            f"open fleet PR cap reached ({open_count} >= {max_open_prs})",
+            open_prs=open_count,
+            tend=tend,
+            track_caps=caps_report,
+        )
 
     # 4. Check new PRs per day (last 24 hours, including merged/closed PRs)
     all_prs_data, all_warn = fetch_gh_prs(
@@ -837,17 +812,13 @@ def cmd_govern(args: argparse.Namespace) -> int:
             except (ValueError, TypeError):
                 pass
     if count_24h >= max_new_prs_per_day:
-        payload = {
-            "dispatch": False,
-            "reason": f"daily new PR cap reached ({count_24h} >= {max_new_prs_per_day})",
-            "open_prs": open_count,
-            "tend": tend,
-        }
-        if args.json:
-            print(json.dumps(payload, indent=2))
-        else:
-            eprint(f"[!] Governor: DISPATCH BLOCKED ({payload['reason']})")
-        return EXIT_NEGATIVE
+        return _block_govern(
+            args,
+            f"daily new PR cap reached ({count_24h} >= {max_new_prs_per_day})",
+            open_prs=open_count,
+            tend=tend,
+            track_caps=caps_report,
+        )
 
     # 5. Acceptance-rate floor (last 14 days). Only enforced against settled
     # verdicts (merged vs closed-unmerged) in the window: a fresh fleet with
@@ -877,23 +848,26 @@ def cmd_govern(args: argparse.Namespace) -> int:
         settled_14d = merged_14d + closed_unmerged_14d
         rate_14d = (merged_14d / settled_14d) if settled_14d > 0 else 0.0
         if settled_14d > 0 and rate_14d < min_acceptance_rate_14d:
-            payload = {
-                "dispatch": False,
-                "reason": (
-                    f"acceptance floor missed "
-                    f"(14d: {merged_14d}/{settled_14d} = {rate_14d:.2f} "
-                    f"< {min_acceptance_rate_14d:.2f})"
-                ),
-                "open_prs": open_count,
-                "tend": tend,
-                "acceptance_rate_14d": round(rate_14d, 4),
-                "min_acceptance_rate_14d": min_acceptance_rate_14d,
-            }
-            if args.json:
-                print(json.dumps(payload, indent=2))
-            else:
-                eprint(f"[!] Governor: DISPATCH BLOCKED ({payload['reason']})")
-            return EXIT_NEGATIVE
+            return _block_govern(
+                args,
+                f"acceptance floor missed (14d: {merged_14d}/{settled_14d} = {rate_14d:.2f} < {min_acceptance_rate_14d:.2f})",
+                open_prs=open_count,
+                tend=tend,
+                acceptance_rate_14d=round(rate_14d, 4),
+                min_acceptance_rate_14d=min_acceptance_rate_14d,
+                track_caps=caps_report,
+            )
+
+    req_track = getattr(args, "track", None)
+    if req_track and caps_report.get(req_track, {}).get("capped"):
+        cap_val = caps_report[req_track]["cap"]
+        return _block_govern(
+            args,
+            f"track cap reached for {req_track} ({caps_report[req_track]['open']} >= {cap_val})",
+            open_prs=open_count,
+            tend=tend,
+            track_caps=caps_report,
+        )
 
     payload = {
         "dispatch": True,
@@ -901,6 +875,8 @@ def cmd_govern(args: argparse.Namespace) -> int:
         "open_prs": open_count,
         "tend": tend,
     }
+    if caps_report:
+        payload["track_caps"] = caps_report
     if args.json:
         print(json.dumps(payload, indent=2))
     else:
@@ -1930,6 +1906,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_gov.add_argument("--state-dir", help="directory for fleet state")
     p_gov.add_argument("--json", action="store_true", help="emit JSON")
     p_gov.add_argument("--require-gh", action="store_true", help="fail if gh is unavailable")
+    p_gov.add_argument("--track", help="evaluate dispatch for a specific track")
 
     # needs-brain
     p_brain = subparsers.add_parser(

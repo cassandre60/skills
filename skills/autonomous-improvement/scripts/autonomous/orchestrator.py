@@ -273,11 +273,84 @@ def cmd_verify_gate(args: argparse.Namespace) -> int:
 
     base = _base_for_diff(root, cfg)
     touched = _changed_files(root, base)
+
+    # Diff budget enforcement (V3 Milestone 4)
+    diff_budget = (cfg.get("fleet") or {}).get("diff_budget") or {}
+    if diff_budget.get("enforce"):
+        max_files = int(diff_budget.get("max_files", 3))
+        max_lines = int(diff_budget.get("max_lines", 100))
+        ignored = ("lock", ".g.dart", ".freezed.dart", "min.js")
+        filtered_touched = [f for f in touched if not any(p in f.lower() for p in ignored)]
+        if len(filtered_touched) > max_files:
+            raise Fatal(
+                f"diff budget exceeded: {len(filtered_touched)} files changed > max {max_files} allowed"
+            )
+        numstat_proc = git(["diff", "--numstat", base], cwd=root, quiet=True)
+        if numstat_proc.returncode == 0:
+            total_lines = 0
+            for line in (numstat_proc.stdout or "").splitlines():
+                parts = line.split("\t")
+                if len(parts) >= 3 and not any(p in parts[2].lower() for p in ignored):
+                    try:
+                        total_lines += int(parts[0]) + int(parts[1])
+                    except ValueError:
+                        pass
+            if total_lines > max_lines:
+                raise Fatal(
+                    f"diff budget exceeded: {total_lines} lines changed > max {max_lines} allowed"
+                )
+
     extensions = [str(ext) for ext in (cfg.get("analyze_extensions") or [])]
     if extensions:
         analyzable = [path for path in touched if any(path.endswith(ext) for ext in extensions)]
     else:
         analyzable = touched
+
+    # Track-specific gate validation (V3 Milestone 4)
+    track = getattr(args, "track", None)
+    if not track:
+        claim_file = root / ".autonomous" / "claim.json"
+        if claim_file.is_file():
+            try:
+                track = json.loads(claim_file.read_text(encoding="utf-8")).get("track")
+            except Exception:
+                pass
+
+    if track == "research":
+        raise Fatal("track 'research' is issue-only; no code modifications or PR gates permitted")
+    elif track == "ci":
+        for f in touched:
+            if not (f.startswith(".github/") or f.endswith((".yml", ".yaml", ".json", ".toml", ".cfg")) or "lint" in f):
+                raise Fatal(f"ci track violation: modified production file {f}")
+        for f in touched:
+            if f.startswith(".github/workflows/") and f.endswith((".yml", ".yaml")):
+                wf_path = root / f
+                if wf_path.is_file():
+                    import yaml
+                    try:
+                        yaml.safe_load(wf_path.read_text(encoding="utf-8"))
+                    except Exception as exc:
+                        raise Fatal(f"ci track workflow syntax error in {f}: {exc}")
+    elif track == "test":
+        ev_path = root / ".autonomous" / "evidence.json"
+        if not ev_path.is_file():
+            raise Fatal("test track gate requires evidence artifact (.autonomous/evidence.json)")
+        try:
+            ev_data = json.loads(ev_path.read_text(encoding="utf-8"))
+        except Exception:
+            raise Fatal("test track gate: unreadable evidence artifact")
+        if ev_data.get("kind") != "mutant" or ev_data.get("verdict") != "killed":
+            raise Fatal("test track gate requires evidence of kind 'mutant' with verdict 'killed'")
+    elif track == "bug":
+        ev_path = root / ".autonomous" / "evidence.json"
+        if not ev_path.is_file():
+            raise Fatal("bug track gate requires evidence artifact (.autonomous/evidence.json)")
+        try:
+            ev_data = json.loads(ev_path.read_text(encoding="utf-8"))
+        except Exception:
+            raise Fatal("bug track gate: unreadable evidence artifact")
+        if ev_data.get("kind") != "defect" or ev_data.get("verdict") != "reproduced-and-fixed":
+            raise Fatal("bug track gate requires evidence of kind 'defect' with verdict 'reproduced-and-fixed'")
 
     print(f"[*] Diff base: {base}")
     print(f"[*] Touched files: {len(touched)} ({len(analyzable)} analyzable)")
@@ -463,6 +536,7 @@ def build_parser() -> argparse.ArgumentParser:
         "verify-gate", parents=[common_parent], help="run configured gates on touched files"
     )
     verify_parser.add_argument("--worktree", required=True, help="path to the worktree")
+    verify_parser.add_argument("--track", help="track name (ci, test, bug, refactor, research)")
     verify_parser.set_defaults(func=cmd_verify_gate)
 
     cleanup_parser = subparsers.add_parser(
