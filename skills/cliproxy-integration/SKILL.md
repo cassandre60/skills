@@ -1,6 +1,6 @@
 ---
 name: cliproxy-integration
-version: 1.4.0
+version: 1.5.0
 description: Wire an OpenAI-compatible AI gateway (CLIProxyAPI / OmniRoute / any /v1 gateway) into OpenCode and Codex CLI correctly - discover real model IDs instead of guessing, register providers that resolve, source model limits instead of inventing them, attribute models to their upstream, and diagnose the gateway errors that block model selection. Use whenever someone asks to add models to OpenCode, connect OpenCode or Codex to a gateway/proxy/relay, fix "unknown provider for model", "model_not_found", 401/403 from an upstream gateway, missing models in the /model picker, wrong context/output limits, model routing or credential-pool behaviour, quota/429 exhaustion on pooled accounts, or WARP/proxy egress setup for API traffic.
 ---
 
@@ -192,8 +192,10 @@ Work this ladder top-down. Each rung eliminates a class. Do not skip to a fix.
 | 429 / "no quota" on some models only | quota semantics | `references/03-quota.md` |
 | Tiny probes pass; the real client's requests 429 instantly on every account, fresh chats included | upstream client-identity filter on the system prompt, dressed as quota | `references/03-quota.md` |
 | A named account "still has quota" but is never selected | credential excluded from the candidate set (disabled flag / dead refresh / pinned busy) | `references/03-quota.md` |
+| Mixed pool: premium/frontier models fail when routed to standard accounts | accounts have different tier capabilities; need per-credential model pinning | `references/03-quota.md` |
 | Pool-wide failure after a change | egress / network | `references/04-network.md` |
 | Gateway unstable, config reverts | two writers | `references/05-conflicts.md` |
+| Gateway service crash-loops (`bind: address already in use` or `kv.db timeout`), yet curl probes answer 200 | orphan gateway process holding port/db lock | `references/05-conflicts.md` |
 | Given a file of API keys, some dead | key onboarding | `references/06-key-dump-onboarding.md` |
 | Porting keys between gateways on one host | credential porting | `references/08-credential-porting.md` |
 | Codex TUI login loop, `/model` OpenAI-only, or file config silently ignored | second-client (Codex) wiring | `references/07-codex-client.md` |

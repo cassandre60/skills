@@ -82,6 +82,7 @@ fixed both protocol surfaces.
 | Some models fail, siblings work | quota **groups** — models share an allowance | probe one model per advertised group |
 | `All credentials ... cooling down` | gateway-side state | restart to clear in-memory cooldown, then re-read reality |
 | Instant 429 on every account for one model; tiny/no-system prompts pass; fresh chats fail | upstream client-name filter on the system prompt, not quota | populate top-level `antigravity: sensitive-words` on a build that wires it (≥ v8.0.67); bisect the payload to find the trigger word |
+| Mixed pool: frontier/premium models fail when routed to standard accounts | accounts have different tier capabilities | inspect `antigravity_capability_hints` in auth JSON without spending tokens; add `excluded_models` to non-pro auth files |
 | Persistent backoff after an auth error | retries can't fix auth | change the request or the credentials |
 
 ## Egress and network
@@ -105,6 +106,12 @@ sudo nmcli con mod "<CONN>" ipv6.ignore-auto-dns yes     # durable - do this one
 
 `fe80::1%iface` is accepted by glibc and rejected by stricter resolvers. Warn that the
 temporary fix reverts on DHCP renewal.
+
+## Process conflicts and duplicate instances
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| Service crash-loops (`listen tcp :8317: bind: address already in use` or `open bolt db: timeout`), but `curl` probes answer 200 | an unmanaged orphan gateway process (PPID 1) holds port 8317 and `kv.db` lock | check `ps -o pid,ppid,cmd -C cli-proxy-api` and `fuser -v kv.db`; kill orphan PID, then `systemctl --user restart <service>` |
 
 ## Config keeps reverting
 

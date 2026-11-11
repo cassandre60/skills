@@ -78,3 +78,65 @@ and does it write anything to disk?
 **When to drop one:** if you need deterministic IDs, source-attributed naming, or limits you
 control, a hand-maintained block beats a plugin that guesses. If you just want "everything the
 gateway serves, automatically", the plugin is the right trade.
+
+## Process conflicts: the orphan gateway crash-loop
+
+A deceptive failure mode: **`curl` probes answer HTTP 200, but systemd reports the gateway
+service is in a rapid restart crash-loop** (`NRestarts` steadily climbing).
+
+### The tell
+
+In the systemd journal or service log:
+
+```
+proxy service exited with error: failed to start HTTP server: listen tcp :8317: bind: address already in use
+```
+
+or:
+
+```
+local kv store open failed (path=/home/ubuntu/.cli-proxy-api/kv.db): kvstore: open bolt db: timeout
+```
+
+Yet running `curl http://127.0.0.1:8317/v1/models` succeeds instantly.
+
+### Why it happens
+
+An **orphaned gateway process** (PPID 1, not managed by systemd) is already running in the
+background, bound to port 8317, and holding an exclusive lock on `kv.db`.
+
+1. The orphan handles incoming requests and hot-reloads configuration files via its file
+   watcher (so test probes return 200).
+2. Meanwhile, systemd tries to start its configured service instance.
+3. The new instance attempts to bind port 8317 or open `kv.db`. It fails with `bind: address
+   already in use` or Bolt DB lock timeout and exits immediately.
+4. Because the unit has `Restart=always` (or `RestartSec=5`), systemd restarts it in a
+   continuous loop.
+
+### Diagnosis and resolution
+
+1. **Check for rogue processes:**
+   ```bash
+   ps -o pid,ppid,lstart,cmd -C cli-proxy-api
+   ```
+   Compare running PIDs with `systemctl --user show <service> -p MainPID`. If you see an
+   unmanaged process (often `PPID 1`), that is the orphan.
+
+2. **Inspect the port and database lock:**
+   ```bash
+   ss -tlnp | grep 8317
+   fuser -v ~/.cli-proxy-api/kv.db
+   ```
+
+3. **Kill the orphan and restart cleanly:**
+   ```bash
+   kill <orphan-pid>
+   systemctl --user restart <service>
+   ```
+
+4. **Verify stability:**
+   Wait 30–60 seconds and check `NRestarts`:
+   ```bash
+   systemctl --user show <service> -p MainPID,NRestarts,ActiveState
+   ```
+   `NRestarts` should remain 0 and `ActiveState=active`.
