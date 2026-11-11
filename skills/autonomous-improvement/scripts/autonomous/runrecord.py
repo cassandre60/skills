@@ -40,6 +40,7 @@ OUTCOMES = (
     "error",
     "wake-complete",
     "wake-failed",
+    "saturated",
 )
 
 STREAM_TO_TOOL = {

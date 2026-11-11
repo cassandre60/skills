@@ -84,6 +84,7 @@ from fleet_pool import (
     _resolve_model_pool,
     cmd_pool,
     evaluate_track_caps,
+    saturation_info,
 )
 
 
@@ -1000,6 +1001,31 @@ def cmd_needs_brain(args: argparse.Namespace) -> int:
             eprint(f"[warn] wake state unreadable, treating as first wake: {wake_path}")
             previous = {}
 
+    # Deep Standby check (V3 Milestone 5 Honest Halt)
+    sat_info = saturation_info(root)
+    if sat_info.get("saturated") and not open_states and not issues_data:
+        ts = sat_info.get("timestamp")
+        now = datetime.datetime.now(datetime.timezone.utc)
+        standby_hours = float((fleet_cfg.get("saturation_standby_hours") or 24))
+        if ts and (now - datetime.datetime.fromisoformat(ts.replace("Z", "+00:00"))).total_seconds() < standby_hours * 3600:
+            payload = {
+                "tool": "fleet.py needs-brain",
+                "needs_brain": False,
+                "reasons": [],
+                "previous_reason": None,
+                "reason": "deep standby: repo is saturated (scheduled wake suppressed; waking on events only)",
+                "digest": previous.get("digest") if previous else None,
+                "previous_digest": previous.get("digest") if previous else None,
+                "open_prs": 0,
+                "state_file": str(wake_path),
+                "note": "stateless: deep standby honest halt",
+            }
+            if args.json:
+                print(json.dumps(payload, indent=2))
+            else:
+                print(f"[quiet] {payload['reason']}")
+            return EXIT_OK
+
     unchanged = bool(previous) and previous.get("digest") == digest and not args.force
     payload: Dict[str, Any] = {
         "tool": "fleet.py needs-brain",
@@ -1143,6 +1169,9 @@ def cmd_stats(args: argparse.Namespace) -> int:
     stats_dict["t2_eligible"] = bool(t2_eligible)
     stats_dict["t2_reason"] = t2_reason
 
+    sat_info = saturation_info(root)
+    stats_dict["saturation"] = sat_info
+
     if args.json:
         print(json.dumps(stats_dict, indent=2))
         return EXIT_OK
@@ -1174,6 +1203,13 @@ def cmd_stats(args: argparse.Namespace) -> int:
             m_comp = counts["merged"] + counts["closed"]
             m_rate = (counts["merged"] / m_comp) if m_comp > 0 else 0.0
             print(f"- **{m_name}**: {counts['merged']}/{m_comp} merged ({m_rate:.1%})")
+
+    print("\n### Saturation Status")
+    if sat_info.get("saturated"):
+        print(f"- **Status**: Saturated (Honest Halt: {sat_info.get('reason')})")
+        print(f"- **Since**: {sat_info.get('timestamp')}")
+    else:
+        print("- **Status**: Active (candidates or backlog items present)")
     return EXIT_OK
 
 
