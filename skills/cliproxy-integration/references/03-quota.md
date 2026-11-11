@@ -200,3 +200,90 @@ Upgrading the gateway binary in place under a systemd user unit: `systemctl --us
 replace the binary (verify the release `checksums.txt`), `start` — copying over a running
 binary fails with `Text file busy`. A same-major upgrade kept the v8 config and auth
 files; back up both first.
+
+## Mixed-tier credential pools: capability hints and model pinning
+
+When pooling accounts under one provider (e.g. Google Antigravity OAuth), credentials often
+have different subscription tiers. Some accounts may be paid Pro or Ultra (carrying access
+to frontier models like Gemini 4 Argon or Claude 5.5), while standard or free accounts do
+not.
+
+If the gateway routes requests blindly across all credentials, requests for tier-restricted
+models fail when dispatched to standard accounts, triggering unnecessary failover walks and
+cooldown cascades.
+
+### 1. Discover capabilities from auth files without spending tokens
+
+In CLIProxyAPI Antigravity OAuth files, upstream returns capability metadata recorded in
+`antigravity_capability_hints.model_ids` (and `web_search_model_ids`):
+
+```json
+{
+  "antigravity_capability_hints": {
+    "model_ids": [
+      "claude-opus-5-5-high",
+      "claude-sonnet-5-5-high",
+      "gemini-3.8-flash-high",
+      "gemini-4-argon-high",
+      ...
+    ]
+  }
+}
+```
+
+Whereas standard accounts explicitly mark unsupported models or omit them:
+
+```json
+{
+  "antigravity_capability_hints": {
+    "model_ids": [
+      "claude-opus-4-6-thinking",
+      "claude-sonnet-4-6",
+      "gemini-3.8-flash-high",
+      "gemini-4-argon-disabled",
+      ...
+    ]
+  }
+}
+```
+
+Read these directly across the auth directory with `jq` to map your pool's capabilities
+without spending tokens or sending test completions:
+
+```bash
+for f in ~/.cli-proxy-api/antigravity-*.json; do
+  jq -r --arg n "$(basename "$f" .json)" '[$n, ([.antigravity_capability_hints.model_ids[]? | select(test("5-5|argon"))] | join(", "))] | @tsv' "$f"
+done
+```
+
+### 2. Pin models to capable credentials via `excluded_models`
+
+To ensure tier-restricted models only route to capable accounts, add `excluded_models` to the
+auth JSON of the non-capable accounts:
+
+```json
+{
+  "excluded_models": [
+    "claude-opus-5-5-high",
+    "claude-opus-5-5-low",
+    "claude-opus-5-5-medium",
+    "claude-sonnet-5-5-high",
+    "claude-sonnet-5-5-low",
+    "claude-sonnet-5-5-medium",
+    "gemini-4-argon-high",
+    "gemini-4-argon-low",
+    "gemini-4-argon-medium"
+  ]
+}
+```
+
+Key operational facts:
+
+- **Gateway honors it:** The gateway excludes any credential from candidate selection if
+  the requested model appears in that credential's `excluded_models` array.
+- **Survives automatic token refresh:** The gateway's token auto-refresh loop preserves
+  `excluded_models` when writing back updated access tokens.
+- **Append, do not overwrite:** If an auth file already has exclusions, append the new
+  models (`.excluded_models = ((.excluded_models // []) + $list)`).
+- **Include tier variants:** Include `-low`, `-medium`, and `-high` variants if upstream
+  uses internal tiering, so any aliased or resolved model name is covered.

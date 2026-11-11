@@ -377,3 +377,60 @@ matters. A config knob that parses is not a knob that works — confirm the buil
 Auth-file token-refresh mtimes are dispatch evidence for which credentials a failing
 request actually reached. And when the user names a setting, find it before theorising
 further.
+
+## Mixed-tier pools, capability hints, and the phantom orphan gateway
+
+Two lessons from wiring frontier models (`gemini-4-argon-high`, `claude-opus-5-5-high`,
+`claude-sonnet-5-5-high`) into a mixed Google Antigravity pool of 12 credentials.
+
+### 1. Capability hints in auth JSON beat trial-and-error discovery
+
+When frontier models were requested only for the accounts that support them, the immediate
+question was: which accounts actually have access, without burning quota testing every model
+on every account?
+
+The answer lived in the OAuth JSON files themselves. Each file carries an
+`antigravity_capability_hints.model_ids` array populated by upstream:
+- The 2 paid Pro accounts explicitly listed `gemini-4-argon-high`, `claude-opus-5-5-high`,
+  and all tier variants (`-low`, `-medium`, `-high`).
+- The other 9 enabled accounts explicitly listed `gemini-4-argon-disabled` and completely
+  lacked any Claude 5.5 models.
+
+Hard-pinning was achieved by adding `excluded_models` to the 9 non-pro auth files. The
+gateway respects `excluded_models` per credential, preserving them across its automated
+token-refresh writes.
+
+### 2. The phantom orphan gateway: probes succeed while the unit crash-loops
+
+During the rollout, the gateway service was restarted under systemd. Immediately,
+`systemctl --user status` showed rapid restarts (`NRestarts` climbing to 11 in under a
+minute), with logs reporting:
+
+```
+proxy service exited with error: failed to start HTTP server: listen tcp :8317: bind: address already in use
+```
+
+and:
+
+```
+local kv store open failed (path=/home/ubuntu/.cli-proxy-api/kv.db): kvstore: open bolt db: timeout
+```
+
+Yet running `curl http://127.0.0.1:8317/v1/models` and test completions succeeded instantly
+with HTTP 200!
+
+The trap: an **unmanaged orphan process** (PPID 1, not owned by systemd) was already running
+and listening on port 8317, holding the Bolt database lock (`kv.db`). It hot-reloaded the
+updated config via inotify, so all curl tests hit the orphan and passed. Meanwhile,
+systemd's attempts to launch its managed instance repeatedly died on port collision and
+database lock timeout, triggering `Restart=always`.
+
+Checking `ps -o pid,ppid,cmd -C cli-proxy-api` and `fuser -v ~/.cli-proxy-api/kv.db` exposed
+the rogue PID. Killing it freed the port and lock, allowing systemd's instance to start
+cleanly and stabilize at `NRestarts=0`.
+
+**Rules this produced:**
+- Auth file `capability_hints` are free upstream ground truth — inspect them before probing.
+- When `curl` works but systemd logs `bind: address already in use` or DB lock timeout, look
+  for an orphan process with `PPID 1`. Never assume a passing curl means the service unit
+  is healthy.
