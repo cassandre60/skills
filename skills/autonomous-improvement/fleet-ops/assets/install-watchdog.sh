@@ -21,21 +21,25 @@ SNAP_SERVICE="orchestrator-snapshot.service"
 SNAP_TIMER="orchestrator-snapshot.timer"
 WAKE_SERVICE="orchestrator-wake.service"
 WAKE_TIMER="orchestrator-wake.timer"
+UPDATER_SERVICE="skills-updater.service"
+UPDATER_TIMER="skills-updater.timer"
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
 do_uninstall() {
   if have systemctl; then
-    systemctl --user stop "$TIMER" "$SNAP_TIMER" "$WAKE_TIMER" 2>/dev/null || true
-    systemctl --user disable "$TIMER" "$SNAP_TIMER" "$WAKE_TIMER" 2>/dev/null || true
+    systemctl --user stop "$TIMER" "$SNAP_TIMER" "$WAKE_TIMER" "$UPDATER_TIMER" 2>/dev/null || true
+    systemctl --user disable "$TIMER" "$SNAP_TIMER" "$WAKE_TIMER" "$UPDATER_TIMER" 2>/dev/null || true
   fi
   rm -f "$UNIT_DIR/$TIMER" "$UNIT_DIR/$SERVICE" "$UNIT_DIR/$SNAP_TIMER" "$UNIT_DIR/$SNAP_SERVICE" \
         "$UNIT_DIR/$WAKE_TIMER" "$UNIT_DIR/$WAKE_SERVICE" \
-        "$INSTALL_DIR/watchdog.sh" "$INSTALL_DIR/snapshot.sh" "$INSTALL_DIR/wake.sh"
+        "$UNIT_DIR/$UPDATER_TIMER" "$UNIT_DIR/$UPDATER_SERVICE" \
+        "$INSTALL_DIR/watchdog.sh" "$INSTALL_DIR/snapshot.sh" "$INSTALL_DIR/wake.sh" \
+        "$INSTALL_DIR/stateless-wake.sh" "$INSTALL_DIR/update-skills.sh"
   if have systemctl; then
     systemctl --user daemon-reload
   fi
-  echo "[+] Uninstalled watchdog, snapshot & wake units and scripts."
+  echo "[+] Uninstalled watchdog, snapshot, wake & updater units and scripts."
   echo "    State kept in ${ORCH_STATE_DIR:-$HOME/.local/share/orchestrator}."
 }
 
@@ -47,12 +51,16 @@ do_install() {
   install -m 0755 "$ASSET_DIR/watchdog.sh" "$INSTALL_DIR/watchdog.sh"
   install -m 0755 "$ASSET_DIR/snapshot.sh" "$INSTALL_DIR/snapshot.sh"
   install -m 0755 "$ASSET_DIR/wake.sh" "$INSTALL_DIR/wake.sh"
+  [ -f "$ASSET_DIR/stateless-wake.sh" ] && install -m 0755 "$ASSET_DIR/stateless-wake.sh" "$INSTALL_DIR/stateless-wake.sh"
+  [ -f "$ASSET_DIR/update-skills.sh" ] && install -m 0755 "$ASSET_DIR/update-skills.sh" "$INSTALL_DIR/update-skills.sh"
   install -m 0644 "$ASSET_DIR/$SERVICE" "$UNIT_DIR/$SERVICE"
   install -m 0644 "$ASSET_DIR/$TIMER" "$UNIT_DIR/$TIMER"
   install -m 0644 "$ASSET_DIR/$SNAP_SERVICE" "$UNIT_DIR/$SNAP_SERVICE"
   install -m 0644 "$ASSET_DIR/$SNAP_TIMER" "$UNIT_DIR/$SNAP_TIMER"
   install -m 0644 "$ASSET_DIR/$WAKE_SERVICE" "$UNIT_DIR/$WAKE_SERVICE"
   install -m 0644 "$ASSET_DIR/$WAKE_TIMER" "$UNIT_DIR/$WAKE_TIMER"
+  [ -f "$ASSET_DIR/$UPDATER_SERVICE" ] && install -m 0644 "$ASSET_DIR/$UPDATER_SERVICE" "$UNIT_DIR/$UPDATER_SERVICE"
+  [ -f "$ASSET_DIR/$UPDATER_TIMER" ] && install -m 0644 "$ASSET_DIR/$UPDATER_TIMER" "$UNIT_DIR/$UPDATER_TIMER"
 
   # The shipped unit points ExecStart/EnvironmentFile at the default
   # directory. If this install uses custom dirs, rewrite the installed
@@ -62,11 +70,13 @@ do_install() {
     sed -i "s|%h/.local/share/orchestrator/watchdog.sh|$INSTALL_DIR/watchdog.sh|" "$UNIT_DIR/$SERVICE"
     sed -i "s|%h/.local/share/orchestrator/snapshot.sh|$INSTALL_DIR/snapshot.sh|" "$UNIT_DIR/$SNAP_SERVICE"
     sed -i "s|%h/.local/share/orchestrator/wake.sh|$INSTALL_DIR/wake.sh|" "$UNIT_DIR/$WAKE_SERVICE"
+    [ -f "$UNIT_DIR/$UPDATER_SERVICE" ] && sed -i "s|%h/.local/share/orchestrator/update-skills.sh|$INSTALL_DIR/update-skills.sh|" "$UNIT_DIR/$UPDATER_SERVICE"
   fi
   if [ "$STATE_DIR" != "$DEFAULT_DIR" ]; then
     sed -i "s|%h/.local/share/orchestrator/watchdog.env|$STATE_DIR/watchdog.env|" "$UNIT_DIR/$SERVICE"
     sed -i "s|%h/.local/share/orchestrator/watchdog.env|$STATE_DIR/watchdog.env|" "$UNIT_DIR/$SNAP_SERVICE"
     sed -i "s|%h/.local/share/orchestrator/watchdog.env|$STATE_DIR/watchdog.env|" "$UNIT_DIR/$WAKE_SERVICE"
+    [ -f "$UNIT_DIR/$UPDATER_SERVICE" ] && sed -i "s|%h/.local/share/orchestrator/watchdog.env|$STATE_DIR/watchdog.env|" "$UNIT_DIR/$UPDATER_SERVICE"
   fi
 
   # Configuration the systemd service can actually see: shell-profile
@@ -79,6 +89,8 @@ do_install() {
       '# independent of the others, and must actually be free. Example:' \
       '#ORCH_MODEL_LADDER=provider/model-a provider/model-b' \
       'ORCH_MODEL_LADDER=' \
+      'ORCH_AUTO_UPDATE=1' \
+      'ORCH_WAKE_ON_BACKLOG=1' \
       '#ORCH_HB_MAX_AGE=2700' \
       '#ORCH_NUDGE_TIMEOUT=1800' \
       >"$STATE_DIR/watchdog.env"
@@ -96,6 +108,9 @@ do_install() {
     systemd-analyze --user verify "$UNIT_DIR/$SERVICE" "$UNIT_DIR/$TIMER" "$UNIT_DIR/$SNAP_SERVICE" "$UNIT_DIR/$SNAP_TIMER" "$UNIT_DIR/$WAKE_SERVICE" "$UNIT_DIR/$WAKE_TIMER"
   fi
   systemctl --user enable --now "$TIMER" "$SNAP_TIMER"
+  if [ -f "$UNIT_DIR/$UPDATER_TIMER" ]; then
+    systemctl --user enable --now "$UPDATER_TIMER" >/dev/null 2>&1 || true
+  fi
   systemctl --user list-timers --all "$TIMER" "$SNAP_TIMER" || true
   echo "[*] Stateless wake units installed but NOT enabled (enable one starter only):"
   echo "      systemctl --user enable --now $WAKE_TIMER   # after setting fleet.harness_cmd"

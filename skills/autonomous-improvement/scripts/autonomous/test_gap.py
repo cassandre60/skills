@@ -13,7 +13,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
@@ -23,23 +23,31 @@ try:
     from common import (
         EXIT_OK,
         load_config,
+        match_any,
         repo_root,
         test_for_source,
     )
 except ImportError:
     EXIT_OK = 0
 
-    def repo_root(start: Optional[os.PathLike | str] = None) -> Path:
+    def repo_root(start: os.PathLike | str | None = None) -> Path:
         return Path(start or Path.cwd()).resolve()
 
-    def load_config(root: Path, explicit: Optional[os.PathLike | str] = None) -> Dict[str, Any]:
+    def load_config(root: Path, explicit: os.PathLike | str | None = None) -> dict[str, Any]:
         return {}
 
-    def test_for_source(root: Path, cfg: Dict[str, Any], source: str) -> Optional[str]:
+    def match_any(path: str, patterns: Any) -> bool:
+        import fnmatch
+        return any(fnmatch.fnmatch(path, pat) for pat in patterns)
+
+    def test_for_source(root: Path, cfg: dict[str, Any], source: str) -> str | None:
         return None
 
 
 SCHEMA = "test-gap/1"
+
+SKIP_DIRS = {".git", ".dart_tool", ".agents", ".opencode", "build", "node_modules", "__pycache__", ".autonomous", ".venv", "venv"}
+GENERATED_SUFFIXES = (".g.dart", ".freezed.dart", ".mocks.dart", ".gen.dart", ".pb.go", "_pb2.py", ".d.ts")
 
 SOURCE_EXTENSIONS = {
     ".py",
@@ -84,9 +92,9 @@ def _is_file_in_ledger(ledger_text: str, rel_path: str) -> bool:
 
 def find_test_gaps(
     root: Path,
-    cfg: Optional[Dict[str, Any]] = None,
+    cfg: dict[str, Any] | None = None,
     include_audited: bool = False,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     if cfg is None:
         cfg = load_config(root)
 
@@ -97,7 +105,7 @@ def find_test_gaps(
     ledger_path = root / cfg.get("ledger_path", "docs/AUTONOMOUS_WORK_LEDGER.md")
     ledger_text = ledger_path.read_text(encoding="utf-8", errors="replace") if ledger_path.is_file() else ""
 
-    gaps: List[Dict[str, Any]] = []
+    gaps: list[dict[str, Any]] = []
 
     # Gather matching files
     matched_paths: set[str] = set()
@@ -117,12 +125,16 @@ def find_test_gaps(
                         matched_paths.add(str(p.relative_to(root)))
 
     for rel in sorted(matched_paths):
+        if any(part in SKIP_DIRS for part in Path(rel).parts):
+            continue
+        if rel.endswith(GENERATED_SUFFIXES):
+            continue
         ext = Path(rel).suffix.lower()
         if ext not in SOURCE_EXTENSIONS:
             continue
         if _is_test_file(rel):
             continue
-        if any(ex in rel for ex in excludes):
+        if excludes and match_any(rel, excludes):
             continue
         if not include_audited and ledger_text and _is_file_in_ledger(ledger_text, rel):
             continue

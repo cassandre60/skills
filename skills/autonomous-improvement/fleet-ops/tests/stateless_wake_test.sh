@@ -438,6 +438,119 @@ else
   fail "exit 124 timeout stayed parked under 24h quota cooldown"
 fi
 
+# --- case 17: ORCH_WAKE_ON_BACKLOG=1 wakes via built-in work-gate and passes multi-track prompt (issue #167) ---
+: >"$WAKE_LOG"
+rm -f "$TMP/state/wake.json" "$TMP/state/wake_failures"
+MT_REPO="$TMP/mt-repo"
+mkdir -p "$MT_REPO/scripts" "$MT_REPO/src" "$MT_REPO/tests"
+cp -r "$SKILL_ROOT/scripts/autonomous" "$MT_REPO/scripts/autonomous"
+cat >"$MT_REPO/src/untested_mod.py" <<'EOF'
+def compute(x):
+    return x + 1
+EOF
+( cd "$MT_REPO" && git init -q -b main && git add -A \
+  && GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t \
+     git commit -qm base ) >/dev/null 2>&1
+# First wake digests empty PRs; clear WAKE_LOG, then second wake on unchanged PR state
+# must STILL wake because ORCH_WAKE_ON_BACKLOG=1 triggers multi-track `fleet.py work-gate`.
+PATH="$TMP/bin:$PATH" \
+  ORCH_REPO="$MT_REPO" \
+  ORCH_STATE_DIR="$TMP/state-mt" \
+  ORCH_WAKE_CMD='fake-harness "$1" ${2:+-m "$2"}' \
+  ORCH_MODEL_LADDER="opencode/mention-free" \
+  ORCH_WAKE_ON_BACKLOG=1 \
+  ORCH_WAKE_TIMEOUT=20 \
+  ORCH_MIN_INTERVAL=0 \
+  GH_JSON="$TMP/prs-clean.json" \
+  bash "$ASSETS" >/dev/null 2>&1
+: >"$WAKE_LOG"
+PATH="$TMP/bin:$PATH" \
+  ORCH_REPO="$MT_REPO" \
+  ORCH_STATE_DIR="$TMP/state-mt" \
+  ORCH_WAKE_CMD='fake-harness "$1" ${2:+-m "$2"}' \
+  ORCH_MODEL_LADDER="opencode/mention-free" \
+  ORCH_WAKE_ON_BACKLOG=1 \
+  ORCH_WAKE_TIMEOUT=20 \
+  ORCH_MIN_INTERVAL=0 \
+  GH_JSON="$TMP/prs-clean.json" \
+  bash "$ASSETS" >/dev/null 2>&1
+if grep -q "survey.py --json" "$WAKE_LOG" 2>/dev/null && grep -q "backlog.py harvest" "$WAKE_LOG" 2>/dev/null; then
+  ok "ORCH_WAKE_ON_BACKLOG=1 woke on unchanged PR state with multi-track survey+backlog prompt"
+else
+  fail "ORCH_WAKE_ON_BACKLOG=1 did NOT wake or lacked multi-track prompt"
+fi
+
+# --- case 18: update-skills.sh syncs from origin/main, updates wake.sh, and rolls back on failure (issue #167) ---
+UPD_ORIGIN="$TMP/skills-origin.git"
+UPD_CLONE="$TMP/skills-clone"
+UPD_INSTALL="$TMP/installed-skills"
+UPD_ORCH="$TMP/installed-orch"
+git init -q --bare -b main "$UPD_ORIGIN"
+mkdir -p "$TMP/seed/skills/autonomous-improvement/fleet-ops/assets" "$TMP/seed/scripts"
+cat >"$TMP/seed/scripts/check_skills.py" <<'EOF'
+import sys
+sys.exit(0)
+EOF
+mkdir -p "$TMP/seed/skills/autonomous-improvement/tests" "$TMP/seed/skills/autonomous-improvement/fleet-ops/tests"
+cat >"$TMP/seed/skills/autonomous-improvement/tests/test_ok.py" <<'EOF'
+import unittest
+class T(unittest.TestCase):
+    def test_ok(self): self.assertTrue(True)
+EOF
+cat >"$TMP/seed/skills/autonomous-improvement/fleet-ops/tests/stateless_wake_test.sh" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+chmod +x "$TMP/seed/skills/autonomous-improvement/fleet-ops/tests/stateless_wake_test.sh"
+cp "$FLEET_OPS/assets/stateless-wake.sh" "$TMP/seed/skills/autonomous-improvement/fleet-ops/assets/stateless-wake.sh"
+cp "$FLEET_OPS/assets/update-skills.sh" "$TMP/seed/skills/autonomous-improvement/fleet-ops/assets/update-skills.sh"
+cp "$FLEET_OPS/assets/snapshot.sh" "$TMP/seed/skills/autonomous-improvement/fleet-ops/assets/snapshot.sh"
+cp "$FLEET_OPS/assets/watchdog.sh" "$TMP/seed/skills/autonomous-improvement/fleet-ops/assets/watchdog.sh"
+cp "$FLEET_OPS/assets/wake.sh" "$TMP/seed/skills/autonomous-improvement/fleet-ops/assets/wake.sh"
+( cd "$TMP/seed" && git init -q -b main && git add -A \
+  && GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t git commit -qm v1 \
+  && git remote add origin "$UPD_ORIGIN" && git push -q -u origin main ) >/dev/null 2>&1
+git clone -q "$UPD_ORIGIN" "$UPD_CLONE"
+mkdir -p "$UPD_ORCH"
+# Pre-install stateless wake.sh so update-skills.sh detects stateless mode
+cp "$TMP/seed/skills/autonomous-improvement/fleet-ops/assets/stateless-wake.sh" "$UPD_ORCH/wake.sh"
+# Push v2 upstream
+echo "# v2-marker" >> "$TMP/seed/skills/autonomous-improvement/fleet-ops/assets/stateless-wake.sh"
+( cd "$TMP/seed" && git add -A && GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t git commit -qm v2 && git push -q origin main ) >/dev/null 2>&1
+
+ORCH_SKILLS_CLONE="$UPD_CLONE" \
+ORCH_SKILLS_INSTALL_DIR="$UPD_INSTALL" \
+ORCH_INSTALL_DIR="$UPD_ORCH" \
+ORCH_STATE_DIR="$TMP/upd-state" \
+ORCH_SYSTEMD_USER_DIR="$TMP/no-systemd" \
+  bash "$FLEET_OPS/assets/update-skills.sh" >/dev/null 2>&1
+if grep -q "v2-marker" "$UPD_ORCH/wake.sh" 2>/dev/null && grep -q "v2-marker" "$UPD_INSTALL/autonomous-improvement/fleet-ops/assets/stateless-wake.sh" 2>/dev/null; then
+  ok "update-skills.sh synced v2 skills and updated stateless wake.sh"
+else
+  fail "update-skills.sh did NOT sync v2 skills or wake.sh"
+fi
+
+# Push broken v3 -> check_skills.py fails -> clone must roll back and wake.sh stay at v2
+cat >"$TMP/seed/scripts/check_skills.py" <<'EOF'
+import sys
+sys.exit(1)
+EOF
+echo "# v3-broken" >> "$TMP/seed/skills/autonomous-improvement/fleet-ops/assets/stateless-wake.sh"
+( cd "$TMP/seed" && git add -A && GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t git commit -qm v3 && git push -q origin main ) >/dev/null 2>&1
+ORCH_SKILLS_CLONE="$UPD_CLONE" \
+ORCH_SKILLS_INSTALL_DIR="$UPD_INSTALL" \
+ORCH_INSTALL_DIR="$UPD_ORCH" \
+ORCH_STATE_DIR="$TMP/upd-state" \
+ORCH_SYSTEMD_USER_DIR="$TMP/no-systemd" \
+ORCH_FORCE_SYNC=1 \
+  bash "$FLEET_OPS/assets/update-skills.sh" >/dev/null 2>&1
+UPD_RC=$?
+if [ "$UPD_RC" -ne 0 ] && ! grep -q "v3-broken" "$UPD_ORCH/wake.sh" 2>/dev/null; then
+  ok "update-skills.sh aborted and preserved v2 install on failing gate"
+else
+  fail "update-skills.sh overwrote install despite failing gate"
+fi
+
 if [ "$FAILED" -eq 0 ]; then
   echo "PASS: stateless wake launcher"
   exit 0

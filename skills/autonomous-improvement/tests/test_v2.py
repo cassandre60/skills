@@ -3019,8 +3019,12 @@ class DocumentationInvariantTests(unittest.TestCase):
             "fleet-ops/assets/orchestrator-snapshot.service",
             "fleet-ops/assets/orchestrator-snapshot.timer",
             "fleet-ops/assets/wake.sh",
+            "fleet-ops/assets/stateless-wake.sh",
             "fleet-ops/assets/orchestrator-wake.service",
             "fleet-ops/assets/orchestrator-wake.timer",
+            "fleet-ops/assets/update-skills.sh",
+            "fleet-ops/assets/skills-updater.service",
+            "fleet-ops/assets/skills-updater.timer",
             "fleet-ops/assets/install-watchdog.sh",
         ):
             self.assertTrue((SKILL_ROOT / relative).exists(), relative)

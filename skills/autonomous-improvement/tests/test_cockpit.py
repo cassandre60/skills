@@ -417,5 +417,128 @@ class MasterCockpitTests(unittest.TestCase):
         self.assertIn("Wake finished cleanly on provider-b/backup-free", dash_md.stdout)
 
 
+class MultiTrackAndSignalFilterTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = support.tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp = Path(self._tmp.name)
+
+    def test_advisory_secrets_skips_ignored_tool_dirs_and_binary_artifacts(self) -> None:
+        repo, _ = support.init_repo(self.tmp, name="sec-repo")
+        support.install_scripts(repo)
+        support.write(repo / ".gitignore", "ignored_dir/\n*.secret.txt\n")
+        # False positives that used to pollute survey.py security signals:
+        fake_openai = "sk-" + "1234567890abcdefghij12345"
+        fake_gh = "ghp_" + "12345678901234567890123456789012"
+        fake_sk2 = "sk-" + "9999999999abcdefghij12345"
+        fake_real = "sk-" + "live-real1234567890abcdef"
+        support.write(repo / ".dart_tool" / "hooks" / "hook.dill", f'api_key = "{fake_openai}"\n')
+        support.write(repo / ".agents" / "skills" / "fixture.py", f'TOKEN = "{fake_gh}"\n')
+        support.write(repo / "ignored_dir" / "local.py", f'SECRET = "{fake_sk2}"\n')
+        support.write(repo / "src" / "clean.py", "def ok():\n    return 1\n")
+        support.commit(repo, "seed clean repo")
+
+        proc_clean = support.script(repo, "advisory.py", "secrets", "--json")
+        self.assertEqual(proc_clean.returncode, 0, proc_clean.stdout + proc_clean.stderr)
+        self.assertEqual(json.loads(proc_clean.stdout)["candidates"], [])
+
+        # Real unignored source secret is still flagged
+        support.write(repo / "src" / "real_leak.py", f'OPENAI_KEY = "{fake_real}"\n')
+        proc_dirty = support.script(repo, "advisory.py", "secrets", "--json")
+        self.assertEqual(proc_dirty.returncode, 1)
+        files = [c["file"] for c in json.loads(proc_dirty.stdout)["candidates"]]
+        self.assertEqual(files, ["src/real_leak.py"])
+
+    def test_test_gap_uses_glob_exclude_and_skips_generated_dart_files(self) -> None:
+        repo, _ = support.init_repo(self.tmp, name="dart-gap")
+        support.install_scripts(repo)
+        support.write_config(
+            repo,
+            {
+                "candidates": {
+                    "A": {
+                        "include": ["lib/src/**/*.dart"],
+                        "exclude": ["lib/src/**/*.freezed.dart", "lib/src/**/*.g.dart"],
+                    }
+                },
+                "test_for_source": [
+                    {"src": "^lib/src/(.*)\\.dart$", "test": "test/\\1_test.dart"}
+                ],
+            },
+        )
+        support.write(repo / "lib" / "src" / "user.freezed.dart", "class _$User {}\n")
+        support.write(repo / "lib" / "src" / "user.g.dart", "// generated\n")
+        support.write(repo / "lib" / "src" / "service.dart", "class Service {}\n")
+        support.commit(repo, "seed dart files")
+
+        proc = support.script(repo, "test_gap.py", "--json")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        sources = [c["source"] for c in json.loads(proc.stdout)["candidates"]]
+        self.assertEqual(sources, ["lib/src/service.dart"])
+
+    def test_docs_truth_scans_dart_tests_and_honors_ignore_spec_ids(self) -> None:
+        repo, _ = support.init_repo(self.tmp, name="dart-docs")
+        support.install_scripts(repo)
+        support.write(repo / "SPEC.md", "# Spec\n\n- INV01: core invariant\n- G02: gate ref\n")
+        support.write(
+            repo / "test" / "core_test.dart",
+            "void main() {\n  // INV01 covered\n}\n",
+        )
+        support.write_config(
+            repo,
+            {
+                "docs_truth": {
+                    "ignore_spec_ids": ["G02"],
+                }
+            },
+        )
+        support.commit(repo, "seed dart spec")
+
+        proc = support.script(repo, "docs_truth.py", "check", "--json")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(json.loads(proc.stdout)["candidates"], [])
+
+    def test_work_gate_and_wake_prompt_route_across_multiple_tracks(self) -> None:
+        repo, _ = support.init_repo(self.tmp, name="multitrack", with_origin=True)
+        support.install_scripts(repo)
+        support.write_config(
+            repo,
+            {
+                **support.load_example("config.python.json"),
+                "candidates": {"A": {"include": ["src/**/*.py"], "exclude": []}},
+            },
+        )
+        # Create a 520-line module + its test so complexity (Track 4 / Stream M) triggers cleanly
+        # without requiring mutation-only ledger work.
+        lines = ["# big module\n"] + [f"def f_{i}():\n    return {i}\n" for i in range(260)]
+        support.write(repo / "src" / "app.py", "".join(lines))
+        support.write(repo / "tests" / "test_app.py", "def test_app():\n    assert True\n")
+        support.write(
+            repo / ".github" / "workflows" / "ci.yml",
+            "name: CI\non: [push, pull_request]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: pytest\n",
+        )
+        support.commit(repo, "seed multi-track repo")
+
+        bin_dir = support.path_with_only(self.tmp, names=("git",))
+        gh = support.write(bin_dir / "gh", "#!/bin/sh\necho '[]'\n")
+        gh.chmod(0o755)
+        state_dir = repo / ".autonomous" / "state"
+        env = support.env_with_path(bin_dir, ORCH_STATE_DIR=str(state_dir))
+
+        gate = support.script(repo, "fleet.py", "work-gate", "--json", env=env)
+        self.assertEqual(gate.returncode, 0, gate.stdout + gate.stderr)
+        gate_data = json.loads(gate.stdout)
+        self.assertTrue(gate_data["work_available"])
+        self.assertEqual(gate_data["source"], "survey")
+        self.assertEqual(gate_data["tool"], "complexity")
+
+        wake = support.script(
+            repo, "fleet.py", "wake", "--state-dir", str(state_dir), "--print-prompt", env=env
+        )
+        self.assertEqual(wake.returncode, 0, wake.stderr)
+        self.assertIn("survey.py --json", wake.stdout)
+        self.assertIn("backlog.py harvest --json", wake.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

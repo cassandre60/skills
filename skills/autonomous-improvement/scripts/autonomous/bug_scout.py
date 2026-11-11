@@ -14,7 +14,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
@@ -24,28 +24,35 @@ try:
     from common import (
         EXIT_OK,
         load_config,
+        match_any,
         repo_root,
     )
 except ImportError:
     EXIT_OK = 0
 
-    def repo_root(start: Optional[os.PathLike | str] = None) -> Path:
+    def repo_root(start: os.PathLike | str | None = None) -> Path:
         return Path(start or Path.cwd()).resolve()
 
-    def load_config(root: Path, explicit: Optional[os.PathLike | str] = None) -> Dict[str, Any]:
+    def load_config(root: Path, explicit: os.PathLike | str | None = None) -> dict[str, Any]:
         return {}
+
+    def match_any(path: str, patterns: Any) -> bool:
+        import fnmatch
+        return any(fnmatch.fnmatch(path, pat) for pat in patterns)
 
 
 SCHEMA = "bug-scout/1"
 
 SOURCE_EXTENSIONS = {".py", ".dart", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs"}
+SKIP_DIRS = {".git", ".dart_tool", ".agents", ".opencode", "build", "node_modules", "__pycache__", ".autonomous", ".venv", "venv"}
+GENERATED_SUFFIXES = (".g.dart", ".freezed.dart", ".mocks.dart", ".gen.dart", ".pb.go", "_pb2.py", ".d.ts")
 
 
-def scan_bugs(root: Path, cfg: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+def scan_bugs(root: Path, cfg: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     if cfg is None:
         cfg = load_config(root)
 
-    candidates: List[Dict[str, Any]] = []
+    candidates: list[dict[str, Any]] = []
     idx = 1
 
     search_dirs = []
@@ -56,11 +63,18 @@ def scan_bugs(root: Path, cfg: Optional[Dict[str, Any]] = None) -> List[Dict[str
     if not search_dirs:
         search_dirs.append(root)
 
+    excludes = (cfg.get("candidates") or {}).get("A", {}).get("exclude") or []
     for sdir in search_dirs:
         for p in sdir.rglob("*"):
             if not p.is_file() or p.suffix.lower() not in SOURCE_EXTENSIONS:
                 continue
             rel = str(p.relative_to(root))
+            if any(part in SKIP_DIRS for part in Path(rel).parts):
+                continue
+            if rel.endswith(GENERATED_SUFFIXES):
+                continue
+            if excludes and match_any(rel, excludes):
+                continue
             if "test" in rel.lower():
                 continue
 
