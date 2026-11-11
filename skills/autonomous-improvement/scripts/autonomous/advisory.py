@@ -42,10 +42,10 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import EXIT_OK, Fatal, eprint  # noqa: E402
+from common import EXIT_OK, Fatal, eprint
 
 SCHEMA = "advisory/1"
 SEEN_SCHEMA = "advisory-seen/1"
@@ -67,8 +67,51 @@ SECRET_PATTERNS = [
     ),
 ]
 
-SKIP_DIRS = {".git", "node_modules", "__pycache__", ".autonomous", ".venv", "venv"}
-BINARY_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".zip", ".gz", ".whl", ".pdf"}
+SKIP_DIRS = {
+    ".git",
+    ".agents",
+    ".opencode",
+    ".dart_tool",
+    ".pub-cache",
+    ".gradle",
+    ".next",
+    ".nuxt",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    "build",
+    "dist",
+    "target",
+    "node_modules",
+    "__pycache__",
+    ".autonomous",
+    ".venv",
+    "venv",
+}
+BINARY_SUFFIXES = {
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".ico",
+    ".zip",
+    ".gz",
+    ".whl",
+    ".pdf",
+    ".dill",
+    ".so",
+    ".dylib",
+    ".dll",
+    ".a",
+    ".o",
+    ".class",
+    ".jar",
+    ".pyc",
+    ".pyo",
+    ".wasm",
+    ".exe",
+    ".bin",
+}
 
 DEFAULT_SECRET_PATHS = ["."]
 
@@ -84,8 +127,43 @@ def candidate_digest(kind: str, file: str, name: str, extra: str) -> str:
     payload = f"{kind}|{file}|{name}|{extra}"
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
-def iter_text_files(base: Path, patterns: List[str]) -> List[Path]:
-    files: List[Path] = []
+def _git_unignored_files(base: Path) -> list[Path] | None:
+    """Return tracked + unignored files when ``base`` is inside a git worktree."""
+    try:
+        inside = subprocess.run(
+            ["git", "rev-parse", "--is-inside-work-tree"],
+            cwd=str(base),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if inside.returncode != 0 or inside.stdout.strip() != "true":
+            return None
+        proc = subprocess.run(
+            ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+            cwd=str(base),
+            capture_output=True,
+            check=False,
+        )
+        if proc.returncode != 0:
+            return None
+        out: list[Path] = []
+        for raw in proc.stdout.split(b"\0"):
+            if not raw:
+                continue
+            rel = raw.decode("utf-8", errors="surrogateescape")
+            path = base / rel
+            if any(part in SKIP_DIRS for part in Path(rel).parts):
+                continue
+            if not path.is_file() or path.is_symlink() or path.suffix.lower() in BINARY_SUFFIXES:
+                continue
+            out.append(path)
+        return sorted(out)
+    except OSError:
+        return None
+
+def iter_text_files(base: Path, patterns: list[str]) -> list[Path]:
+    files: list[Path] = []
     for pattern in patterns:
         matches = sorted(base.glob(pattern)) if "*" in pattern else [base / pattern]
         for path in matches:
@@ -97,12 +175,16 @@ def iter_text_files(base: Path, patterns: List[str]) -> List[Path]:
                 continue
             files.append(path)
         if pattern in (".", ""):
-            files.extend(
-                p for p in sorted(base.rglob("*"))
-                if p.is_file() and not any(part in SKIP_DIRS for part in p.relative_to(base).parts)
-                and p.suffix.lower() not in BINARY_SUFFIXES and not p.is_symlink()
-            )
-    deduped: List[Path] = []
+            git_files = _git_unignored_files(base)
+            if git_files is not None:
+                files.extend(git_files)
+            else:
+                files.extend(
+                    p for p in sorted(base.rglob("*"))
+                    if p.is_file() and not any(part in SKIP_DIRS for part in p.relative_to(base).parts)
+                    and p.suffix.lower() not in BINARY_SUFFIXES and not p.is_symlink()
+                )
+    deduped: list[Path] = []
     seen: set[str] = set()
     for path in files:
         key = str(path.relative_to(base)) if path.is_relative_to(base) else str(path)
@@ -114,8 +196,8 @@ def iter_text_files(base: Path, patterns: List[str]) -> List[Path]:
 
 def scan_secrets(
     rel: str, line_no: int, raw_line: str
-) -> List[Dict[str, Any]]:
-    findings: List[Dict[str, Any]] = []
+) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
     for rule, pattern in SECRET_PATTERNS:
         for match in pattern.finditer(raw_line):
             value = match.group(1)
@@ -142,7 +224,7 @@ def scan_secrets(
 
 def cmd_secrets(args: argparse.Namespace) -> int:
     base = Path.cwd()
-    candidates: List[Dict[str, Any]] = []
+    candidates: list[dict[str, Any]] = []
     paths = args.paths or DEFAULT_SECRET_PATHS
     for path in iter_text_files(base, paths):
         rel = str(path.relative_to(base)) if path.is_relative_to(base) else str(path)
@@ -162,16 +244,16 @@ def cmd_secrets(args: argparse.Namespace) -> int:
         eprint("    names the finding and stops there.")
     return 1 if candidates else 0
 
-def parse_manifest_pin(line: str) -> Optional[Tuple[str, str]]:
+def parse_manifest_pin(line: str) -> tuple[str, str] | None:
     match = PIN_RE.match(line.strip())
     if not match:
         return None
     return match.group(1), match.group(3)
 
-def parse_version(version: str) -> List[int]:
+def parse_version(version: str) -> list[int]:
     return [int(match) for match in VERSION_PART.findall(version)]
 
-def vcmp(lhs: List[int], rhs: List[int]) -> int:
+def vcmp(lhs: list[int], rhs: list[int]) -> int:
     """Pad both versions on the right (2.2 counts as 2.2.0) and compare."""
     width = max(len(lhs), len(rhs))
     left = lhs + [0] * (width - len(lhs))
@@ -180,7 +262,7 @@ def vcmp(lhs: List[int], rhs: List[int]) -> int:
         return -1
     return 0 if left == right else 1
 
-def satisfies(version: List[int], spec: str) -> bool:
+def satisfies(version: list[int], spec: str) -> bool:
     for part in spec.split(","):
         part = part.strip().rstrip("*.")
         for op in ("<=", ">=", "<", ">", "==", "!="):
@@ -202,7 +284,7 @@ def satisfies(version: List[int], spec: str) -> bool:
             return False
     return True
 
-def spec_upper(spec: str) -> Optional[str]:
+def spec_upper(spec: str) -> str | None:
     """Upper bound of a vulnerable spec as a normalized version string."""
     for part in spec.split(","):
         part = part.strip().rstrip("*.")
@@ -225,7 +307,7 @@ def cmd_deps(args: argparse.Namespace) -> int:
     if not advisory_path.is_file():
         raise Fatal(f"advisory file not found: {advisory_path}")
     advisory = json.loads(advisory_path.read_text(encoding="utf-8"))
-    candidates: List[Dict[str, Any]] = []
+    candidates: list[dict[str, Any]] = []
     lines = manifest.read_text(encoding="utf-8", errors="replace").splitlines()
     for line_no, line in enumerate(lines, start=1):
         pin = parse_manifest_pin(line)
@@ -277,15 +359,15 @@ def cmd_deps(args: argparse.Namespace) -> int:
     emit(args, base, candidates, deduped, "Vulnerable pins are repair candidates; bumps go through the oracle (bump).")
     return 1 if candidates else 0
 
-def apply_state(state_path: Path, candidates: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], int]:
-    seen: Dict[str, Dict[str, Any]] = {}
+def apply_state(state_path: Path, candidates: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+    seen: dict[str, dict[str, Any]] = {}
     if state_path.is_file():
         try:
             seen = json.loads(state_path.read_text(encoding="utf-8")).get("seen", {})
         except json.JSONDecodeError:
             eprint(f"[!] state file unreadable, starting fresh: {state_path}")
             seen = {}
-    fresh: List[Dict[str, Any]] = []
+    fresh: list[dict[str, Any]] = []
     deduped = 0
     for index, candidate in enumerate(candidates):
         digest = candidate["digest"]
@@ -303,7 +385,7 @@ def apply_state(state_path: Path, candidates: List[Dict[str, Any]]) -> Tuple[Lis
 def emit(
     args: argparse.Namespace,
     base: Path,
-    candidates: List[Dict[str, Any]],
+    candidates: list[dict[str, Any]],
     deduped: int,
     note: str,
 ) -> None:
@@ -415,7 +497,7 @@ def cmd_bump(args: argparse.Namespace) -> int:
         print(json.dumps({"status": "red", "dep": args.dep, "from": from_version, "to": args.to}, indent=2))
     return 1
 
-def find_changelog_excerpt(text: str, version: str) -> Optional[str]:
+def find_changelog_excerpt(text: str, version: str) -> str | None:
     for pattern in (rf"^.*\b{re.escape(version)}\b.*$",):
         for match in re.finditer(pattern, text, re.MULTILINE):
             start = match.start()

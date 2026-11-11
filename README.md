@@ -65,7 +65,7 @@ skills/
     docs/       # 2 files
     evals/      # 149 files
     examples/   # 2 files
-    fleet-ops/  # 16 files
+    fleet-ops/  # 19 files
     references/ # 11 files
     scripts/    # 42 files
     tests/      # 23 files

@@ -24,9 +24,11 @@ from pathlib import Path
 from typing import Any
 
 from common import (
+    EXIT_NEGATIVE,
     EXIT_OK,
     UsageError,
     eprint,
+    load_config,
     load_run_records,
     load_worktree_registry,
     main_repo_root,
@@ -899,6 +901,126 @@ def run_dashboard_command(
         return EXIT_OK
 
 
+def evaluate_work_gate(
+    root: Path,
+    cfg: dict[str, Any],
+    fetch_prs_fn: Callable[..., tuple[list[dict[str, Any]], str | None]],
+    evaluate_pr_fn: Callable[[dict[str, Any]], dict[str, Any]],
+    require_gh: bool = False,
+) -> dict[str, Any]:
+    """0-token multi-track wake gate: checks directives, PR tending, survey, backlog, and ledger."""
+    directives = active_directives(root)
+    if directives:
+        first = directives[0]
+        return {
+            "work_available": True,
+            "source": "directive",
+            "reason": f"active owner directive {first.get('id')}: {first.get('text')}",
+        }
+
+    prs_data, _warn = fetch_prs_fn(root, state="open", require_gh=require_gh)
+    claimed_targets: set[str] = set()
+    for p in prs_data:
+        state = evaluate_pr_fn(p)
+        num = state.get("pr")
+        if state.get("checks") == "red":
+            return {
+                "work_available": True,
+                "source": "pr-tend",
+                "reason": f"open PR #{num} has failing checks",
+            }
+        if state.get("owner_ask_pending"):
+            return {
+                "work_available": True,
+                "source": "pr-tend",
+                "reason": f"open PR #{num} has pending owner ask",
+            }
+        body = str(p.get("body") or "")
+        for match in re.finditer(r"Target:\s*`([^`]+)`", body):
+            claimed_targets.add(match.group(1).strip())
+        for f in p.get("files") or []:
+            fp = f.get("path") if isinstance(f, dict) else str(f)
+            if fp:
+                claimed_targets.add(fp)
+
+    try:
+        import survey as survey_mod
+
+        surv = survey_mod.survey_repo(root)
+        chosen = surv.get("chosen")
+        if isinstance(chosen, dict) and not surv.get("saturated"):
+            return {
+                "work_available": True,
+                "source": "survey",
+                "track": chosen.get("track"),
+                "tool": chosen.get("tool"),
+                "stream": chosen.get("stream"),
+                "reason": surv.get("reason") or f"survey selected {chosen.get('tool')}",
+            }
+    except (ImportError, OSError, ValueError, KeyError, RuntimeError) as exc:
+        eprint(f"[debug] survey check skipped in work-gate: {exc}")
+
+    try:
+        import backlog as backlog_mod
+
+        bdata = backlog_mod.harvest_backlog(root, cfg)
+        for item in bdata.get("items") or []:
+            if item.get("status") in ("ready", "lead"):
+                tpaths = item.get("target_paths") or []
+                if any(tp in claimed_targets for tp in tpaths):
+                    continue
+                return {
+                    "work_available": True,
+                    "source": "backlog",
+                    "track": item.get("track"),
+                    "item_id": item.get("id"),
+                    "reason": f"backlog {item.get('id')} ({item.get('track')}): {item.get('title')}",
+                }
+    except (ImportError, OSError, ValueError, KeyError, RuntimeError) as exc:
+        eprint(f"[debug] backlog check skipped in work-gate: {exc}")
+
+    cands = _next_candidates_preview(root, cfg, claimed_targets, limit=1)
+    if cands:
+        c = cands[0]
+        return {
+            "work_available": True,
+            "source": "ledger",
+            "stream": c["stream"],
+            "target": c["target"],
+            "reason": f"stream {c['stream']} target {c['target']} ({c['reason']})",
+        }
+
+    return {
+        "work_available": False,
+        "source": "none",
+        "reason": "no unclaimed multi-track work or pending tending",
+    }
+
+
+def cmd_work_gate(
+    args: argparse.Namespace,
+    fetch_prs_fn: Callable[..., tuple[list[dict[str, Any]], str | None]],
+    evaluate_pr_fn: Callable[[dict[str, Any]], dict[str, Any]],
+) -> int:
+    root = main_repo_root()
+    cfg = load_config(root, getattr(args, "config", None))
+    res = evaluate_work_gate(
+        root,
+        cfg,
+        fetch_prs_fn=fetch_prs_fn,
+        evaluate_pr_fn=evaluate_pr_fn,
+        require_gh=bool(getattr(args, "require_gh", False)),
+    )
+    if getattr(args, "json", False):
+        print(json.dumps(res, indent=2))
+    else:
+        if res["work_available"]:
+            print(f"work-gate: {res['reason']}")
+        else:
+            print(f"work-gate: quiet ({res['reason']})")
+    return EXIT_OK if res["work_available"] else EXIT_NEGATIVE
+
+
 def register_cockpit_subparsers(subparsers: Any) -> None:
     # dashboard
     p_dash = subparsers.add_parser(
@@ -956,3 +1078,12 @@ def register_cockpit_subparsers(subparsers: Any) -> None:
     p_wrk.add_argument("--keep", type=int, default=20, help="terminal workers to keep on prune (default: 20)")
     p_wrk.add_argument("--config", help="path to config.json")
     p_wrk.add_argument("--json", action="store_true", help="emit JSON")
+
+    # work-gate
+    p_wg = subparsers.add_parser(
+        "work-gate",
+        help="0-token multi-track wake gate (directives, PR tending, survey, backlog, ledger)",
+    )
+    p_wg.add_argument("--config", help="path to config.json")
+    p_wg.add_argument("--require-gh", action="store_true", help="fail if gh is unavailable")
+    p_wg.add_argument("--json", action="store_true", help="emit JSON")

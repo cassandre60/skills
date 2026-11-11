@@ -507,21 +507,32 @@ def check_simplification(root: Path) -> tuple[float, dict[str, Any]]:
 def check_fuzz(root: Path, cfg: dict[str, Any]) -> tuple[float, dict[str, Any]]:
     """Check for parser-shaped, decoder, or tokenizer targets suitable for fuzzing."""
     parser_patterns = re.compile(r"(?:parse|decode|lexer|token|grammar|deserializ)", re.IGNORECASE)
+    excludes = ((cfg.get("candidates") or {}).get("A") or {}).get("exclude") or []
+    generated_suffixes = (".g.dart", ".freezed.dart", ".mocks.dart", ".gen.dart", ".pb.go", "_pb2.py", ".d.ts")
+    try:
+        from common import match_any
+    except ImportError:
+        def match_any(path: str, patterns: Any) -> bool:
+            import fnmatch
+            return any(fnmatch.fnmatch(path, pat) for pat in patterns)
     matches: list[str] = []
     for d in ("src", "lib"):
         p = root / d
         if p.is_dir():
             for f in p.rglob("*"):
                 if f.is_file() and f.suffix.lower() in (".py", ".dart", ".ts", ".js", ".go", ".rs"):
+                    rel = str(f.relative_to(root))
+                    if f.name.endswith(generated_suffixes) or (excludes and match_any(rel, excludes)):
+                        continue
                     if "test" in f.name.lower():
                         continue
                     if parser_patterns.search(f.name):
-                        matches.append(str(f.relative_to(root)))
+                        matches.append(rel)
                         continue
                     try:
                         content = f.read_text(encoding="utf-8", errors="replace")
                         if re.search(r"\b(?:def\s+parse_|class\s+.*Parser|fn\s+parse_|function\s+parse)", content):
-                            matches.append(str(f.relative_to(root)))
+                            matches.append(rel)
                     except Exception:
                         pass
     if matches:
@@ -743,7 +754,7 @@ def survey_repo(
         import datetime
         sat_data = {
             "saturated": True,
-            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "timestamp": datetime.datetime.now(datetime.UTC).isoformat(),
             "reason": reason,
         }
         (root / ".autonomous").mkdir(parents=True, exist_ok=True)

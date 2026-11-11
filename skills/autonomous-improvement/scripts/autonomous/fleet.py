@@ -73,6 +73,7 @@ from fleet_cockpit import (
     _render_evidence_body,
     active_directive_reasons,
     cmd_directive,
+    cmd_work_gate,
     cmd_worker,
     format_directives_block,
     register_cockpit_subparsers,
@@ -1295,6 +1296,7 @@ def _wake_prompt(
 ) -> str:
     ledger = cfg.get("ledger_path") or "docs/AUTONOMOUS_WORK_LEDGER.md"
     merge_policy = (cfg.get("fleet", {}) or {}).get("merge_policy", "never")
+    skill_dir = Path(__file__).resolve().parent
     lines = [
         "You are a FRESH autonomous-improvement Orchestrator wake. You have no",
         "memory beyond the files named here; that is by design. Work from them,",
@@ -1304,6 +1306,7 @@ def _wake_prompt(
         f"- Snapshot (just refreshed, deterministic): {state_dir / 'snapshot.json'}",
         f"- Journal (append your decisions + one state line per open PR): {state_dir / 'journal.md'}",
         f"- Ledger: {root / ledger}",
+        f"- Skill scripts: {skill_dir}",
         f"Main SHA at wake: {snapshot.get('main_sha', 'unknown')}",
         f"Wake reasons: {', '.join(brain['reasons'])}",
         "",
@@ -1323,16 +1326,20 @@ def _wake_prompt(
     lines += [
         "",
         "Duties, in order:",
-        "1. Run `python3 scripts/autonomous/fleet.py doctor`. On any hard",
+        f"1. Run `python3 {skill_dir / 'fleet.py'} doctor`. On any hard",
         "   failure, record it in the journal and STOP: blocked-with-reason",
         "   beats dispatching from a drifted deployment.",
-        "2. Run `python3 scripts/autonomous/fleet.py govern --json` and obey it.",
+        f"2. Run `python3 {skill_dir / 'fleet.py'} govern --json` and obey it.",
         "3. Tend before generating: every red or owner-ask PR above gets fixed,",
         "   answered, or re-asked (references/04 CI green loop).",
-        "4. Only if govern allows dispatch: pick work with",
-        "   `ledger.py next --stream A --rank risk`, claim it with",
-        "   `fleet.py claim` BEFORE working, and finish through evidence.py +",
-        "   `fleet.py publish`. Never edit production code in a test PR.",
+        "4. Only if govern allows dispatch: select the highest-priority eligible",
+        f"   work across ALL tracks using `python3 {skill_dir / 'survey.py'} --json`",
+        f"   and `python3 {skill_dir / 'backlog.py'} harvest --json` (falling back to",
+        f"   `python3 {skill_dir / 'ledger.py'} next --stream A --rank risk` only",
+        "   when mutation or test-gap is selected). Claim it with `fleet.py claim`",
+        "   BEFORE working, register/update `fleet.py worker`, verify via",
+        "   `orchestrator.py verify-gate`, and finish through `fleet.py publish`",
+        "   (or issue mode for T1/research/security findings).",
         f"5. Merge policy for this repo: {merge_policy}. When in doubt, do not merge.",
         "6. Append decisions to the journal, then exit. A later fresh wake",
         "   continues from the files — nothing may live only in this session.",
@@ -2012,6 +2019,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             return cmd_directive(args)
         if args.command == "worker":
             return cmd_worker(args)
+        if args.command == "work-gate":
+            return cmd_work_gate(args, fetch_gh_prs, evaluate_pr_checks)
         raise UsageError(f"unknown command: {args.command}")
     except (UsageError, EnvError, Fatal) as exc:
         return format_exit(exc)

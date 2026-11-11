@@ -39,10 +39,10 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import EXIT_OK, Fatal, eprint  # noqa: E402
+from common import EXIT_OK, Fatal, eprint, load_config
 
 SCHEMA = "docs-truth/1"
 CODE_FENCE = re.compile(r"^```\s*([A-Za-z][\w+-]*)")
@@ -55,14 +55,27 @@ NOQA_COMMENT = re.compile(r"#\s*noqa\b.*$", re.IGNORECASE)
 
 DEFAULT_DOC_PATHS = ["README.md", "AGENTS.md", "CHANGELOG*.md", "docs"]
 DEFAULT_SOURCE_DIRS = ["src", "lib", "scripts"]
+TEST_FILE_PATTERNS = (
+    re.compile(r"^test_.*\.py$", re.IGNORECASE),
+    re.compile(r".*_test\.(?:py|dart|go|rs|kt|java|ts|tsx|js|jsx)$", re.IGNORECASE),
+    re.compile(r".*\.(?:test|spec)\.[A-Za-z0-9]+$", re.IGNORECASE),
+    re.compile(r".*_spec\.rb$", re.IGNORECASE),
+)
+SKIP_TEST_DIRS = {".git", ".dart_tool", ".agents", ".opencode", "build", "node_modules", "__pycache__", ".autonomous", ".venv", "venv"}
 
 
-def parse_fences(text: str) -> List[Dict[str, Any]]:
-    blocks: List[Dict[str, Any]] = []
+def _is_test_source(rel_path: Path) -> bool:
+    if any(part in SKIP_TEST_DIRS for part in rel_path.parts):
+        return False
+    return any(pat.match(rel_path.name) for pat in TEST_FILE_PATTERNS)
+
+
+def parse_fences(text: str) -> list[dict[str, Any]]:
+    blocks: list[dict[str, Any]] = []
     in_fence = False
     lang = ""
     runnable = False
-    body: List[str] = []
+    body: list[str] = []
     start_line = 0
     for lineno, line in enumerate(text.splitlines(), start=1):
         if not in_fence:
@@ -90,9 +103,9 @@ def parse_fences(text: str) -> List[Dict[str, Any]]:
     return blocks
 
 
-def module_to_files(module: str, source_roots: List[Path]) -> List[Path]:
+def module_to_files(module: str, source_roots: list[Path]) -> list[Path]:
     rel = Path(module.replace(".", "/") + ".py")
-    found: List[Path] = []
+    found: list[Path] = []
     for root in source_roots:
         for candidate in (root / rel, root.parent / rel):
             if candidate.is_file() and candidate not in found:
@@ -152,9 +165,9 @@ _FALLBACK_STDLIB = frozenset(
 
 
 def scan_symbol_drift(
-    doc: Path, base: Path, blocks: List[Dict[str, Any]], source_roots: List[Path]
-) -> List[Dict[str, Any]]:
-    findings: List[Dict[str, Any]] = []
+    doc: Path, base: Path, blocks: list[dict[str, Any]], source_roots: list[Path]
+) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
     rel_doc = _rel_label(doc, base)
     stdlib = getattr(sys, "stdlib_module_names", _FALLBACK_STDLIB)
     for block in blocks:
@@ -208,9 +221,9 @@ def scan_symbol_drift(
 
 
 def scan_runnable(
-    doc: Path, base: Path, blocks: List[Dict[str, Any]], timeout: int = 30
-) -> List[Dict[str, Any]]:
-    findings: List[Dict[str, Any]] = []
+    doc: Path, base: Path, blocks: list[dict[str, Any]], timeout: int = 30
+) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
     rel_doc = _rel_label(doc, base)
     for block in blocks:
         if not block["runnable"] or block["lang"] not in ("python", "py"):
@@ -242,8 +255,8 @@ def scan_runnable(
     return findings
 
 
-def scan_links(doc: Path, base: Path) -> List[Dict[str, Any]]:
-    findings: List[Dict[str, Any]] = []
+def scan_links(doc: Path, base: Path) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
     rel_doc = _rel_label(doc, base)
     text = doc.read_text(encoding="utf-8", errors="replace")
     for lineno, line in enumerate(text.splitlines(), start=1):
@@ -268,23 +281,38 @@ def scan_links(doc: Path, base: Path) -> List[Dict[str, Any]]:
     return findings
 
 
-def scan_spec_trace(spec: Path, tests_root: Optional[Path], base: Path) -> List[Dict[str, Any]]:
+def scan_spec_trace(
+    spec: Path,
+    tests_root: Path | None,
+    base: Path,
+    spec_id_re: re.Pattern[str] = SPEC_ID,
+    ignore_ids: set[str] | None = None,
+) -> list[dict[str, Any]]:
     spec_text = spec.read_text(encoding="utf-8", errors="replace")
-    defined = set(SPEC_ID.findall(spec_text))
+    ignored = ignore_ids or set()
+    defined = set(spec_id_re.findall(spec_text)) - ignored
     if not defined:
         return []
-    cited: Dict[str, str] = {}
+    cited: dict[str, str] = {}
     if tests_root is not None and tests_root.is_dir():
-        for test_file in sorted(tests_root.rglob("*.py")):
-            if not test_file.name.startswith("test_"):
+        for test_file in sorted(tests_root.rglob("*")):
+            if not test_file.is_file():
+                continue
+            try:
+                rel = test_file.relative_to(tests_root)
+            except ValueError:
+                rel = test_file
+            if not _is_test_source(rel):
                 continue
             for lineno, line in enumerate(
                 test_file.read_text(encoding="utf-8", errors="replace").splitlines(), start=1
             ):
                 cleaned_line = NOQA_COMMENT.sub("", line)
-                for match in SPEC_ID.findall(cleaned_line):
+                for match in spec_id_re.findall(cleaned_line):
+                    if match in ignored:
+                        continue
                     cited.setdefault(match, f"{_rel_label(test_file, base)}:{lineno}")
-    findings: List[Dict[str, Any]] = []
+    findings: list[dict[str, Any]] = []
     for spec_id in sorted(defined - set(cited)):
         findings.append(
             {
@@ -324,7 +352,7 @@ issue-only (T1) with this body attached; the finder never edits.
 
 def cmd_check(args: argparse.Namespace) -> int:
     base = Path.cwd()
-    docs: List[Path] = []
+    docs: list[Path] = []
     for pattern in args.paths or DEFAULT_DOC_PATHS:
         path = base / pattern
         if path.is_dir():
@@ -335,13 +363,13 @@ def cmd_check(args: argparse.Namespace) -> int:
                 docs.append(md)
         elif path.is_file():
             docs.append(path)
-    source_roots: List[Path] = []
+    source_roots: list[Path] = []
     for pattern in args.source or DEFAULT_SOURCE_DIRS:
         path = base / pattern
         if path.is_dir():
             source_roots.append(path)
 
-    candidates: List[Dict[str, Any]] = []
+    candidates: list[dict[str, Any]] = []
     spec = Path(args.spec) if args.spec else None
     if spec is None:
         for name in ("SPEC.md", "docs/SPEC.md"):
@@ -349,8 +377,23 @@ def cmd_check(args: argparse.Namespace) -> int:
                 spec = base / name
                 break
     if spec is not None and spec.is_file():
-        tests_root = next(((base / n) for n in ("tests", "test") if (base / n).is_dir()), None)
-        candidates.extend(scan_spec_trace(spec, tests_root, base))
+        cfg: dict[str, Any] = {}
+        try:
+            cfg = load_config(base)
+        except Exception:
+            cfg = {}
+        dt_cfg = (cfg.get("docs_truth") or {}) if isinstance(cfg, dict) else {}
+        spec_id_re = SPEC_ID
+        raw_pat = dt_cfg.get("spec_id_pattern")
+        if isinstance(raw_pat, str) and raw_pat.strip():
+            try:
+                spec_id_re = re.compile(raw_pat)
+            except re.error:
+                spec_id_re = SPEC_ID
+        ignore_ids = {str(x) for x in (dt_cfg.get("ignore_spec_ids") or [])}
+        if dt_cfg.get("spec_trace", True):
+            tests_root = next(((base / n) for n in ("tests", "test") if (base / n).is_dir()), None)
+            candidates.extend(scan_spec_trace(spec, tests_root, base, spec_id_re=spec_id_re, ignore_ids=ignore_ids))
 
     # Spec-shaped files are the contract side: a drifted symbol there is an
     # ISSUE (direction call), not a candidate the runner auto-flags; and the

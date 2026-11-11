@@ -40,6 +40,11 @@
 #   ORCH_COCKPIT_PUSH  set to 1 to also push terminal Done/Blocked summaries via
 #                      /synthetic (default: 0 = tab badge + cockpit-events.log only)
 #   ORCH_WORK_GATE     optional executable gate to allow wake on backlog work even if PR state unchanged
+#   ORCH_WAKE_ON_BACKLOG set to 1 to run built-in `fleet.py work-gate` (all V3 tracks)
+#                      when PR state is unchanged (default: 0)
+#   ORCH_PROMPT_APPENDIX optional file appended to the built-in multi-track prompt
+#   ORCH_AUTO_UPDATE   set to 1 to run throttled self-update before each wake
+#                      (default: 0; interval via ORCH_AUTO_UPDATE_INTERVAL=21600)
 #
 # Exit codes: 0 = quiet (unchanged state) or the harness run completed;
 #             2 = misconfiguration (missing ORCH_REPO / predicate / a
@@ -64,9 +69,50 @@ REPO="${ORCH_REPO:-$PWD}"
 LOG="$STATE_DIR/wake.log"
 FAIL_FILE="$STATE_DIR/wake_failures"
 HB="$STATE_DIR/last_wake"
+mkdir -p "$STATE_DIR"
+
+# 0. Throttled self-update from remote skills repo (when ORCH_AUTO_UPDATE=1).
+# Runs before resolving FLEET_PY / LADDER / flock so an updated script takes
+# effect immediately on the current tick via clean re-exec.
+if [ "${ORCH_AUTO_UPDATE:-0}" = "1" ] && [ "${ORCH_REEXECED:-0}" != "1" ]; then
+  UPDATE_SCRIPT="${ORCH_UPDATE_SCRIPT:-}"
+  if [ -z "$UPDATE_SCRIPT" ]; then
+    for cand in "$(cd "$(dirname "$0")" && pwd)/update-skills.sh" "$STATE_DIR/update-skills.sh"; do
+      if [ -x "$cand" ]; then
+        UPDATE_SCRIPT="$cand"
+        break
+      fi
+    done
+  fi
+  if [ -n "$UPDATE_SCRIPT" ] && [ -x "$UPDATE_SCRIPT" ]; then
+    UPD_STAMP="$STATE_DIR/last_skills_update"
+    UPD_INTERVAL="${ORCH_AUTO_UPDATE_INTERVAL:-21600}"
+    UPD_AGE="$UPD_INTERVAL"
+    if [ -f "$UPD_STAMP" ]; then
+      UPD_AGE=$(( $(date +%s) - $(stat -c %Y "$UPD_STAMP" 2>/dev/null || echo 0) ))
+    fi
+    if [ "$UPD_AGE" -ge "$UPD_INTERVAL" ]; then
+      PRE_SHA="$(sha256sum "$0" 2>/dev/null | awk '{print $1}' || true)"
+      ORCH_STATE_DIR="$STATE_DIR" "$UPDATE_SCRIPT" >>"$LOG" 2>&1 || true
+      date +%s >"$UPD_STAMP" 2>/dev/null || true
+      POST_SHA="$(sha256sum "$0" 2>/dev/null | awk '{print $1}' || true)"
+      if [ -n "$PRE_SHA" ] && [ -n "$POST_SHA" ] && [ "$PRE_SHA" != "$POST_SHA" ] && [ -x "$0" ]; then
+        echo "$(date -Is) self-updated launcher ($PRE_SHA -> $POST_SHA); re-execing" >>"$LOG"
+        exec env ORCH_REEXECED=1 "$0" "$@"
+      fi
+    fi
+  fi
+fi
+
 # The fleet script used for the predicate and the model pool (R-08: env
 # override, never an edited script).
 FLEET_PY="${ORCH_FLEET_PY:-$REPO/scripts/autonomous/fleet.py}"
+SKILL_SCRIPTS_DIR="${ORCH_SKILL_SCRIPTS_DIR:-}"
+if [ -z "$SKILL_SCRIPTS_DIR" ] && [ -f "$FLEET_PY" ]; then
+  SKILL_SCRIPTS_DIR="$(cd "$(dirname "$FLEET_PY")" && pwd)"
+fi
+[ -n "$SKILL_SCRIPTS_DIR" ] || SKILL_SCRIPTS_DIR="$REPO/scripts/autonomous"
+
 # Ladder precedence: ORCH_MODEL_LADDER env > the recorded model pool
 # (fleet.model_pool, free-first; issue #103) > empty (one harness-default
 # attempt). A pool that fails to resolve degrades to empty, never blocks.
@@ -84,8 +130,6 @@ FAIL_TTL="${ORCH_FAILURE_TTL:-604800}"
 EVENTS_LOG="$STATE_DIR/cockpit-events.log"
 PROMPT_FILE="${ORCH_PROMPT_FILE:-$STATE_DIR/wake-prompt.md}"
 WAKE_CMD="${ORCH_WAKE_CMD:-opencode run \${2:+-m \"\$2\"} \"\$1\"}"
-
-mkdir -p "$STATE_DIR"
 
 notify_cockpit() { # $1: badge, $2: text, $3: terminal_push (0|1)
   local badge="$1"
@@ -180,9 +224,12 @@ NEEDS_BRAIN="$(
 if [ "${NEEDS_BRAIN:-no}" != "yes" ]; then
   # PR state can be frozen for days while the owner is away (open PRs are
   # handled later). The digest alone would park the factory forever, so a
-  # configured work-gate may still wake it when the backlog has a free target.
+  # configured work-gate or ORCH_WAKE_ON_BACKLOG=1 still wakes when V3
+  # multi-track work is available.
   if [ -n "${ORCH_WORK_GATE:-}" ] && [ -x "$ORCH_WORK_GATE" ] && "$ORCH_WORK_GATE" >>"$LOG" 2>&1; then
     echo "$(date -Is) work-gate: backlog work available; waking despite unchanged PR state" >>"$LOG"
+  elif [ "${ORCH_WAKE_ON_BACKLOG:-0}" = "1" ] && (cd "$REPO" && python3 "$PREDICATE" work-gate >>"$LOG" 2>&1); then
+    echo "$(date -Is) fleet work-gate: multi-track backlog work available; waking despite unchanged PR state" >>"$LOG"
   else
     echo "$(date -Is) quiet: state unchanged since the last wake (0 tokens)" >>"$LOG"
     notify_cockpit "💤 Idle" ""
@@ -292,10 +339,20 @@ if [ -n "${ORCH_PROMPT_FILE:-}" ]; then
 else
   PROMPT="$(cat "$PROMPT_FILE" 2>/dev/null || true)"
   if [ -z "$PROMPT" ]; then
-    PROMPT="Read fleet-ops/references/05-unattended-operation.md §Stateless wake and run one wake: \
-read state/*.json + the ledger + the journal tail, act on fleet.py needs-brain's reasons \
-(fix/triage red PRs, drive green PRs to merge), then exit. Do not resume a session."
+    PROMPT="You are a fresh autonomous-improvement Orchestrator wake in $REPO (run one unit of work, then exit).
+Skill scripts dir (auto-updated): $SKILL_SCRIPTS_DIR
+
+1. Read active owner directives: \`python3 $SKILL_SCRIPTS_DIR/fleet.py directive list\` — obey active directives first.
+2. Check open PRs (\`gh pr list --state open\`) and \`python3 $SKILL_SCRIPTS_DIR/fleet.py govern --json\`. Tend any red/owner-ask PRs before starting new work.
+3. Otherwise run V3 multi-track discovery across ALL tracks (never limit yourself to mutation tests):
+   - \`python3 $SKILL_SCRIPTS_DIR/survey.py --json\` (ranks security, docs-reconcile, CI audit, defect-repair, test-gap, complexity, simplification, fuzz, mutation)
+   - \`python3 $SKILL_SCRIPTS_DIR/backlog.py harvest --json\` (and \`ledger.py next --stream A --rank risk\` when mutation or test-gap is selected)
+4. Claim your chosen item/target BEFORE working (\`fleet.py claim\`), isolate in your own git worktree, register/update your worker on the Master Cockpit (\`fleet.py worker register\` / \`update\`), verify fail-to-pass + \`orchestrator.py verify-gate\`, and publish (\`fleet.py publish\` or issue mode for T1/security/research).
+5. Clean up your task worktree & build artifacts before exiting; record the run (\`runrecord.py write\`) and exit 0 (or exit 3 if hard-blocked)."
   fi
+fi
+if [ -n "${ORCH_PROMPT_APPENDIX:-}" ] && [ -r "$ORCH_PROMPT_APPENDIX" ]; then
+  PROMPT="$PROMPT"$'\n\n'"$(cat "$ORCH_PROMPT_APPENDIX" 2>/dev/null || true)"
 fi
 
 candidates=()
@@ -318,7 +375,7 @@ echo "$(date -Is) candidates: ${candidates[*]:-<harness-default>}" >>"$LOG"
 OUT="$STATE_DIR/wake.out"
 # The harness must start inside the repository: AGENTS.md, project config and
 # the session project namespace are cwd-derived. Without this the wake lands
-# in $HOME's project, so the owner's ChessSRS TUI never shows the tab.
+# in $HOME's project, so the repo's TUI tab never shows the session.
 cd "$REPO" || { echo "$(date -Is) repo missing: $REPO; no launch" >>"$LOG"; exit 2; }
 echo "$(date -Is) launch cwd=$(pwd)" >>"$LOG"
 attempt=0

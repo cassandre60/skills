@@ -88,7 +88,11 @@ headless run per wake:
 
 Install it next to the timer (e.g. a `systemd --user` timer calling it
 every few minutes) and point `ORCH_WAKE_CMD` at your harness' one-shot form
-from the adapter table above. `fleet-ops/tests/stateless_wake_test.sh` exercises it
+from the adapter table above. Set `ORCH_WAKE_ON_BACKLOG=1` so `fleet.py work-gate`
+still wakes when PR state is frozen on owner review but multi-track work
+(`survey.py` / `backlog.py` / `ledger.py`) exists, and `ORCH_AUTO_UPDATE=1`
+(plus `fleet-ops/assets/skills-updater.timer` / `update-skills.sh`) so the skill
+bundle and wake runners self-update safely after test verification. `fleet-ops/tests/stateless_wake_test.sh` exercises it
 against a stub harness CLI and a stub `gh`.
 
 ## Cold start (fallback: immortal session)

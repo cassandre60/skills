@@ -1,0 +1,9 @@
+[Unit]
+Description=Daily skill install & runner updater (syncs from cassandre60/skills main)
+
+[Service]
+Type=oneshot
+EnvironmentFile=-%h/.local/share/orchestrator/watchdog.env
+ExecStart=%h/.local/share/orchestrator/update-skills.sh
+TimeoutStartSec=10min
+Environment=HOME=%h
