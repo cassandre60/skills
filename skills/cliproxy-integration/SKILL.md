@@ -187,6 +187,7 @@ Work this ladder top-down. Each rung eliminates a class. Do not skip to a fix.
 | `model_not_found` right after a base-url change, gateway log shows a doubled path (`.../v1beta/openai/v1beta/models/...`) | group `base-url` already contains the path the gateway appends | `references/01-wiring.md` |
 | Every model works, one doesn't | that upstream | `references/02-upstream-401.md` |
 | 429 / "no quota" on some models only | quota semantics | `references/03-quota.md` |
+| A named account "still has quota" but is never selected | credential excluded from the candidate set (disabled flag / dead refresh / pinned busy) | `references/03-quota.md` |
 | Pool-wide failure after a change | egress / network | `references/04-network.md` |
 | Gateway unstable, config reverts | two writers | `references/05-conflicts.md` |
 | Given a file of API keys, some dead | key onboarding | `references/06-key-dump-onboarding.md` |

@@ -288,3 +288,33 @@ which cooled all 33 pool keys in a single run against a tight quota. Retrying ha
 made it worse; waiting (or restarting the gateway to clear in-memory cooldowns) fixed
 it. **Rule:** when every credential cools at once, stop traffic first, then diagnose —
 each additional probe is also load.
+
+## The two files that differed by word order
+
+A pool held `antigravity-cassandre.mansour_gmail.com.json` and
+`antigravity-mansour.cassandre_gmail.com.json` — the same two words in both orders. Asked
+why an account "with quota" was never selected, the session grepped journal lines for
+`cassandre.mansour`, found the `disabled: true` file by that name, re-enabled it, and
+reported the fix. The user's account was the *other* file: enabled, token fresh, and still
+absent from the cooldown line's candidate list with no logged failure — most plausibly
+pinned by an in-flight/session-affinity hold, though that was never confirmed. The
+re-enable was reverted before anything routed through it (journal silence + two
+gateway-refused probes in that window), but the first answer was confidently wrong about
+*which* file it had fixed.
+
+**Rules this produced:** quote credential filenames from the log line verbatim and grep
+with an anchored pattern (`auth_file=antigravity-a\.b`), never from memory; when two names
+differ only by ordering, state the full `auth_file=...` string in the reply so the user
+can correct it in one glance.
+
+## The restart rule, refined by its own counterexample
+
+The rule said: "`All credentials ... cooling down` → restart to clear in-memory cooldown."
+The pool's cooldowns had been recorded *by the current instance* hours after its own
+restart, with `remaining` values aligned to a common reset boundary (~130h) — upstream
+reset times parsed out of real 429 responses, not stale state. A restart there would have
+cleared the most accurate data available, re-fired the 429s, and re-cooled everything.
+**Rule this produced:** restart clears cooldowns, but only *suspect* cooldowns are worth
+clearing; reset-aligned remainings recorded fresh are upstream truth. And an
+interval-retrying client defeats the wait anyway — it re-cools each credential at lift
+time — so stop the client before the earliest lift, then probe once.
