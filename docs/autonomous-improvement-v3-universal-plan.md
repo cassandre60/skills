@@ -611,58 +611,58 @@ new content goes into references; README regenerated with
 stays rejected by `ledger.py` until its finder, oracle, and eval fixture
 land.
 
-### Milestone 1: Close the Rate-Limit Gaps (P0)
-- [ ] Add `main` HEAD SHA, labelled issues, and human-comment timestamps to
+### Milestone 1: Close the Rate-Limit Gaps (P0) — *Complete (PR #150)*
+- [x] Add `main` HEAD SHA, labelled issues, and human-comment timestamps to
   `_wake_digest` in `fleet.py` (no new `state_gate.py`). *Test: an idle
   fleet with a moved `main` reports `needs_brain: true`; unchanged state
   stays quiet.*
-- [ ] Have `fleet.py wake` read and write the shared per-model cooldown list
+- [x] Have `fleet.py wake` read and write the shared per-model cooldown list
   (same semantics as `model_failures` / `wake_failures`), with `Retry-After`
   when available and outage-class failures not parked. *Test: a stub harness
   returning a 429 line parks that model; the next tick skips it; an outage
   line parks nothing.*
-- [ ] Add the circuit breaker plus `fleet.py reset-circuit`, counting only
+- [x] Add the circuit breaker plus `fleet.py reset-circuit`, counting only
   failed or traceless wakes. *Test: three `no gap` wakes do not trip it;
   three `launch-failed` wakes do.*
 
-### Milestone 2: Survey Signals for the Missing Tracks (P1)
+### Milestone 2: Survey Signals for the Missing Tracks (P1) — *Complete (PR #151)*
 This milestone attacks the diagnosed root cause directly.
-- [ ] Add `test_gap`, `ci_audit`, and `complexity` signals to `survey.py`,
+- [x] Add `test_gap`, `ci_audit`, and `complexity` signals to `survey.py`,
   each backed by a finder script, so a clean repo with real gaps no longer
   defaults to mutation. *Test/eval: a fixture repo with green CI, one
   untested core module, and unaudited Stream A targets must pick the
   test-gap pass, not mutation.*
-- [ ] Replace the hardcoded `0.0` strengths for `simplification` and `fuzz`
+- [x] Replace the hardcoded `0.0` strengths for `simplification` and `fuzz`
   with real signals (the `simplify_gate.py finder` count; parser-shaped
   targets for fuzz).
-- [ ] Add a non-Python eval fixture for each new finder (e.g. Dart and
+- [x] Add a non-Python eval fixture for each new finder (e.g. Dart and
   TypeScript).
 
-### Milestone 3: Backlog, Fingerprints & Item Claims (P1)
-- [ ] Implement the `.autonomous/backlog.json` derived cache with the §5.2
+### Milestone 3: Backlog, Fingerprints & Item Claims (P1) — *Complete (PR #152)*
+- [x] Implement the `.autonomous/backlog.json` derived cache with the §5.2
   fingerprint, plus a `harvest` entrypoint that rebuilds it.
-- [ ] Add `fleet.py claim --item` with fingerprint overlap checks against
+- [x] Add `fleet.py claim --item` with fingerprint overlap checks against
   open PRs and issues.
-- [ ] Extend the ledger with idea fingerprints and default-expiring
+- [x] Extend the ledger with idea fingerprints and default-expiring
   idea-level rejections; extend `ledger.py sync-rejections` to read them
   from closed PRs and `not planned` issues.
-- [ ] Add the `bug_scout` and `upstream` harvesters (leads only, T1).
+- [x] Add the `bug_scout` and `upstream` harvesters (leads only, T1).
 
-### Milestone 4: Track Briefs & Track-Specific Gates (P2)
-- [ ] Add track briefs to `references/04-workflow-and-roles.md`, or one
+### Milestone 4: Track Briefs & Track-Specific Gates (P2) — *Complete (PR #155)*
+- [x] Add track briefs to `references/04-workflow-and-roles.md`, or one
   short reference per track. Keep each brief under ~30 lines.
-- [ ] Wire the track gates: `actionlint`/schema for `ci`, a killed mutant
+- [x] Wire the track gates: `actionlint`/schema for `ci`, a killed mutant
   for `test`, red→green for `bug`, the J/M oracle for `refactor`, and
   issue-only for `research`.
-- [ ] Make `fleet.diff_budget` enforced in `orchestrator.py verify-gate`.
-- [ ] Add track caps and the anti-starvation guard to `fleet.py govern` /
+- [x] Make `fleet.diff_budget` enforced in `orchestrator.py verify-gate`.
+- [x] Add track caps and the anti-starvation guard to `fleet.py govern` /
   `survey.py`.
 
-### Milestone 5: Honest Halt & Deep Standby (P2)
-- [ ] Add a `saturated` outcome to `survey.py` / `runrecord.py` `OUTCOMES` when §3.3's
+### Milestone 5: Honest Halt & Deep Standby (P2) — *Complete (PR #157)*
+- [x] Add a `saturated` outcome to `survey.py` / `runrecord.py` `OUTCOMES` when §3.3's
   conditions hold, and a Saturation section in the `fleet.py stats` owner
   digest.
-- [ ] Suppress the scheduled-interval digest bucket for 24–48 h while
+- [x] Suppress the scheduled-interval digest bucket for 24–48 h while
   saturated; event-driven wakes stay live.
 - [ ] Optional, gated on a 0-token detector: advisory-feed and
   upstream-release wake triggers.
