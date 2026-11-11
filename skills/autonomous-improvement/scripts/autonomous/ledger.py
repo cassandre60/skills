@@ -38,7 +38,6 @@ from common import (
     STREAMS,
     UsageError,
     candidate_paths,
-    config_path,
     escape_cell as esc,
     format_exit,
     git,
@@ -330,7 +329,7 @@ def _candidate_records(
                         "test": test,
                         "test_hash": None,
                         "composite_hash": composite_hash(source_hash, None),
-                        "skip": f"no test file mapped (require_test is true)",
+                        "skip": "no test file mapped (require_test is true)",
                         "priority": False,
                     }
                 )

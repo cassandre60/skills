@@ -16,13 +16,11 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 from common import (
-    EXIT_ENV,
     EXIT_NEGATIVE,
     EXIT_OK,
-    EXIT_USAGE,
     EnvError,
     UsageError,
     format_exit,

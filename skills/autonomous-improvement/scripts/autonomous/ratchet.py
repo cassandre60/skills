@@ -33,7 +33,6 @@ import argparse
 import fnmatch
 import json
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -185,7 +184,6 @@ def cmd_check(args: argparse.Namespace) -> int:
         return 2
 
     base_ref = cfg.get("base_ref") or "main"
-    patch_file = Path(args.diff) if args.diff else None
     with tempfile.TemporaryDirectory(prefix="ratchet-check-") as tmp:
         holder = Path(tmp) / "change.patch"
         holder.write_text(patch_text, encoding="utf-8")
