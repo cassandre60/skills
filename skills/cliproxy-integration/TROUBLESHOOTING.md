@@ -81,6 +81,7 @@ fixed both protocol surfaces.
 | Panel says "access available" but requests fail | the **weekly** meter is spent; the short window being green doesn't matter | read both meters |
 | Some models fail, siblings work | quota **groups** — models share an allowance | probe one model per advertised group |
 | `All credentials ... cooling down` | gateway-side state | restart to clear in-memory cooldown, then re-read reality |
+| Instant 429 on every account for one model; tiny/no-system prompts pass; fresh chats fail | upstream client-name filter on the system prompt, not quota | populate top-level `antigravity: sensitive-words` on a build that wires it (≥ v8.0.67); bisect the payload to find the trigger word |
 | Persistent backoff after an auth error | retries can't fix auth | change the request or the credentials |
 
 ## Egress and network
