@@ -479,6 +479,22 @@ if grep -q "survey.py --json" "$WAKE_LOG" 2>/dev/null && grep -q "backlog.py har
 else
   fail "ORCH_WAKE_ON_BACKLOG=1 did NOT wake or lacked multi-track prompt"
 fi
+: >"$WAKE_LOG"
+PATH="$TMP/bin:$PATH" \
+  ORCH_REPO="$MT_REPO" \
+  ORCH_STATE_DIR="$TMP/state-mt" \
+  ORCH_WAKE_CMD='fake-harness "$1" ${2:+-m "$2"}' \
+  ORCH_MODEL_LADDER="opencode/mention-free" \
+  ORCH_WAKE_ON_BACKLOG=1 \
+  ORCH_WAKE_TIMEOUT=20 \
+  ORCH_MIN_INTERVAL=0 \
+  GH_JSON="$TMP/prs-clean.json" \
+  bash "$ASSETS" >/dev/null 2>&1
+if [ ! -s "$WAKE_LOG" ]; then
+  ok "ORCH_WAKE_ON_BACKLOG=1 stayed quiet on third tick when backlog digest unchanged"
+else
+  fail "ORCH_WAKE_ON_BACKLOG=1 spun again on third tick despite unchanged backlog state"
+fi
 
 # --- case 18: update-skills.sh syncs from origin/main, updates wake.sh, and rolls back on failure (issue #167) ---
 UPD_ORIGIN="$TMP/skills-origin.git"

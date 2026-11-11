@@ -19,7 +19,7 @@ import json
 import os
 import re
 import shutil
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
 
@@ -35,8 +35,13 @@ from common import (
     run,
     write_json_atomic,
 )
-from fleet_doctor import _resolve_min_free_gb
-from fleet_pool import _resolve_model_pool
+from fleet_doctor import (
+    _resolve_min_free_gb,
+    _resolve_state_dir,
+    doctor_summary,
+    run_doctor_checks,
+)
+from fleet_pool import _resolve_model_pool, evaluate_track_caps, saturation_info
 
 DIRECTIVES_SCHEMA = "directives/1"
 WORKERS_SCHEMA = "workers/1"
@@ -498,7 +503,7 @@ def _next_candidates_preview(
                 )
                 if len(previews) >= limit:
                     break
-    except (ImportError, OSError, ValueError, KeyError, RuntimeError) as exc:
+    except (ImportError, OSError, ValueError, KeyError, RuntimeError, UsageError) as exc:
         eprint(f"[debug] candidate preview skipped: {exc}")
     return previews
 
@@ -543,7 +548,7 @@ def build_dashboard_payload(
     state_dir: Path,
     fetch_prs_fn: Callable[..., tuple[list[dict[str, Any]], str | None]],
     evaluate_pr_fn: Callable[[dict[str, Any]], dict[str, Any]],
-    load_cooling_fn: Callable[..., dict[str, int]],
+    load_cooling_fn: Callable[..., Iterable[str]],
     require_gh: bool = False,
     limit: int = 10,
 ) -> dict[str, Any]:
@@ -862,7 +867,7 @@ def run_dashboard_command(
     state_dir: Path,
     fetch_prs_fn: Callable[..., tuple[list[dict[str, Any]], str | None]],
     evaluate_pr_fn: Callable[[dict[str, Any]], dict[str, Any]],
-    load_cooling_fn: Callable[..., dict[str, int]],
+    load_cooling_fn: Callable[..., Iterable[str]],
 ) -> int:
     import time
 
@@ -901,47 +906,169 @@ def run_dashboard_command(
         return EXIT_OK
 
 
+def _work_gate_cb_tripped(root: Path, state_dir: Path) -> bool:
+    cb_path = state_dir / "CIRCUIT_BREAKER"
+    if not cb_path.is_file():
+        return False
+    try:
+        data = json.loads(cb_path.read_text(encoding="utf-8"))
+        tripped_str = data.get("tripped_at")
+        if tripped_str:
+            tripped_dt = datetime.datetime.fromisoformat(str(tripped_str).replace("Z", "+00:00"))
+            proc = run(["git", "log", "-1", "--format=%cI"], cwd=root, quiet=True)
+            if proc.returncode == 0 and proc.stdout.strip():
+                commit_dt = datetime.datetime.fromisoformat(proc.stdout.strip().replace("Z", "+00:00"))
+                if commit_dt > tripped_dt:
+                    cb_path.unlink(missing_ok=True)
+                    return False
+    except (OSError, ValueError, json.JSONDecodeError):
+        pass
+    return True
+
+
+def _work_gate_govern_blocker(
+    root: Path,
+    cfg: dict[str, Any],
+    state_dir: Path,
+    fetch_prs_fn: Callable[..., tuple[list[dict[str, Any]], str | None]],
+    prs_data: list[dict[str, Any]],
+    require_gh: bool = False,
+) -> str | None:
+    fleet_cfg = cfg.get("fleet", {}) or {}
+    kill_switch_file = str(fleet_cfg.get("kill_switch_file") or ".autonomous/STOP")
+    for kp in (root / kill_switch_file, Path.cwd() / kill_switch_file, root / ".autonomous" / "STOP"):
+        if kp.exists():
+            return f"kill switch present ({kill_switch_file})"
+
+    if _work_gate_cb_tripped(root, state_dir):
+        return "circuit breaker tripped (consecutive failed wakes; run reset-circuit)"
+
+    min_free_gb = _resolve_min_free_gb(cfg)
+    try:
+        free_gb = shutil.disk_usage(str(root)).free / (1024**3)
+    except OSError:
+        free_gb = min_free_gb
+    if free_gb < min_free_gb:
+        return f"disk headroom exhausted ({free_gb:.1f} GiB free < {min_free_gb:.1f} GiB floor)"
+
+    max_worktrees = int(fleet_cfg.get("max_worktrees", 5))
+    run(["git", "worktree", "prune"], cwd=root, quiet=True)
+    wt_proc = run(["git", "worktree", "list", "--porcelain"], cwd=root, quiet=True)
+    if wt_proc.returncode == 0:
+        wt_count = sum(1 for line in (wt_proc.stdout or "").splitlines() if line.startswith("worktree "))
+        if wt_count > max_worktrees:
+            return f"active worktree cap exceeded ({wt_count} > {max_worktrees})"
+
+    if (fleet_cfg.get("doctor", {}) or {}).get("enforce"):
+        doc = doctor_summary(run_doctor_checks(root, cfg))
+        if not doc["dispatch_ok"]:
+            return f"doctor preflight failed ({', '.join(doc['hard_failures'])})"
+
+    max_open_prs = int(fleet_cfg.get("max_open_prs", 5))
+    if len(prs_data) >= max_open_prs:
+        return f"open fleet PR cap reached ({len(prs_data)} >= {max_open_prs})"
+
+    max_new_24h = int(fleet_cfg.get("max_new_prs_per_day", 6))
+    min_acc = float(fleet_cfg.get("min_acceptance_rate_14d", 0.5))
+    if max_new_24h > 0 or min_acc > 0:
+        all_prs, _warn = fetch_prs_fn(root, state="all", limit=200, require_gh=require_gh)
+        dataset = all_prs or prs_data
+        now = datetime.datetime.now(datetime.timezone.utc)
+        count_24h = 0
+        merged_14d = 0
+        closed_unmerged_14d = 0
+        for p in dataset:
+            created_str = p.get("createdAt")
+            age_s: float | None = None
+            if created_str:
+                try:
+                    dt = datetime.datetime.fromisoformat(str(created_str).replace("Z", "+00:00"))
+                    age_s = (now - dt).total_seconds()
+                    if age_s <= 86400:
+                        count_24h += 1
+                except (ValueError, TypeError):
+                    age_s = None
+            if age_s is not None and age_s > 14 * 86400:
+                continue
+            state = str(p.get("state") or "").upper()
+            if p.get("mergedAt") or state == "MERGED":
+                merged_14d += 1
+            elif state == "CLOSED":
+                closed_unmerged_14d += 1
+        if max_new_24h > 0 and count_24h >= max_new_24h:
+            return f"daily new PR cap reached ({count_24h} >= {max_new_24h})"
+        settled_14d = merged_14d + closed_unmerged_14d
+        if min_acc > 0 and settled_14d > 0 and (merged_14d / settled_14d) < min_acc:
+            rate = merged_14d / settled_14d
+            return f"acceptance floor missed (14d: {merged_14d}/{settled_14d} = {rate:.2f} < {min_acc:.2f})"
+    return None
+
+
 def evaluate_work_gate(
     root: Path,
     cfg: dict[str, Any],
     fetch_prs_fn: Callable[..., tuple[list[dict[str, Any]], str | None]],
     evaluate_pr_fn: Callable[[dict[str, Any]], dict[str, Any]],
     require_gh: bool = False,
+    state_dir: Path | None = None,
+    force: bool = False,
+    record: bool = True,
 ) -> dict[str, Any]:
-    """0-token multi-track wake gate: checks directives, PR tending, survey, backlog, and ledger."""
-    directives = active_directives(root)
-    if directives:
-        first = directives[0]
-        return {
-            "work_available": True,
-            "source": "directive",
-            "reason": f"active owner directive {first.get('id')}: {first.get('text')}",
-        }
+    """0-token edge-triggered multi-track wake gate over survey, backlog, and ledger."""
+    resolved_state_dir = state_dir or _resolve_state_dir(root)
+    fleet_cfg = cfg.get("fleet", {}) or {}
+
+    sat_info = saturation_info(root)
+    if sat_info.get("saturated"):
+        ts = sat_info.get("timestamp")
+        standby_hours = float(fleet_cfg.get("saturation_standby_hours") or 24)
+        if ts:
+            try:
+                elapsed = (
+                    datetime.datetime.now(datetime.timezone.utc)
+                    - datetime.datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+                ).total_seconds()
+            except ValueError:
+                elapsed = standby_hours * 3600
+            if elapsed < standby_hours * 3600:
+                return {
+                    "work_available": False,
+                    "source": "saturated",
+                    "reason": "repo is in deep standby (saturated)",
+                }
 
     prs_data, _warn = fetch_prs_fn(root, state="open", require_gh=require_gh)
+    blocker = _work_gate_govern_blocker(
+        root, cfg, resolved_state_dir, fetch_prs_fn, prs_data, require_gh=require_gh
+    )
+    if blocker:
+        return {
+            "work_available": False,
+            "source": "governor",
+            "reason": blocker,
+        }
+
     claimed_targets: set[str] = set()
+    claimed_fps: set[str] = set()
     for p in prs_data:
-        state = evaluate_pr_fn(p)
-        num = state.get("pr")
-        if state.get("checks") == "red":
-            return {
-                "work_available": True,
-                "source": "pr-tend",
-                "reason": f"open PR #{num} has failing checks",
-            }
-        if state.get("owner_ask_pending"):
-            return {
-                "work_available": True,
-                "source": "pr-tend",
-                "reason": f"open PR #{num} has pending owner ask",
-            }
+        _ = evaluate_pr_fn(p)
         body = str(p.get("body") or "")
         for match in re.finditer(r"Target:\s*`([^`]+)`", body):
             claimed_targets.add(match.group(1).strip())
+        for token in body.split():
+            if token.startswith("sha256:"):
+                claimed_fps.add(token.strip("`*.,()"))
         for f in p.get("files") or []:
             fp = f.get("path") if isinstance(f, dict) else str(f)
             if fp:
                 claimed_targets.add(fp)
+    for w in load_workers_doc(root).get("workers") or []:
+        if w.get("status") == "running" and w.get("target"):
+            claimed_targets.add(str(w["target"]))
+
+    track_caps = fleet_cfg.get("track_caps") or {}
+    caps_report = evaluate_track_caps(track_caps, prs_data)
+    candidate: dict[str, Any] | None = None
 
     try:
         import survey as survey_mod
@@ -949,52 +1076,124 @@ def evaluate_work_gate(
         surv = survey_mod.survey_repo(root)
         chosen = surv.get("chosen")
         if isinstance(chosen, dict) and not surv.get("saturated"):
-            return {
-                "work_available": True,
-                "source": "survey",
-                "track": chosen.get("track"),
-                "tool": chosen.get("tool"),
-                "stream": chosen.get("stream"),
-                "reason": surv.get("reason") or f"survey selected {chosen.get('tool')}",
-            }
-    except (ImportError, OSError, ValueError, KeyError, RuntimeError) as exc:
+            trk = str(chosen.get("track") or "")
+            if not caps_report.get(trk, {}).get("capped"):
+                candidate = {
+                    "work_available": True,
+                    "source": "survey",
+                    "track": chosen.get("track"),
+                    "tool": chosen.get("tool"),
+                    "stream": chosen.get("stream"),
+                    "signals": chosen.get("signals") or {},
+                    "reason": surv.get("reason") or f"survey selected {chosen.get('tool')}",
+                }
+    except (ImportError, OSError, ValueError, KeyError, RuntimeError, UsageError) as exc:
         eprint(f"[debug] survey check skipped in work-gate: {exc}")
 
-    try:
-        import backlog as backlog_mod
+    if candidate is None:
+        try:
+            import backlog as backlog_mod
 
-        bdata = backlog_mod.harvest_backlog(root, cfg)
-        for item in bdata.get("items") or []:
-            if item.get("status") in ("ready", "lead"):
-                tpaths = item.get("target_paths") or []
-                if any(tp in claimed_targets for tp in tpaths):
-                    continue
-                return {
-                    "work_available": True,
-                    "source": "backlog",
-                    "track": item.get("track"),
-                    "item_id": item.get("id"),
-                    "reason": f"backlog {item.get('id')} ({item.get('track')}): {item.get('title')}",
-                }
-    except (ImportError, OSError, ValueError, KeyError, RuntimeError) as exc:
-        eprint(f"[debug] backlog check skipped in work-gate: {exc}")
+            bdata = backlog_mod.harvest_backlog(root, cfg)
+            for item in bdata.get("items") or []:
+                if item.get("status") in ("ready", "lead"):
+                    tpaths = item.get("target_paths") or []
+                    fp_val = str(item.get("fingerprint") or "")
+                    trk = str(item.get("track") or "")
+                    if fp_val and fp_val in claimed_fps:
+                        continue
+                    if any(tp in claimed_targets for tp in tpaths):
+                        continue
+                    if caps_report.get(trk, {}).get("capped"):
+                        continue
+                    candidate = {
+                        "work_available": True,
+                        "source": "backlog",
+                        "track": item.get("track"),
+                        "item_id": item.get("id"),
+                        "target": tpaths[0] if tpaths else "",
+                        "reason": f"backlog {item.get('id')} ({item.get('track')}): {item.get('title')}",
+                    }
+                    break
+        except (ImportError, OSError, ValueError, KeyError, RuntimeError, UsageError) as exc:
+            eprint(f"[debug] backlog check skipped in work-gate: {exc}")
 
-    cands = _next_candidates_preview(root, cfg, claimed_targets, limit=1)
-    if cands:
-        c = cands[0]
+    if candidate is None:
+        cands = _next_candidates_preview(root, cfg, claimed_targets, limit=3)
+        for c in cands:
+            stream_track = "test" if c["stream"] == "A" else "bug"
+            if caps_report.get(stream_track, {}).get("capped"):
+                continue
+            candidate = {
+                "work_available": True,
+                "source": "ledger",
+                "stream": c["stream"],
+                "target": c["target"],
+                "reason": f"stream {c['stream']} target {c['target']} ({c['reason']})",
+            }
+            break
+
+    if candidate is None:
         return {
-            "work_available": True,
-            "source": "ledger",
-            "stream": c["stream"],
-            "target": c["target"],
-            "reason": f"stream {c['stream']} target {c['target']} ({c['reason']})",
+            "work_available": False,
+            "source": "none",
+            "reason": "no unclaimed multi-track work",
         }
 
-    return {
-        "work_available": False,
-        "source": "none",
-        "reason": "no unclaimed multi-track work or pending tending",
+    head_proc = run(["git", "rev-parse", "HEAD"], cwd=root, quiet=True)
+    main_sha = head_proc.stdout.strip() if head_proc.returncode == 0 else ""
+    digest_basis = {
+        "main_sha": main_sha,
+        "open_prs": sorted(
+            f"{p.get('number')}:{p.get('headRefOid') or ''}" for p in prs_data
+        ),
+        "source": candidate["source"],
+        "track": candidate.get("track") or "",
+        "key": (
+            candidate.get("item_id")
+            or candidate.get("target")
+            or candidate.get("tool")
+            or ""
+        ),
+        "signals": candidate.get("signals") or {},
     }
+    work_digest = hashlib.sha256(
+        json.dumps(digest_basis, sort_keys=True).encode("utf-8")
+    ).hexdigest()[:16]
+
+    wg_path = resolved_state_dir / "work_gate.json"
+    previous: dict[str, Any] = {}
+    if wg_path.is_file():
+        try:
+            loaded = json.loads(wg_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                previous = loaded
+        except (OSError, json.JSONDecodeError):
+            previous = {}
+
+    if not force and previous.get("digest") == work_digest:
+        return {
+            "work_available": False,
+            "source": "unchanged",
+            "digest": work_digest,
+            "previous_digest": previous.get("digest"),
+            "reason": f"backlog state unchanged since last work-gate wake ({candidate['reason']})",
+        }
+
+    if record:
+        resolved_state_dir.mkdir(parents=True, exist_ok=True)
+        write_json_atomic(
+            wg_path,
+            {
+                "schema": "work-gate/1",
+                "digest": work_digest,
+                "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+                "source": candidate["source"],
+                "reason": candidate["reason"],
+            },
+        )
+    candidate["digest"] = work_digest
+    return candidate
 
 
 def cmd_work_gate(
@@ -1004,12 +1203,16 @@ def cmd_work_gate(
 ) -> int:
     root = main_repo_root()
     cfg = load_config(root, getattr(args, "config", None))
+    state_dir = _resolve_state_dir(root, getattr(args, "state_dir", None))
     res = evaluate_work_gate(
         root,
         cfg,
         fetch_prs_fn=fetch_prs_fn,
         evaluate_pr_fn=evaluate_pr_fn,
         require_gh=bool(getattr(args, "require_gh", False)),
+        state_dir=state_dir,
+        force=bool(getattr(args, "force", False)),
+        record=not bool(getattr(args, "dry_run", False)),
     )
     if getattr(args, "json", False):
         print(json.dumps(res, indent=2))
@@ -1082,8 +1285,11 @@ def register_cockpit_subparsers(subparsers: Any) -> None:
     # work-gate
     p_wg = subparsers.add_parser(
         "work-gate",
-        help="0-token multi-track wake gate (directives, PR tending, survey, backlog, ledger)",
+        help="0-token edge-triggered multi-track wake gate (governor, survey, backlog, ledger)",
     )
     p_wg.add_argument("--config", help="path to config.json")
+    p_wg.add_argument("--state-dir", help="directory holding work_gate.json")
+    p_wg.add_argument("--force", action="store_true", help="ignore the recorded work-gate digest")
+    p_wg.add_argument("--dry-run", action="store_true", help="do not update work_gate.json")
     p_wg.add_argument("--require-gh", action="store_true", help="fail if gh is unavailable")
     p_wg.add_argument("--json", action="store_true", help="emit JSON")

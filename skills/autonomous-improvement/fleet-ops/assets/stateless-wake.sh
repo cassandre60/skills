@@ -436,14 +436,15 @@ purge_build_artifacts
 
 # Total failure: nobody woke. Clear the recorded digest so the NEXT tick
 # retries this same state instead of reading it as "already handled".
-python3 - "$STATE_DIR/wake.json" <<'PY' 2>>"$LOG" || true
+python3 - "$STATE_DIR/wake.json" "$STATE_DIR/work_gate.json" <<'PY' 2>>"$LOG" || true
 import json, pathlib, sys
-path = pathlib.Path(sys.argv[1])
-if path.is_file():
-    data = json.loads(path.read_text(encoding="utf-8"))
-    data["digest"] = None
-    data["cleared_by"] = "stateless-wake total failure"
-    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+for raw in sys.argv[1:]:
+    path = pathlib.Path(raw)
+    if path.is_file():
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["digest"] = None
+        data["cleared_by"] = "stateless-wake total failure"
+        path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 PY
 echo "$(date -Is) every attempted model failed; digest cleared for retry; exiting 3 (total failure)" >>"$LOG"
 notify_cockpit "🚨 Blocked" "All attempted models failed or hit limits" 1
