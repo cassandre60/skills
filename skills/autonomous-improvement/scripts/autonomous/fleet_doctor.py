@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import os
 import re
@@ -495,3 +496,93 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         else:
             eprint(f"[!] Doctor: DO NOT DISPATCH — {summary['reason']}")
     return EXIT_OK if summary["dispatch_ok"] else EXIT_NEGATIVE
+
+
+def _circuit_breaker_path(state_dir: Path) -> Path:
+    return state_dir / "CIRCUIT_BREAKER"
+
+
+def _check_consecutive_failed_wakes(state_dir: Path) -> bool:
+    wakes_file = state_dir / "wakes.jsonl"
+    if not wakes_file.is_file():
+        return False
+    records = []
+    try:
+        for line in wakes_file.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line:
+                records.append(json.loads(line))
+    except Exception:
+        return False
+
+    turn_records = [
+        r
+        for r in records
+        if r.get("action") not in ("quiet", "cooling", "no-gap", "prompt-only")
+    ]
+    if len(turn_records) < 3:
+        return False
+
+    last_three = turn_records[-3:]
+    all_failed = all(r.get("action") in ("launch-failed", "traceless") for r in last_three)
+    if all_failed:
+        cb_path = _circuit_breaker_path(state_dir)
+        cb_path.write_text(
+            json.dumps(
+                {
+                    "schema": "circuit-breaker/1",
+                    "tripped_at": datetime.datetime.now(
+                        datetime.timezone.utc
+                    ).isoformat(),
+                    "reason": "3 consecutive failed wakes (launch-failed/traceless)",
+                    "last_records": last_three,
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        return True
+    return False
+
+
+def _auto_clear_circuit_breaker(root: Path, cb_path: Path) -> bool:
+    if not cb_path.is_file():
+        return False
+    try:
+        data = json.loads(cb_path.read_text(encoding="utf-8"))
+        tripped_str = data.get("tripped_at")
+        if tripped_str:
+            tripped_dt = datetime.datetime.fromisoformat(tripped_str)
+            proc = run(["git", "log", "-1", "--format=%cI"], cwd=root, quiet=True)
+            if proc.returncode == 0 and proc.stdout.strip():
+                commit_dt = datetime.datetime.fromisoformat(proc.stdout.strip())
+                if commit_dt > tripped_dt:
+                    cb_path.unlink(missing_ok=True)
+                    return True
+    except Exception:
+        pass
+    return False
+
+
+def cmd_reset_circuit(args: argparse.Namespace) -> int:
+    root = main_repo_root()
+    state_dir = _resolve_state_dir(root, getattr(args, "state_dir", None))
+    cb_path = _circuit_breaker_path(state_dir)
+    cleared = False
+    if cb_path.is_file():
+        cb_path.unlink()
+        cleared = True
+    payload = {
+        "tool": "fleet.py reset-circuit",
+        "cleared": cleared,
+        "circuit_breaker": str(cb_path),
+        "status": "ready" if cleared else "was-not-tripped",
+    }
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        if cleared:
+            print("[+] Circuit breaker reset: dispatch re-armed")
+        else:
+            print("[*] Circuit breaker was not tripped")
+    return EXIT_OK

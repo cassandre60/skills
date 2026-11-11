@@ -392,6 +392,10 @@ for model in "${candidates[@]}"; do
   echo "$(date -Is) wake attempt $attempt on '$label'" >>"$LOG"
   notify_cockpit "⏳ $label" "Wake started on $label" 0
   ATTEMPT_START_MS="$(python3 -c 'import time; print(int(time.time()*1000))' 2>/dev/null || echo 0)"
+  PRE_RR_COUNT=0
+  if [ -d "$REPO/.autonomous/run-records" ]; then
+    PRE_RR_COUNT="$(find "$REPO/.autonomous/run-records" -maxdepth 1 -name 'rr-*.json' 2>/dev/null | wc -l | tr -d ' ')"
+  fi
   timeout --signal=TERM --kill-after=60 "$NUDGE_TIMEOUT" \
     bash -c "$WAKE_CMD" _ "$PROMPT" "$model" >"$OUT" 2>&1
   RC=$?
@@ -423,6 +427,16 @@ for model in "${candidates[@]}"; do
         mark_failed "$model" "$TIMEOUT_COOLDOWN"
       fi
     fi
+    continue
+  fi
+  POST_RR_COUNT=0
+  if [ -d "$REPO/.autonomous/run-records" ]; then
+    POST_RR_COUNT="$(find "$REPO/.autonomous/run-records" -maxdepth 1 -name 'rr-*.json' 2>/dev/null | wc -l | tr -d ' ')"
+  fi
+  if [ "$POST_RR_COUNT" -le "$PRE_RR_COUNT" ] && { grep -qE '</?tool_call>|<\|tool_call\|>' "$OUT" 2>/dev/null || { [ "${ORCH_REQUIRE_AGENT_TRACE:-0}" = "1" ] && [ -z "$(tr -d '[:space:]' < "$OUT" 2>/dev/null)" ]; }; }; then
+    echo "$(date -Is) model '$label' exited 0 with malformed/empty output (no run-record); cooling ${TIMEOUT_COOLDOWN}s and rotating" >>"$LOG"
+    notify_cockpit "⚠️ Bad turn: $label" "Malformed/empty output on $label; cooling ${TIMEOUT_COOLDOWN}s and rotating" 0
+    [ -n "$model" ] && mark_failed "$model" "$TIMEOUT_COOLDOWN"
     continue
   fi
   echo "$(date -Is) wake on '$label' finished; done" >>"$LOG"
