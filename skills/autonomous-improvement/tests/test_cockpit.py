@@ -539,6 +539,160 @@ class MultiTrackAndSignalFilterTests(unittest.TestCase):
         self.assertIn("survey.py --json", wake.stdout)
         self.assertIn("backlog.py harvest --json", wake.stdout)
 
+    def test_work_gate_does_not_retrigger_on_unchanged_red_pr_or_same_backlog_digest(self) -> None:
+        repo, _ = support.init_repo(self.tmp, name="wg-dedup", with_origin=True)
+        support.install_scripts(repo)
+        support.write_config(
+            repo,
+            {
+                **support.load_example("config.python.json"),
+                "candidates": {"A": {"include": ["src/**/*.py"], "exclude": []}},
+            },
+        )
+        lines = ["# big module\n"] + [f"def f_{i}():\n    return {i}\n" for i in range(260)]
+        support.write(repo / "src" / "app.py", "".join(lines))
+        support.write(repo / "tests" / "test_app.py", "def test_app():\n    assert True\n")
+        support.write(
+            repo / ".github" / "workflows" / "ci.yml",
+            "name: CI\non: [push, pull_request]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: pytest\n",
+        )
+        support.commit(repo, "seed repo")
+
+        prs = [
+            {
+                "number": 448,
+                "title": "ledger row",
+                "headRefName": "docs/ledger",
+                "headRefOid": "abc123",
+                "statusCheckRollup": [{"name": "G07", "status": "COMPLETED", "conclusion": "FAILURE"}],
+                "labels": [],
+                "body": "",
+                "files": [{"path": "docs/AUTONOMOUS_WORK_LEDGER.md"}],
+            }
+        ]
+        prs_file = self.tmp / "prs.json"
+        prs_file.write_text(json.dumps(prs), encoding="utf-8")
+        bin_dir = support.path_with_only(self.tmp, names=("git",))
+        gh = support.write(
+            bin_dir / "gh",
+            f'#!/bin/sh\ncase "$1 $2" in\n  "pr list") while IFS= read -r line || [ -n "$line" ]; do printf \'%s\\n\' "$line"; done < "{prs_file}" ;;\n  *) echo "[]" ;;\nesac\n',
+        )
+        gh.chmod(0o755)
+        state_dir = repo / ".autonomous" / "state"
+        env = support.env_with_path(bin_dir, ORCH_STATE_DIR=str(state_dir), ORCH_MIN_FREE_GB="0")
+
+        # needs-brain wakes once on the red PR and records digest
+        nb1 = support.script(repo, "fleet.py", "needs-brain", "--json", env=env)
+        self.assertEqual(nb1.returncode, 0, nb1.stderr)
+        self.assertTrue(json.loads(nb1.stdout)["needs_brain"])
+
+        # work-gate must NOT return pr-tend on an unchanged red PR, and must
+        # deduplicate repeated ticks when backlog/survey state is unchanged.
+        wg1 = support.script(repo, "fleet.py", "work-gate", "--json", env=env)
+        self.assertEqual(wg1.returncode, 0, wg1.stdout + wg1.stderr)
+        d1 = json.loads(wg1.stdout)
+        self.assertTrue(d1["work_available"])
+        self.assertNotEqual(d1["source"], "pr-tend")
+
+        wg2 = support.script(repo, "fleet.py", "work-gate", "--json", env=env)
+        self.assertEqual(wg2.returncode, 1, wg2.stdout + wg2.stderr)
+        d2 = json.loads(wg2.stdout)
+        self.assertFalse(d2["work_available"])
+
+        # Governor cap (max_open_prs reached) blocks work-gate even on first sight
+        prs_file.write_text(
+            json.dumps(
+                [
+                    {
+                        "number": n,
+                        "title": f"PR {n}",
+                        "headRefName": f"b-{n}",
+                        "headRefOid": f"sha-{n}",
+                        "statusCheckRollup": [],
+                        "labels": [],
+                        "body": "",
+                        "files": [],
+                    }
+                    for n in range(1, 6)
+                ]
+            ),
+            encoding="utf-8",
+        )
+        wg_cap = support.script(repo, "fleet.py", "work-gate", "--force", "--json", env=env)
+        self.assertEqual(wg_cap.returncode, 1, wg_cap.stdout + wg_cap.stderr)
+        self.assertFalse(json.loads(wg_cap.stdout)["work_available"])
+
+    def test_work_gate_works_on_unconfigured_repo_without_crashing(self) -> None:
+        repo, _ = support.init_repo(self.tmp, name="wg-bare", with_origin=True)
+        support.install_scripts(repo)
+        support.write(repo / "src" / "app.py", "def ok():\n    return 1\n")
+        support.write(repo / "tests" / "test_app.py", "def test_ok():\n    assert True\n")
+        support.write(
+            repo / ".github" / "workflows" / "ci.yml",
+            "name: CI\non: [push, pull_request]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: pytest\n",
+        )
+        support.commit(repo, "bare clean repo")
+
+        bin_dir = support.path_with_only(self.tmp, names=("git",))
+        gh = support.write(bin_dir / "gh", "#!/bin/sh\necho '[]'\n")
+        gh.chmod(0o755)
+        state_dir = repo / ".autonomous" / "state"
+        env = support.env_with_path(bin_dir, ORCH_STATE_DIR=str(state_dir), ORCH_MIN_FREE_GB="0")
+
+        wg = support.script(repo, "fleet.py", "work-gate", "--json", env=env)
+        self.assertIn(wg.returncode, (0, 1), wg.stdout + wg.stderr)
+        data = json.loads(wg.stdout)
+        self.assertIn("work_available", data)
+
+    def test_work_gate_respects_saturation_and_ignores_stale_directive_loop(self) -> None:
+        import datetime
+
+        repo, _ = support.init_repo(self.tmp, name="wg-sat", with_origin=True)
+        support.install_scripts(repo)
+        support.write(repo / "src" / "app.py", "def ok():\n    return 1\n")
+        support.write(repo / "tests" / "test_app.py", "def test_ok():\n    assert True\n")
+        support.write(
+            repo / ".github" / "workflows" / "ci.yml",
+            "name: CI\non: [push, pull_request]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: pytest\n",
+        )
+        support.commit(repo, "clean repo")
+
+        bin_dir = support.path_with_only(self.tmp, names=("git",))
+        gh = support.write(bin_dir / "gh", "#!/bin/sh\necho '[]'\n")
+        gh.chmod(0o755)
+        state_dir = repo / ".autonomous" / "state"
+        env = support.env_with_path(bin_dir, ORCH_STATE_DIR=str(state_dir), ORCH_MIN_FREE_GB="0")
+
+        # Add an active directive: needs-brain wakes once, then stays quiet.
+        support.script(repo, "fleet.py", "directive", "add", "Keep monitoring", env=env)
+        nb1 = support.script(repo, "fleet.py", "needs-brain", "--json", env=env)
+        self.assertTrue(json.loads(nb1.stdout)["needs_brain"])
+        nb2 = support.script(repo, "fleet.py", "needs-brain", "--json", env=env)
+        self.assertFalse(json.loads(nb2.stdout)["needs_brain"])
+
+        # work-gate must NOT return source="directive"
+        wg_dir = support.script(repo, "fleet.py", "work-gate", "--json", env=env)
+        wg_dir_data = json.loads(wg_dir.stdout)
+        self.assertNotEqual(wg_dir_data.get("source"), "directive")
+
+        # Saturated repo must suppress work-gate
+        (repo / ".autonomous").mkdir(parents=True, exist_ok=True)
+        (repo / ".autonomous" / "saturation.json").write_text(
+            json.dumps(
+                {
+                    "saturated": True,
+                    "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                    "reason": "honest halt",
+                }
+            ),
+            encoding="utf-8",
+        )
+        wg_sat = support.script(repo, "fleet.py", "work-gate", "--force", "--json", env=env)
+        self.assertEqual(wg_sat.returncode, 1)
+        sat_data = json.loads(wg_sat.stdout)
+        self.assertFalse(sat_data["work_available"])
+        self.assertEqual(sat_data["source"], "saturated")
+
 
 if __name__ == "__main__":
     unittest.main()
