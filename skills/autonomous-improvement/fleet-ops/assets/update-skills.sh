@@ -8,7 +8,7 @@
 #
 # Environment overrides (all optional):
 #   ORCH_SKILLS_REPO        git remote URL when cloning fresh (default: https://github.com/cassandre60/skills.git)
-#   ORCH_SKILLS_CLONE       local git clone path (default: auto-detected or $HOME/github-projects/skills)
+#   ORCH_SKILLS_CLONE       local git clone path (default: ${XDG_CACHE_HOME:-~/.cache}/orchestrator/skills-mirror)
 #   ORCH_SKILLS_INSTALL_DIR destination for skill folders (default: $HOME/.agents/skills)
 #   ORCH_INSTALL_DIR        destination for fleet-ops scripts (default: $HOME/.local/share/orchestrator)
 #   ORCH_STATE_DIR          state directory holding lock & timestamps (default: $ORCH_INSTALL_DIR)
@@ -18,7 +18,6 @@
 #   ORCH_FORCE_SYNC         set to 1 to re-sync installed files even if main SHA did not move
 set -euo pipefail
 
-SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_REPO_URL="https://github.com/cassandre60/skills.git"
 SKILLS_REPO_URL="${ORCH_SKILLS_REPO:-$DEFAULT_REPO_URL}"
 
@@ -27,13 +26,7 @@ detect_clone() {
     printf '%s\n' "$ORCH_SKILLS_CLONE"
     return 0
   fi
-  local candidate
-  candidate="$(cd "$SELF_DIR/../../../.." 2>/dev/null && pwd || true)"
-  if [ -n "$candidate" ] && [ -d "$candidate/skills/autonomous-improvement" ] && git -C "$candidate" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    printf '%s\n' "$candidate"
-    return 0
-  fi
-  printf '%s\n' "$HOME/github-projects/skills"
+  printf '%s\n' "${XDG_CACHE_HOME:-$HOME/.cache}/orchestrator/skills-mirror"
 }
 
 SKILLS_CLONE="$(detect_clone)"
@@ -68,6 +61,10 @@ if [ ! -d "$SKILLS_CLONE/.git" ]; then
 fi
 
 cd "$SKILLS_CLONE"
+if [ -n "$(git status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+  log "ABORT: skills clone $SKILLS_CLONE has uncommitted tracked changes; refusing to overwrite"
+  exit 1
+fi
 OLD="$(git rev-parse HEAD 2>/dev/null || echo "")"
 if ! git fetch -q origin main; then
   log "WARN: git fetch origin main failed — keeping installed skills at ${OLD:-none}"
