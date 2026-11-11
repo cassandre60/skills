@@ -157,6 +157,98 @@ class TrackGatesAndGovernorTests(unittest.TestCase):
         self.assertNotEqual(proc_test.returncode, 0)
         self.assertIn("evidence artifact", (proc_test.stderr + proc_test.stdout).lower())
 
+        # 4. Refactor track that adds net lines without oracle artifact -> fails
+        support.write(repo / "src" / "app.py", "x = 1\ny = 2\nz = 3\n")
+        support.commit(repo, "net line addition")
+        proc_ref = support.run(
+            [support.PYTHON, str(SCRIPTS / "orchestrator.py"), "verify-gate", "--worktree", str(repo), "--track", "refactor"],
+            cwd=repo,
+        )
+        self.assertNotEqual(proc_ref.returncode, 0)
+        self.assertIn("refactor track gate", (proc_ref.stderr + proc_ref.stdout).lower())
+
+        # 5. CI workflow check must degrade cleanly when PyYAML is absent
+        support.git(repo, "checkout", "-b", "feature/ci-noyaml", "main")
+        support.write(
+            repo / ".github" / "workflows" / "ci.yml",
+            "name: CI\non: [push]\njobs:\n  test:\n    runs-on: ubuntu-latest\n",
+        )
+        support.commit(repo, "add valid workflow")
+        fake_pkg = self.tmp / "noyaml"
+        fake_pkg.mkdir(parents=True, exist_ok=True)
+        (fake_pkg / "yaml.py").write_text("raise ImportError('no pyyaml')\n", encoding="utf-8")
+        import os
+        env_noyaml = dict(os.environ)
+        env_noyaml["PYTHONPATH"] = f"{fake_pkg}:{env_noyaml.get('PYTHONPATH', '')}".strip(":")
+        proc_ci_ok = support.run(
+            [support.PYTHON, str(SCRIPTS / "orchestrator.py"), "verify-gate", "--worktree", str(repo), "--track", "ci"],
+            cwd=repo,
+            env=env_noyaml,
+        )
+        self.assertEqual(proc_ci_ok.returncode, 0, proc_ci_ok.stdout + proc_ci_ok.stderr)
+
+        # Invalid tab-indented workflow fails even without PyYAML
+        support.write(repo / ".github" / "workflows" / "ci.yml", "name: CI\n\ton: [push]\njobs:\n  test:\n")
+        support.commit(repo, "bad tab workflow")
+        proc_ci_bad = support.run(
+            [support.PYTHON, str(SCRIPTS / "orchestrator.py"), "verify-gate", "--worktree", str(repo), "--track", "ci"],
+            cwd=repo,
+            env=env_noyaml,
+        )
+        self.assertNotEqual(proc_ci_bad.returncode, 0)
+        self.assertIn("syntax error", (proc_ci_bad.stderr + proc_ci_bad.stdout).lower())
+
+        # 6. Refactor track with net line reduction passes
+        support.git(repo, "checkout", "-b", "feature/refactor-shrink", "main")
+        support.write(repo / "src" / "app.py", "def f(a, b): return a == b\n")
+        support.commit(repo, "shrink code")
+        proc_ref_ok = support.run(
+            [support.PYTHON, str(SCRIPTS / "orchestrator.py"), "verify-gate", "--worktree", str(repo), "--track", "refactor"],
+            cwd=repo,
+        )
+        self.assertEqual(proc_ref_ok.returncode, 0, proc_ref_ok.stdout + proc_ref_ok.stderr)
+
+    def test_ban_list_rejects_pure_comment_churn_and_assertionless_tests(self) -> None:
+        repo, _ = support.python_repo(self.tmp, name="banlist")
+        support.write_config(
+            repo,
+            {
+                **support.load_example(),
+                "format_check_cmd": None,
+                "analyze_cmd": None,
+                "gate_cmd": None,
+                "verify_gate": {"weakening": "off", "evidence": "off"},
+            },
+        )
+        support.commit(repo, "initial commit")
+
+        # Pure comment churn on bug track -> rejected
+        support.git(repo, "checkout", "-b", "feature/comment-churn")
+        orig = (repo / "src" / "app.py").read_text(encoding="utf-8")
+        support.write(repo / "src" / "app.py", orig + "# cosmetic comment\n")
+        support.commit(repo, "comment only")
+        proc_comment = support.run(
+            [support.PYTHON, str(SCRIPTS / "orchestrator.py"), "verify-gate", "--worktree", str(repo), "--track", "bug"],
+            cwd=repo,
+        )
+        self.assertNotEqual(proc_comment.returncode, 0)
+        self.assertIn("ban-list", (proc_comment.stderr + proc_comment.stdout).lower())
+
+        # Assertionless test on test track -> rejected
+        support.git(repo, "checkout", "-b", "feature/empty-test", "main")
+        support.write(repo / "tests" / "test_empty.py", "def test_nothing():\n    x = 1 + 1\n")
+        (repo / ".autonomous").mkdir(parents=True, exist_ok=True)
+        (repo / ".autonomous" / "evidence.json").write_text(
+            json.dumps({"kind": "mutant", "verdict": "killed"}), encoding="utf-8"
+        )
+        support.commit(repo, "empty test")
+        proc_empty = support.run(
+            [support.PYTHON, str(SCRIPTS / "orchestrator.py"), "verify-gate", "--worktree", str(repo), "--track", "test"],
+            cwd=repo,
+        )
+        self.assertNotEqual(proc_empty.returncode, 0)
+        self.assertIn("ban-list", (proc_empty.stderr + proc_empty.stdout).lower())
+
     def test_survey_anti_starvation_and_penalty(self) -> None:
         repo, _ = support.python_repo(self.tmp, name="surveybal")
         support.commit(repo, "initial commit")

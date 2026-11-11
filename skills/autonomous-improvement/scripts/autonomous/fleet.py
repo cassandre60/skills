@@ -252,6 +252,7 @@ DEAD_MODEL_PATTERN = re.compile(
     r"Model unavailable|no such model|unknown model|model disabled",
     re.IGNORECASE,
 )
+RETRY_AFTER_PATTERN = re.compile(r"retry[-_ ]after[:\s]+(\d+)", re.IGNORECASE)
 
 
 def _model_failures_path(state_dir: Path) -> Path:
@@ -274,7 +275,8 @@ def _load_cooling_models(
                 model, ts_str = parts[0], parts[1]
                 try:
                     ts = float(ts_str)
-                    if now - ts < cooldown_sec:
+                    eff_cd = float(parts[2]) if len(parts) >= 3 else float(cooldown_sec)
+                    if now - ts < eff_cd:
                         cooling.add(model)
                 except ValueError:
                     continue
@@ -283,7 +285,9 @@ def _load_cooling_models(
     return cooling
 
 
-def _record_model_failure(state_dir: Path, model: str, reason: str = "") -> None:
+def _record_model_failure(
+    state_dir: Path, model: str, reason: str = "", cooldown_sec: Optional[int] = None
+) -> None:
     if not model:
         return
     fail_file = _model_failures_path(state_dir)
@@ -297,10 +301,11 @@ def _record_model_failure(state_dir: Path, model: str, reason: str = "") -> None
                     try:
                         ts = float(parts[1])
                         if now - ts < ORCH_FAILURE_TTL_DEFAULT:
-                            entries.append(f"{parts[0]} {int(ts)}")
+                            ttl_part = f" {int(float(parts[2]))}" if len(parts) >= 3 else ""
+                            entries.append(f"{parts[0]} {int(ts)}{ttl_part}")
                     except ValueError:
                         continue
-        entries.append(f"{model} {now}")
+        entries.append(f"{model} {now}" + (f" {int(cooldown_sec)}" if cooldown_sec is not None else ""))
         state_dir.mkdir(parents=True, exist_ok=True)
         fail_file.write_text("\n".join(entries) + "\n", encoding="utf-8")
     except Exception as exc:
@@ -1499,7 +1504,9 @@ def cmd_wake(args: argparse.Namespace) -> int:
                         + "; quota/dead-model error detected; parking in cooldown"
                     )
                     if model:
-                        _record_model_failure(state_dir, model)
+                        ra_match = RETRY_AFTER_PATTERN.search(combined_out)
+                        ra_sec = max(int(ra_match.group(1)), 1) if ra_match else (ORCH_RETRY_AFTER_EXHAUSTION_DEFAULT if "retry-after" in combined_out.lower() else None)
+                        _record_model_failure(state_dir, model, cooldown_sec=ra_sec)
                 else:
                     eprint(
                         f"[warn] harness exited {proc.returncode}"
