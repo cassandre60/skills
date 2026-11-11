@@ -1535,39 +1535,24 @@ def cmd_claim(args: argparse.Namespace) -> int:
         from backlog import harvest_backlog, load_open_claims
 
         backlog_path = root / ".autonomous" / "backlog.json"
-        if not backlog_path.is_file():
+        try:
+            bdata = json.loads(backlog_path.read_text(encoding="utf-8")) if backlog_path.is_file() else harvest_backlog(root, cfg)
+        except Exception:
             bdata = harvest_backlog(root, cfg)
-        else:
-            try:
-                bdata = json.loads(backlog_path.read_text(encoding="utf-8"))
-            except Exception:
-                bdata = harvest_backlog(root, cfg)
-        matched_item = None
-        for it in bdata.get("items", []):
-            if it.get("id") == args.item or it.get("fingerprint") == args.item:
-                matched_item = it
-                break
-        if not matched_item:
+        matched = next((it for it in bdata.get("items", []) if it.get("id") == args.item or it.get("fingerprint") == args.item), None)
+        if not matched:
             raise UsageError(f"backlog item not found: {args.item}")
 
-        item_id = matched_item["id"]
-        item_fp = matched_item.get("fingerprint")
-        target = rel_path(root, matched_item["target_paths"][0])
-        stream = normalize_stream(matched_item["stream"])
-
-        # Check fingerprint overlap
-        if item_fp:
-            claimed_fps, _ = load_open_claims(root)
-            if item_fp in claimed_fps:
-                eprint(f"[!] item {item_id} ({item_fp}) is already claimed by an open PR")
-                return EXIT_NEGATIVE
+        item_id, item_fp = matched["id"], matched.get("fingerprint")
+        target = rel_path(root, matched["target_paths"][0])
+        stream = normalize_stream(matched["stream"])
+        if item_fp and item_fp in load_open_claims(root)[0]:
+            eprint(f"[!] item {item_id} ({item_fp}) is already claimed by an open PR")
+            return EXIT_NEGATIVE
     else:
-        if not getattr(args, "target", None):
+        if not getattr(args, "target", None) or not getattr(args, "stream", None):
             raise UsageError("either --target and --stream or --item is required")
-        if not getattr(args, "stream", None):
-            raise UsageError("either --target and --stream or --item is required")
-        stream = normalize_stream(args.stream)
-        target = rel_path(root, args.target)
+        stream, target = normalize_stream(args.stream), rel_path(root, args.target)
 
     if not path_at_head(root, target):
         raise UsageError(f"claim target does not exist at HEAD: {target}")
