@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import datetime as dt
-import importlib
 import json
 import os
 import shutil
@@ -13,6 +11,7 @@ import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any, Dict
 
 from support import (
     ASSETS,
@@ -446,7 +445,6 @@ class ValidateTests(RepoTestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
 
     def test_a_well_formed_ledger_validates_clean(self) -> None:
-        ledger = self.repo / "docs" / "AUTONOMOUS_WORK_LEDGER.md"
         source = script(self.repo, "ledger.py", "check", "--target", "src/app.py")
         self.assertNotEqual(source.returncode, 0)
         # record a proper row, then validate
@@ -2468,10 +2466,6 @@ class FleetTests(RepoTestCase):
         gh.chmod(0o755)
         json_path = self.tmp / "prs_floor.json"
         env = env_with_path(bin_dir, GH_JSON=str(json_path))
-
-        recent = (
-            dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=1)
-        ).isoformat()
 
         def fleet_payload(n_open: int, n_merged: int, n_closed: int) -> list:
             # Relative to now: a hardcoded date ages out of the 14-day window

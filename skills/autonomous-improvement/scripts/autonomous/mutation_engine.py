@@ -39,7 +39,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from common import (
     EXIT_ENV,
@@ -594,7 +594,11 @@ def is_compile_failure(output: str, pack: Dict[str, Any]) -> bool:
     return False
 
 
-from mutation_stryker import _STRYKER_STATUS, _print_summary, run_stryker_backend
+from mutation_stryker import (
+    _STRYKER_STATUS as _STRYKER_STATUS,
+    _print_summary as _print_summary,
+    run_stryker_backend as run_stryker_backend,
+)
 
 
 def run_mutation_pass(

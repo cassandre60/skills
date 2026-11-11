@@ -202,7 +202,6 @@ def _stream_a(package_root: Path, prefix: str) -> Tuple[List[str], List[Dict[str
     tests = sorted(package_root.glob("tests/test_*.py"))
     src = package_root / "src"
     if tests and src.is_dir() and any(src.glob("*.py")):
-        pattern_src = re.escape(prefix).replace(re.escape("."), r"\.")
         return (
             [f"{prefix}src/**/*.py"],
             [

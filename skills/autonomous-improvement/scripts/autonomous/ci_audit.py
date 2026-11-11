@@ -87,8 +87,6 @@ def audit_ci(root: Path, cfg: Optional[Dict[str, Any]] = None) -> List[Dict[str,
         except Exception:
             continue
 
-        rel = str(wf.relative_to(root))
-
         # Check for pull_request trigger
         if re.search(r"^\s*(?:on:\s*\[?[^\]]*\bpull_request\b|pull_request:)", content, re.MULTILINE):
             has_pr_trigger = True

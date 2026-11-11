@@ -11,9 +11,9 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
+import tempfile as tempfile
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, Optional, Sequence, Tuple
 
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = SKILL_ROOT / "scripts" / "autonomous"

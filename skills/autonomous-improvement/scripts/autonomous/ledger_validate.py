@@ -21,8 +21,6 @@ from common import (
     AUDITED_STATUSES,
     SEPARATOR_RE,
     DISPOSITION_STATUSES,
-    EXIT_NEGATIVE,
-    EXIT_OK,
     hash_at_head,
     path_at_head,
     split_table_row as split_row,
