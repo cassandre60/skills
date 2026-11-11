@@ -72,12 +72,11 @@ from fleet_cockpit import (
     _referee_incidents,
     _render_evidence_body,
     active_directive_reasons,
-    build_dashboard_payload,
     cmd_directive,
     cmd_worker,
     format_directives_block,
     register_cockpit_subparsers,
-    render_dashboard_markdown,
+    run_dashboard_command,
 )
 from fleet_doctor import (
     _doctor_check,
@@ -1702,21 +1701,15 @@ def cmd_dashboard(args: argparse.Namespace) -> int:
     root = main_repo_root()
     cfg = load_config(root, args.config)
     state_dir = _resolve_state_dir(root, getattr(args, "state_dir", None))
-    payload = build_dashboard_payload(
+    return run_dashboard_command(
+        args,
         root,
         cfg,
         state_dir,
         fetch_prs_fn=fetch_gh_prs,
         evaluate_pr_fn=evaluate_pr_checks,
         load_cooling_fn=_load_cooling_models,
-        require_gh=bool(getattr(args, "require_gh", False)),
-        limit=int(getattr(args, "limit", 10) or 10),
     )
-    if getattr(args, "json", False):
-        print(json.dumps(payload, indent=2))
-    else:
-        print(render_dashboard_markdown(payload), end="")
-    return EXIT_OK
 
 
 def _list_all(root: Path, kind: str) -> List[Dict[str, Any]]:

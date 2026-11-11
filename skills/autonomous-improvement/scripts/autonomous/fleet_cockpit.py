@@ -445,13 +445,25 @@ def _load_wake_failures_cooling(state_dir: Path, cooldown_sec: int) -> set[str]:
                 parts = line.strip().split()
                 if len(parts) >= 2:
                     try:
-                        if now - float(parts[1]) < cooldown_sec:
+                        eff_cd = float(parts[2]) if len(parts) >= 3 else float(cooldown_sec)
+                        if now - float(parts[1]) < eff_cd:
                             cooling.add(parts[0])
                     except ValueError:
                         continue
         except OSError:
             pass
     return cooling
+
+
+def _load_cockpit_events(state_dir: Path, limit: int = 8) -> list[str]:
+    path = state_dir / "cockpit-events.log"
+    if not path.is_file():
+        return []
+    try:
+        lines = [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    except OSError:
+        return []
+    return lines[-limit:] if limit > 0 else lines
 def _next_candidates_preview(
     root: Path,
     cfg: dict[str, Any],
@@ -678,6 +690,7 @@ def build_dashboard_payload(
         )
 
     next_candidates = _next_candidates_preview(root, cfg, claimed_targets, limit=3)
+    cockpit_events = _load_cockpit_events(state_dir, limit=min(limit, 8) if limit > 0 else 8)
 
     return {
         "schema": DASHBOARD_SCHEMA,
@@ -699,6 +712,7 @@ def build_dashboard_payload(
         "worktrees": worktrees,
         "registered_worktrees": wt_registry,
         "recent_runs": recent_records,
+        "cockpit_events": cockpit_events,
         "model_pool": {
             "ladder": ladder,
             "models": models_status,
@@ -828,7 +842,61 @@ def render_dashboard_markdown(payload: dict[str, Any]) -> str:
         for c in cands:
             lines.append(f"- **Stream {c['stream']}**: `{c['target']}` ({c['reason']})")
 
+    # 6. Recent Factory Events (from wake launcher)
+    events = payload.get("cockpit_events") or []
+    if events:
+        lines.append("")
+        lines.append("## Recent Factory Events")
+        for ev in reversed(events):
+            lines.append(f"- {ev}")
+
     return "\n".join(lines) + "\n"
+
+
+def run_dashboard_command(
+    args: argparse.Namespace,
+    root: Path,
+    cfg: dict[str, Any],
+    state_dir: Path,
+    fetch_prs_fn: Callable[..., tuple[list[dict[str, Any]], str | None]],
+    evaluate_pr_fn: Callable[[dict[str, Any]], dict[str, Any]],
+    load_cooling_fn: Callable[..., dict[str, int]],
+) -> int:
+    import time
+
+    interval = int(getattr(args, "watch", 0) or 0)
+
+    def render_once() -> str:
+        payload = build_dashboard_payload(
+            root,
+            cfg,
+            state_dir,
+            fetch_prs_fn=fetch_prs_fn,
+            evaluate_pr_fn=evaluate_pr_fn,
+            load_cooling_fn=load_cooling_fn,
+            require_gh=bool(getattr(args, "require_gh", False)),
+            limit=int(getattr(args, "limit", 10) or 10),
+        )
+        if getattr(args, "json", False):
+            return json.dumps(payload, indent=2) + "\n"
+        return render_dashboard_markdown(payload)
+
+    if interval <= 0:
+        print(render_once(), end="")
+        return EXIT_OK
+
+    last_out: str | None = None
+    try:
+        while True:
+            out = render_once()
+            if out != last_out:
+                if last_out is not None:
+                    print("\033[2J\033[H", end="")
+                print(out, end="", flush=True)
+                last_out = out
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        return EXIT_OK
 
 
 def register_cockpit_subparsers(subparsers: Any) -> None:
@@ -840,6 +908,7 @@ def register_cockpit_subparsers(subparsers: Any) -> None:
     p_dash.add_argument("--config", help="path to config.json")
     p_dash.add_argument("--state-dir", help="directory for fleet state")
     p_dash.add_argument("--limit", type=int, default=10, help="max workers/runs to display (default: 10)")
+    p_dash.add_argument("--watch", type=int, nargs="?", const=15, default=0, help="auto-refresh interval in seconds (default 15s when flag set)")
     p_dash.add_argument("--require-gh", action="store_true", help="fail if gh is unavailable")
     p_dash.add_argument("--json", action="store_true", help="emit JSON")
 
