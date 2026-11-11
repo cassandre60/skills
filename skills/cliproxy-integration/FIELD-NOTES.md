@@ -359,7 +359,7 @@ every request from it was rejected on every account.
 The user then named the gateway's obfuscation setting — they knew their gateway better
 than the agent's theory pile. The config already listed the words at the canonical
 `config-version: 8` path (`oauth.providers.antigravity.sensitive-words`, which `flattenV8`
-maps into `cfg.Antigravity` and prefers over any legacy top-level `antigravity:` block), in
+maps leaf-by-leaf into `cfg.Antigravity` and prefers over `antigravity.sensitive-words`), in
 a build that parsed the knob without wiring it (v8.0.16). The fix was upgrading to the
 release that actually calls the obfuscator on Antigravity request paths (v8.0.67, shipped
 the same morning). After it: every previously failing shape, including the exact replica

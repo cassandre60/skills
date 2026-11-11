@@ -79,7 +79,7 @@ and does it write anything to disk?
 control, a hand-maintained block beats a plugin that guesses. If you just want "everything the
 gateway serves, automatically", the plugin is the right trade.
 
-## Process conflicts: the orphan gateway crash-loop
+## Process conflicts: the orphan or duplicate-unit gateway crash-loop
 
 A deceptive failure mode: **`curl` probes answer HTTP 200, but systemd reports the gateway
 service is in a rapid restart crash-loop** (`NRestarts` steadily climbing).
@@ -143,9 +143,10 @@ holding an exclusive lock on `kv.db`.
    systemctl --user restart <service>
    ```
 
-4. **Verify stability:**
+4. **Verify stability (against whichever unit you kept):**
    Wait 30–60 seconds and check `NRestarts`:
    ```bash
    systemctl --user show <service> -p MainPID,NRestarts,ActiveState
+   # (or `systemctl show <service> ...` if keeping the system-wide unit)
    ```
    `NRestarts` should remain 0 and `ActiveState=active`.

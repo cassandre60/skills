@@ -66,12 +66,14 @@ state is already good, one line ("on") suffices:
    matching words in Antigravity system instructions (combining-grapheme-joiner insertion)
    so upstream exact-keyword filtering fails soft. On a `config-version: 8` file the
    canonical location is `oauth.providers.antigravity.sensitive-words` (`flattenV8` maps
-   it into `Antigravity`, overwriting any legacy top-level `antigravity:` block if both
-   exist), and the list should name the client identifiers in play (e.g. `OpenCode`,
-   `opencode`, `harness`). Matching is case-insensitive; entries under 2 characters are
-   ignored. **The build must wire the knob**: v8.0.16 parsed it and did nothing; v8.0.67
-   applies it on Antigravity request paths. Verified live 2026-11-11; the failure it
-   prevents and the bisect that isolates it are in `references/03-quota.md`.
+   leaf fields individually into `Antigravity` — if both exist,
+   `oauth.providers.antigravity.sensitive-words` overwrites `antigravity.sensitive-words`,
+   and `ValidateV8Config` rejects legacy `antigravity.*` paths), and the list should name
+   the client identifiers in play (e.g. `OpenCode`, `opencode`, `harness`). Matching is
+   case-insensitive; entries under 2 characters are ignored. **The build must wire the
+   knob**: v8.0.16 parsed it and did nothing; v8.0.67 applies it on Antigravity request
+   paths. Verified live 2026-11-11; the failure it prevents and the bisect that isolates it
+   are in `references/03-quota.md`.
 2. **Proxy egress (e.g. WARP) — mention only.** Default direct egress is fine; a
    proxy is worth mentioning only for region-blocked upstreams or egress privacy.
    Tell the user it is one global Proxy URL in the dashboard that affects *all*
@@ -195,7 +197,7 @@ Work this ladder top-down. Each rung eliminates a class. Do not skip to a fix.
 | Mixed pool: premium/frontier models fail when routed to standard accounts | accounts have different tier capabilities; need per-credential model pinning | `references/03-quota.md` |
 | Pool-wide failure after a change | egress / network | `references/04-network.md` |
 | Gateway unstable, config reverts | two writers | `references/05-conflicts.md` |
-| Gateway service crash-loops (`bind: address already in use` or `kv.db timeout`), yet curl probes answer 200 | orphan gateway process holding port/db lock | `references/05-conflicts.md` |
+| Gateway service crash-loops (`bind: address already in use` or `kv.db timeout`), yet curl probes answer 200 | orphan gateway process or competing system/user systemd unit holding port/db lock | `references/05-conflicts.md` |
 | Given a file of API keys, some dead | key onboarding | `references/06-key-dump-onboarding.md` |
 | Porting keys between gateways on one host | credential porting | `references/08-credential-porting.md` |
 | Codex TUI login loop, `/model` OpenAI-only, or file config silently ignored | second-client (Codex) wiring | `references/07-codex-client.md` |
