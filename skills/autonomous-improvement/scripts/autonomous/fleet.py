@@ -1528,8 +1528,32 @@ def cmd_claim(args: argparse.Namespace) -> int:
 
     root = main_repo_root()
     cfg = load_config(root, args.config)
-    stream = normalize_stream(args.stream)
-    target = rel_path(root, args.target)
+
+    item_id: Optional[str] = None
+    item_fp: Optional[str] = None
+    if getattr(args, "item", None):
+        from backlog import harvest_backlog, load_open_claims
+
+        backlog_path = root / ".autonomous" / "backlog.json"
+        try:
+            bdata = json.loads(backlog_path.read_text(encoding="utf-8")) if backlog_path.is_file() else harvest_backlog(root, cfg)
+        except Exception:
+            bdata = harvest_backlog(root, cfg)
+        matched = next((it for it in bdata.get("items", []) if it.get("id") == args.item or it.get("fingerprint") == args.item), None)
+        if not matched:
+            raise UsageError(f"backlog item not found: {args.item}")
+
+        item_id, item_fp = matched["id"], matched.get("fingerprint")
+        target = rel_path(root, matched["target_paths"][0])
+        stream = normalize_stream(matched["stream"])
+        if item_fp and item_fp in load_open_claims(root)[0]:
+            eprint(f"[!] item {item_id} ({item_fp}) is already claimed by an open PR")
+            return EXIT_NEGATIVE
+    else:
+        if not getattr(args, "target", None) or not getattr(args, "stream", None):
+            raise UsageError("either --target and --stream or --item is required")
+        stream, target = normalize_stream(args.stream), rel_path(root, args.target)
+
     if not path_at_head(root, target):
         raise UsageError(f"claim target does not exist at HEAD: {target}")
 
@@ -1609,6 +1633,10 @@ def cmd_claim(args: argparse.Namespace) -> int:
         "## Claim (WIP)\n\n"
         f"Target: `{target}` · Stream: {stream_label(stream)} · "
         f"Composite: `{composite}`\n\n"
+    )
+    if item_fp:
+        body += f"<!-- autonomous:fingerprint {item_fp} -->\nItem-ID: `{item_id}`\n\n"
+    body += (
         "Draft opened at claim time by `fleet.py claim`: it is the collision "
         "claim, the visibility, and the CI trigger in one. The final body is "
         "rendered by `fleet.py publish` from `.autonomous/evidence.json`; "
@@ -1632,6 +1660,8 @@ def cmd_claim(args: argparse.Namespace) -> int:
         "composite": composite,
         "pr": number,
         "url": output.strip(),
+        "item_id": item_id,
+        "fingerprint": item_fp,
     }
     if args.json:
         print(json.dumps(payload))
@@ -1919,12 +1949,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_stats.add_argument("--require-gh", action="store_true", help="fail if gh is unavailable")
 
     # claim
-    p_claim = subparsers.add_parser("claim", help="open a draft PR claiming a target")
+    p_claim = subparsers.add_parser("claim", help="open a draft PR claiming a target or backlog item")
     p_claim.add_argument("--config", help="path to config.json")
-    p_claim.add_argument("--target", required=True, help="repo-relative target path")
+    p_claim.add_argument("--target", help="repo-relative target path")
     p_claim.add_argument(
-        "--stream", required=True, help="available stream letter (1/2 alias A/B)"
+        "--stream", help="available stream letter (1/2 alias A/B)"
     )
+    p_claim.add_argument("--item", help="backlog item id or fingerprint to claim")
     p_claim.add_argument("--slug", help="worktree slug (default: derived from target)")
     p_claim.add_argument("--json", action="store_true", help="emit JSON as the last line")
 
