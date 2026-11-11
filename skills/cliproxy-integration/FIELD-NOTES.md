@@ -332,3 +332,48 @@ wrong turn.)
 **Rule this produced:** a diagnosis is only as good as its last probe. A rule merged
 from a single observation deserves a re-probe before it is trusted as a standing
 instruction — and a contradicted rule is corrected the same day, in the same home.
+
+## The 429 that wore quota's clothes
+
+A client's every request to one model — including a brand-new chat saying "hi" — returned
+`Resource has been exhausted (e.g. check quota)`. The pool held ten accounts; two showed
+panel quota. Hours went into the quota frame: cooldown bookkeeping (real, not the cause),
+pool walks, input-size theories, output-cap theories (one applied to the client config on
+that theory and had to be reverted byte-for-byte — a diagnosis that has not survived a
+test is not a basis for editing the client), concurrency, "background automation drains
+the pool" (193M tokens had gone through the pool that morning — irrelevant), and "the
+client's retry loop re-closes every recovery window" (falsified by a five-minute quiet
+gap: probes passed at 11:11, the user's attempt walked all ten accounts and failed at
+11:16).
+
+The frame broke when the client's exact payload was replicated with curl and bisected.
+Every synthetic subset passed — control, stream-only, stream + tools + 64K output ask.
+The full replica, both repo instruction files as the system prompt, failed instantly. The
+same text as a user message passed; same-size filler as the system message passed. A
+restart-aware binary search over the system text collapsed to a chunk containing
+`opencode` — and the bare word alone, as a one-line system message, reproduced the 429.
+The upstream had deployed a client-identity filter on that model's system field and
+dressed it as quota exhaustion. The client's harness prompt opens by naming itself, so
+every request from it was rejected on every account.
+
+The user then named the gateway's obfuscation setting — they knew their gateway better
+than the agent's theory pile. The config already listed the words, under a legacy key the
+v8 loader does not back, in a build that parsed the knob without wiring it (v8.0.16). The
+fix was the documented top-level `antigravity: sensitive-words` block plus an upgrade to
+the release that actually calls the obfuscator (v8.0.67, shipped the same morning). After
+it: every previously failing shape, including the exact replica and the full streaming
+shape, returned 200.
+
+Dead theories from this session, for the record: input size (25K and 44.8K tokens
+passed), the 64K output ask (passed), 6-way concurrency (passed), account health and
+failover (auth-file token-refresh mtimes proved the walk reached every account, including
+the two with panel quota), retry-loop timing (the quiet-gap evidence), automation drain
+(real token volume, wrong cause).
+
+**Rules this produced:** a raw upstream 429 is exactly as ambiguous as a gateway refusal —
+neither proves quota. When synthetic probes pass and the real client fails, replicate the
+client's exact payload and bisect it; the trigger is content, and the field it sits in
+matters. A config knob that parses is not a knob that works — confirm the build wires it.
+Auth-file token-refresh mtimes are dispatch evidence for which credentials a failing
+request actually reached. And when the user names a setting, find it before theorising
+further.

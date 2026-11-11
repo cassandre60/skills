@@ -42,6 +42,7 @@ Read the failure vocabulary:
 | Message | Meaning | Action |
 | --- | --- | --- |
 | `429 Individual quota reached` / `RESOURCE_EXHAUSTED` | that account's allowance is spent | wait for reset, or add accounts |
+| instant `429 RESOURCE_EXHAUSTED` on every account for one model, while tiny/no-system prompts pass | upstream client-name filter on the system prompt, not quota | see the section below |
 | an `INSUFFICIENT_*`-style reason with no credits | allowance spent **and** no paid credits to cover overage | credits may help — verify the fallback actually fires |
 | `Budget pool quota has been exhausted. Please ask an administrator to increase the limit or select another budget pool.` | the relay's **group budget pool** is spent — not your key's model quota | only the relay operator or a pool reset clears it; rotating keys inside the same pool does nothing. Re-probe later before treating a key as dead — these can recover on their own |
 | `All credentials for model X are cooling down` | gateway-side state, not upstream truth | restart the gateway, then walk the pool with tiny probes (one per credential; automatic under round-robin) — the warn line's remaining values are not proof of exhaustion |
@@ -139,3 +140,63 @@ showing quota. When a named account "still has quota" but is never selected:
 
 A probe scheduled for just after the earliest cooldown lift answers "does this account
 still have quota" with one tiny request — once the retrying client is stopped.
+
+## A 429 that is not quota: upstream client-name filtering
+
+An upstream can return a genuine-looking `429 RESOURCE_EXHAUSTED` for requests it does not
+want to serve, for reasons unrelated to quota. Verified 2026-11-11 against a live
+Antigravity pool: the backend serving one model returned an instant, account-independent
+429 for any request whose **system** prompt contained the substring `opencode`
+(case-insensitive). Every account refused it; every restart, cooldown clear, and failover
+was irrelevant; the panel's quota meters were unrelated. The client's own harness prompt
+self-identifies (`You are OpenCode, …`), so that client could never succeed on the model.
+
+Tells that separate this from real exhaustion:
+
+- Tiny probes pass in the same minute the real client fails. Size is not the trigger — a
+  70 KB filler system prompt passed while a 25 KB real one failed.
+- The same text **as a user message** passes; as a **system message** it fails. The filter
+  reads the system field.
+- It is instant and account-independent: failover walks the whole pool (auth-file
+  token-refresh mtimes prove dispatch) and every credential returns the same 429.
+- It can be model-scoped: a sibling model on the same pool accepted the same word.
+
+Isolation protocol that found the trigger (tiny sequential probes, same pool, same minute):
+
+1. Replicate the client's exact shape with curl (system content, `stream`, `tools`,
+   `max_tokens`). When the replica fails and every stripped-down variant passes, bisect:
+   control → stream-only → +tools+output-cap → full replica.
+2. Swap the role: the same text as a user message. A pass relocates the trigger to the
+   system field specifically.
+3. Swap the content for same-size filler. A pass rules out size, leaving content.
+4. Binary-search the failing text — restarting the gateway when a probe returns the
+   cooldown wrapper keeps the walk hitting live credentials — down to a minimal string,
+   then test word candidates directly (`opencode` vs `OpenCode` vs `open code`).
+
+Remedy at the gateway — Antigravity sensitive-word obfuscation:
+
+```yaml
+antigravity:            # top-level on a config-version: 8 file (the struct-backed key;
+  sensitive-words:      # a legacy oauth.providers.antigravity copy does not win on v8)
+  - "OpenCode"
+  - "opencode"
+```
+
+- **The knob must be wired in the build.** v8.0.16 parsed the key and never called the
+  obfuscator on Antigravity request paths; v8.0.67 calls it on execute, stream, and
+  token-count paths. A config knob that parses is not a knob that works — confirm against
+  the release's source, or probe live.
+- The obfuscation inserts **U+034F (combining grapheme joiner)** after the first rune of
+  each alphanumeric subword. The tested upstream honored that (`o\u034Fpencode` → 200) but
+  **stripped U+200B zero-width space** (`o\u200Bpencode` → still 429). Invisible-character
+  schemes are not interchangeable; the CGJ variant is the one that worked.
+- It rewrites only `request.systemInstruction` — which is exactly where the
+  chat-completions→Antigravity translator places client system messages, i.e. the poisoned
+  field. The client needs no changes; the gateway transforms the payload before dispatch.
+- Same-pool scope check: one probe of a sibling antigravity model with the same word tells
+  you whether the filter is model-specific or endpoint-wide.
+
+Upgrading the gateway binary in place under a systemd user unit: `systemctl --user stop`,
+replace the binary (verify the release `checksums.txt`), `start` — copying over a running
+binary fails with `Text file busy`. A same-major upgrade kept the v8 config and auth
+files; back up both first.
