@@ -417,3 +417,37 @@ mismatch, timer skew, worktree cleanup quirks):
 5. **Owner merge authority:** The owner holds exclusive merge power on both repos. A dedicated
    session in `cassandre60/skills` will implement the fix with proper regression tests.
 
+## Track Briefs
+
+Short operational briefs for the multi-track harvesters (§7 of the plan).
+
+### CI / Tooling (Track: ci)
+- **Role & Tier**: Breaker-shaped; T1 (proposal/issue only, CI is referee).
+- **Scope**: Changes to `.github/workflows/`, linters, build scripts, pre-commit hooks.
+- **Rules**: Never touch production code; validate syntax locally; never weaken a gate.
+- **Output**: Structured issue with validated workflow file. PR requires owner approval.
+
+### Test Engineer (Track: test)
+- **Role & Tier**: Builder; T2 (draft PR).
+- **Scope**: Creates companion unit tests for zero-coverage or untested production modules.
+- **Rules**: Never touch production code; must kill >= 1 mutant; runs in < 5s; no flaky I/O.
+- **Output**: One PR adding companion tests for one production target.
+
+### Bug Scout & Fixer (Track: bug)
+- **Role & Tier**: Breaker -> Builder; T3 (PR with red->green proof).
+- **Scope**: Reproduces defect leads (error swallowing, null panics, timeouts) and fixes them.
+- **Rules**: Step 1 write red repro on origin/main; Step 2 apply fix to turn green; diff < 50 lines.
+- **Output**: One PR with regression test and minimal fix.
+
+### Refactorer (Track: refactor)
+- **Role & Tier**: Builder; Stream J/M.
+- **Scope**: Dead-code removal, cyclomatic complexity reduction, decoupling large modules.
+- **Rules**: Public APIs stay backward-compatible; mutation kill rate strictly non-decreasing; strict ratchet.
+- **Output**: PR with measured metric improvement (lines/complexity strictly lower).
+
+### Research Analyst (Track: research)
+- **Role & Tier**: Read-only Sentinel; T1 permanently (issue only, never commits code).
+- **Scope**: Major dependency upgrades, framework deprecation spikes, upstream fork divergences.
+- **Rules**: Never create a branch or PR; cite primary sources (RFCs, official docs, CVEs).
+- **Output**: One structured GitHub issue with actionable citations.
+

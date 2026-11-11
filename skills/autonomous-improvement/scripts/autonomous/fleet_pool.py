@@ -170,3 +170,29 @@ def cmd_pool(args: argparse.Namespace) -> int:
     if annotations:
         eprint("ladder order: " + (" -> ".join(ordered) if ordered else "(empty)"))
     return EXIT_OK
+
+
+def evaluate_track_caps(
+    track_caps: Dict[str, int], prs_data: List[Dict[str, Any]]
+) -> Dict[str, Dict[str, Any]]:
+    """Count open PRs per track and report cap status."""
+    if not track_caps:
+        return {}
+    res: Dict[str, Dict[str, Any]] = {}
+    for trk, cap in track_caps.items():
+        trk_low = trk.lower()
+        count = 0
+        for p in prs_data:
+            title = (p.get("title") or "").lower()
+            body = (p.get("body") or "").lower()
+            labels = [l.get("name", "").lower() for l in (p.get("labels") or [])]
+            if (
+                any(l == f"track:{trk_low}" or l == f"track/{trk_low}" or l == trk_low for l in labels)
+                or title.startswith(f"{trk_low}:")
+                or title.startswith(f"[{trk_low}]")
+                or f"track: {trk_low}" in body
+            ):
+                count += 1
+        res[trk] = {"open": count, "cap": cap, "capped": count >= cap}
+    return res
+
