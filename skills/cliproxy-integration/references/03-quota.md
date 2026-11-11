@@ -44,7 +44,7 @@ Read the failure vocabulary:
 | `429 Individual quota reached` / `RESOURCE_EXHAUSTED` | that account's allowance is spent | wait for reset, or add accounts |
 | an `INSUFFICIENT_*`-style reason with no credits | allowance spent **and** no paid credits to cover overage | credits may help — verify the fallback actually fires |
 | `Budget pool quota has been exhausted. Please ask an administrator to increase the limit or select another budget pool.` | the relay's **group budget pool** is spent — not your key's model quota | only the relay operator or a pool reset clears it; rotating keys inside the same pool does nothing. Re-probe later before treating a key as dead — these can recover on their own |
-| `All credentials for model X are cooling down` | gateway-side state, not upstream truth | restart the service (clears in-memory cooldown) to get an accurate reading |
+| `All credentials for model X are cooling down` | gateway-side state, not upstream truth | read the cooldown warn line first (see "state dump" below): reset-aligned fresh cooldowns are upstream truth — stop traffic and wait; a restart only clears *suspect* state |
 | `circuit breaker open` | transient upstream instability | retry with backoff |
 
 Some gateways advertise a paid-credit fallback for exhausted quota. **Verify it works in your
@@ -96,3 +96,44 @@ When one account's panel shows headroom but the pool still fails:
 4. Only conclude "this account still has quota" from a request **routed to that account**.
    Pool routing decides who gets used; an idle healthy account proves nothing until selected.
    If the gateway supports per-credential prefixes, target it explicitly.
+
+## The cooldown warn line is the pool's state dump
+
+When selection fails, the gateway logs one warn line per attempt containing the whole pool
+state. Read it before touching anything:
+
+```
+auth unavailable: 10 of 10 candidate(s) for model "X" are in cooldown:
+  [provider=antigravity auth_file=antigravity-name.json, reason=quota, remaining=130h27m22s], ...
+```
+
+- **Candidate accounting.** `N of M` against the auth dir's file count: files missing from
+  the list are excluded silently — a `disabled` flag in the auth JSON, a dead refresh
+  token, or a credential pinned busy by an in-flight request (session affinity). Diff the
+  list against the directory; the dashboard does not show exclusions.
+- **`reason=quota` with long, mutually aligned `remaining` values** (all near one boundary)
+  means the gateway parsed each account's upstream reset time out of real 429 responses.
+  Recorded fresh by the running instance, that is upstream truth: a restart will not
+  shorten it — it re-fires the 429s and re-cools everything. Wait for the reset or add
+  accounts.
+- **Short, divergent `remaining` values** are windows lifting soon. Lift time = journal
+  timestamp (UTC) + `remaining`; the app-embedded timestamp may be local time.
+- **An interval-retrying client re-arms cooldowns at lift time.** The first retry after
+  expiry is a real upstream request, its 429 starts a fresh cooldown, and the pool looks
+  permanently dead. Stop the retrying client *before* the earliest lift — not merely while
+  diagnosing — then send one tiny probe.
+
+## A disabled credential is invisible, not cooling
+
+OAuth auth files carry `"disabled": true/false`. A disabled credential is dropped from the
+candidate set without a log line and without entering cooldown — while its dashboard keeps
+showing quota. When a named account "still has quota" but is never selected:
+
+1. Read the auth JSON's `disabled` and `expired` fields — not the dashboard.
+2. Flip `disabled` to `false` (back up the file first). Auth files hot-reload — the watcher
+   logs `auth file changed (WRITE)`, no restart needed.
+3. The access token refreshes automatically on use. If the refresh token itself is dead the
+   file is re-marked — re-auth the account rather than flipping the flag again.
+
+A probe scheduled for just after the earliest cooldown lift answers "does this account
+still have quota" with one tiny request — once the retrying client is stopped.
