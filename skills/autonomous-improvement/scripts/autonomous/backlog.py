@@ -29,7 +29,6 @@ try:
         hash_at_head,
         load_config,
         repo_root,
-        run,
     )
 except ImportError:
     EXIT_OK = 0
@@ -156,6 +155,7 @@ def harvest_items(root: Path, cfg: Optional[Dict[str, Any]] = None) -> List[Dict
                 {
                     "track": "ci",
                     "stream": "I",
+                    "tier": "T1",
                     "rule_id": f.get("rule", "ci.missing-workflows"),
                     "priority": "P1" if f.get("severity") == "high" else "P2",
                     "title": f.get("message", "CI workflow issue"),
@@ -263,6 +263,10 @@ def harvest_backlog(root: Path, cfg: Optional[Dict[str, Any]] = None) -> Dict[st
 
     for item in raw_items:
         track = item["track"]
+        item.setdefault(
+            "tier",
+            {"ci": "T1", "research": "T1", "refactor": "T1", "test": "T2", "bug": "T3"}.get(track, "T1"),
+        )
         target_paths = item["target_paths"]
         primary = target_paths[0] if target_paths else ""
 

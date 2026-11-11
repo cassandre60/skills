@@ -20,16 +20,13 @@ from __future__ import annotations
 import argparse
 import datetime
 import json
-import os
 import re
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from common import (
     EXIT_OK,
-    EnvError,
     Fatal,
     UsageError,
     command,
@@ -37,7 +34,7 @@ from common import (
     eprint,
     format_exit,
     git,
-    git_common_dir,
+    glob_match,
     load_config,
     load_worktree_registry,
     main_repo_root,
@@ -255,6 +252,176 @@ def _record_weakening_hits(root: Path, findings: List[Dict[str, Any]], mode: str
     print(f"[*] weakening hits recorded into {artifact_path}")
 
 
+def _is_comment_or_whitespace_line(line: str) -> bool:
+    s = line.strip()
+    if not s:
+        return True
+    if s.startswith(("#", "//", "/*", "*/", "*", "///")):
+        return True
+    if s in ('"""', "'''"):
+        return True
+    if (s.startswith('"""') and s.endswith('"""') and len(s) >= 6) or (
+        s.startswith("'''") and s.endswith("'''") and len(s) >= 6
+    ):
+        return True
+    return False
+
+
+def _check_ban_list(
+    root: Path, base: str, cfg: Dict[str, Any], touched: List[str], track: Optional[str]
+) -> None:
+    if track not in ("bug", "refactor", "test"):
+        return
+    code_files = [
+        f
+        for f in touched
+        if not f.startswith(".autonomous/")
+        and not f.endswith((".md", ".txt", ".rst", ".json", ".yml", ".yaml", ".toml", ".cfg"))
+    ]
+    if code_files:
+        diff_proc = git(["diff", "-U0", base, "--", *code_files], cwd=root, quiet=True)
+        if diff_proc.returncode == 0:
+            changed_lines: List[str] = []
+            for raw in (diff_proc.stdout or "").splitlines():
+                if raw.startswith(("+++", "---", "@@", "diff ", "index ")):
+                    continue
+                if raw.startswith(("+", "-")):
+                    changed_lines.append(raw[1:])
+            if changed_lines and all(_is_comment_or_whitespace_line(ln) for ln in changed_lines):
+                raise Fatal(
+                    "ban-list violation: pure comment/whitespace churn on non-doc track"
+                )
+    if track == "test":
+        import stream_b_scan
+        import test_weakening_check as twc
+
+        globs = twc._test_globs(cfg)
+        for f in touched:
+            if not any(glob_match(f, pat) for pat in globs):
+                continue
+            wf = root / f
+            if not wf.is_file():
+                continue
+            for finding in stream_b_scan.scan_file(root, wf):
+                if finding.get("kind") in ("vacuous-assert", "no-assertion", "mock-assert"):
+                    raise Fatal(
+                        f"ban-list violation: {finding['kind']} in {f}:{finding['line']}"
+                    )
+            if wf.suffix != ".py":
+                content = wf.read_text(encoding="utf-8", errors="ignore")
+                if not twc.ASSERTION_RE.search(content):
+                    raise Fatal(f"ban-list violation: no-assertion in {f}")
+
+
+def _has_refactor_oracle_artifact(root: Path) -> bool:
+    for rel, ok_keys in (
+        (".autonomous/simplify-oracle.json", ("ok", "passed")),
+        (".autonomous/ratchet-check.json", ("ok", "improved")),
+    ):
+        path = root / rel
+        if path.is_file():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                if any(data.get(k) is True for k in ok_keys) or data.get("verdict") in ("accepted", "passed"):
+                    return True
+            except Exception:
+                pass
+    ev_path = root / ".autonomous" / "evidence.json"
+    if ev_path.is_file():
+        try:
+            data = json.loads(ev_path.read_text(encoding="utf-8"))
+            if data.get("kind") in ("simplify", "ratchet") and (
+                data.get("ok") is True or data.get("verdict") in ("passed", "accepted")
+            ):
+                return True
+        except Exception:
+            pass
+    return False
+
+
+def _enforce_track_gate(
+    root: Path, base: str, cfg: Dict[str, Any], touched: List[str], track: Optional[str]
+) -> None:
+    _check_ban_list(root, base, cfg, touched, track)
+    if track == "research":
+        raise Fatal("track 'research' is issue-only; no code modifications or PR gates permitted")
+    elif track == "ci":
+        for f in touched:
+            if not (f.startswith(".github/") or f.endswith((".yml", ".yaml", ".json", ".toml", ".cfg")) or "lint" in f):
+                raise Fatal(f"ci track violation: modified production file {f}")
+        for f in touched:
+            if f.startswith(".github/workflows/") and f.endswith((".yml", ".yaml")):
+                wf_path = root / f
+                if wf_path.is_file():
+                    content = wf_path.read_text(encoding="utf-8")
+                    try:
+                        import yaml
+                    except ImportError:
+                        yaml = None
+                    if yaml is not None:
+                        try:
+                            parsed = yaml.safe_load(content)
+                            if not isinstance(parsed, dict):
+                                raise ValueError("workflow must parse to a YAML mapping")
+                        except Exception as exc:
+                            raise Fatal(f"ci track workflow syntax error in {f}: {exc}")
+                    else:
+                        if not content.strip() or any(ln.startswith("\t") for ln in content.splitlines()):
+                            raise Fatal(f"ci track workflow syntax error in {f}: empty or tab-indented YAML")
+                        if "jobs:" not in content or ("on:" not in content and "true:" not in content):
+                            raise Fatal(f"ci track workflow syntax error in {f}: missing 'on:' or 'jobs:'")
+    elif track == "test":
+        ev_path = root / ".autonomous" / "evidence.json"
+        if not ev_path.is_file():
+            raise Fatal("test track gate requires evidence artifact (.autonomous/evidence.json)")
+        try:
+            ev_data = json.loads(ev_path.read_text(encoding="utf-8"))
+        except Exception:
+            raise Fatal("test track gate: unreadable evidence artifact")
+        if ev_data.get("kind") != "mutant" or ev_data.get("verdict") != "killed":
+            raise Fatal("test track gate requires evidence of kind 'mutant' with verdict 'killed'")
+    elif track == "bug":
+        ev_path = root / ".autonomous" / "evidence.json"
+        if not ev_path.is_file():
+            raise Fatal("bug track gate requires evidence artifact (.autonomous/evidence.json)")
+        try:
+            ev_data = json.loads(ev_path.read_text(encoding="utf-8"))
+        except Exception:
+            raise Fatal("bug track gate: unreadable evidence artifact")
+        if ev_data.get("kind") != "defect" or ev_data.get("verdict") != "reproduced-and-fixed":
+            raise Fatal("bug track gate requires evidence of kind 'defect' with verdict 'reproduced-and-fixed'")
+    elif track == "refactor":
+        import test_weakening_check as twc
+
+        globs = twc._test_globs(cfg)
+        _chg_t, del_t = twc._changed_test_files(root, base, globs)
+        if del_t:
+            raise Fatal(f"refactor track gate: deleted tracked test file(s): {', '.join(del_t)}")
+        if not _has_refactor_oracle_artifact(root):
+            numstat = git(["diff", "--numstat", base], cwd=root, quiet=True)
+            added = 0
+            deleted = 0
+            if numstat.returncode == 0:
+                for line in (numstat.stdout or "").splitlines():
+                    parts = line.split("\t")
+                    if len(parts) < 3:
+                        continue
+                    fpath = parts[2]
+                    if fpath.startswith(".autonomous/") or any(glob_match(fpath, pat) for pat in globs):
+                        continue
+                    if any(p in fpath.lower() for p in ("lock", ".g.dart", ".freezed.dart", "min.js")):
+                        continue
+                    try:
+                        added += int(parts[0])
+                        deleted += int(parts[1])
+                    except ValueError:
+                        pass
+            if added >= deleted or deleted == 0:
+                raise Fatal(
+                    f"refactor track gate: net line delta must decrease without a simplification/ratchet oracle artifact (+{added}/-{deleted})"
+                )
+
+
 def cmd_verify_gate(args: argparse.Namespace) -> int:
     worktree = Path(args.worktree).resolve()
     if not worktree.exists():
@@ -316,41 +483,7 @@ def cmd_verify_gate(args: argparse.Namespace) -> int:
             except Exception:
                 pass
 
-    if track == "research":
-        raise Fatal("track 'research' is issue-only; no code modifications or PR gates permitted")
-    elif track == "ci":
-        for f in touched:
-            if not (f.startswith(".github/") or f.endswith((".yml", ".yaml", ".json", ".toml", ".cfg")) or "lint" in f):
-                raise Fatal(f"ci track violation: modified production file {f}")
-        for f in touched:
-            if f.startswith(".github/workflows/") and f.endswith((".yml", ".yaml")):
-                wf_path = root / f
-                if wf_path.is_file():
-                    import yaml
-                    try:
-                        yaml.safe_load(wf_path.read_text(encoding="utf-8"))
-                    except Exception as exc:
-                        raise Fatal(f"ci track workflow syntax error in {f}: {exc}")
-    elif track == "test":
-        ev_path = root / ".autonomous" / "evidence.json"
-        if not ev_path.is_file():
-            raise Fatal("test track gate requires evidence artifact (.autonomous/evidence.json)")
-        try:
-            ev_data = json.loads(ev_path.read_text(encoding="utf-8"))
-        except Exception:
-            raise Fatal("test track gate: unreadable evidence artifact")
-        if ev_data.get("kind") != "mutant" or ev_data.get("verdict") != "killed":
-            raise Fatal("test track gate requires evidence of kind 'mutant' with verdict 'killed'")
-    elif track == "bug":
-        ev_path = root / ".autonomous" / "evidence.json"
-        if not ev_path.is_file():
-            raise Fatal("bug track gate requires evidence artifact (.autonomous/evidence.json)")
-        try:
-            ev_data = json.loads(ev_path.read_text(encoding="utf-8"))
-        except Exception:
-            raise Fatal("bug track gate: unreadable evidence artifact")
-        if ev_data.get("kind") != "defect" or ev_data.get("verdict") != "reproduced-and-fixed":
-            raise Fatal("bug track gate requires evidence of kind 'defect' with verdict 'reproduced-and-fixed'")
+    _enforce_track_gate(root, base, cfg, touched, track)
 
     print(f"[*] Diff base: {base}")
     print(f"[*] Touched files: {len(touched)} ({len(analyzable)} analyzable)")

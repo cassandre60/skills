@@ -65,6 +65,16 @@ class SurveySignalsTests(unittest.TestCase):
         picks = {p["tool"]: p for p in payload["picks"]}
         self.assertIn("ci-audit", picks)
         self.assertGreaterEqual(picks["ci-audit"]["score"], 0.25)
+        self.assertEqual(picks["ci-audit"]["tier"], "T1")
+
+        bproc = support.run(
+            [support.PYTHON, str(SCRIPTS / "backlog.py"), "harvest", "--json"],
+            cwd=repo,
+        )
+        self.assertEqual(bproc.returncode, 0, bproc.stderr)
+        ci_items = [it for it in json.loads(bproc.stdout).get("items", []) if it.get("track") == "ci"]
+        self.assertTrue(ci_items)
+        self.assertTrue(all(it.get("tier") == "T1" for it in ci_items), ci_items)
 
     def test_dead_code_scores_simplification(self) -> None:
         repo, _ = support.python_repo(self.tmp, name="deadcode")

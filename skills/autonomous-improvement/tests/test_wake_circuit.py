@@ -196,6 +196,52 @@ class RateLimitAndCircuitBreakerTests(unittest.TestCase):
         cb_file = state_dir / "CIRCUIT_BREAKER"
         self.assertFalse(cb_file.exists(), "quiet wakes must not trip circuit breaker")
 
+    def test_wake_honors_retry_after_header_cooldown(self) -> None:
+        import time
+
+        repo, env, _json_path, state_dir = self._stage_wake_repo(prs=[])
+        harness = support.write(
+            self.tmp / "retry_after_harness.sh",
+            "#!/bin/sh\nprintf 'HTTP 429 Too Many Requests\\nRetry-After: 1\\n' >&2\nexit 1\n",
+        )
+        harness.chmod(0o755)
+        res = support.script(
+            repo,
+            "fleet.py",
+            "wake",
+            "--harness-cmd",
+            f"{harness} {{prompt_file}}",
+            "--model",
+            "test-provider/ra-model",
+            env=env,
+        )
+        self.assertNotEqual(res.returncode, 0)
+        fail_file = state_dir / "model_failures"
+        self.assertTrue(fail_file.exists())
+        line = fail_file.read_text(encoding="utf-8").strip().splitlines()[-1]
+        self.assertEqual(len(line.split()), 3, f"expected 3-col cooldown line, got: {line!r}")
+        self.assertEqual(line.split()[2], "1")
+
+        time.sleep(1.2)
+        marker = self.tmp / "ra_recovered.txt"
+        probe_harness = support.write(
+            self.tmp / "ra_probe.sh",
+            f"#!/bin/sh\n: > \"{marker}\"\necho 'done'\nexit 0\n",
+        )
+        probe_harness.chmod(0o755)
+        res2 = support.script(
+            repo,
+            "fleet.py",
+            "wake",
+            "--harness-cmd",
+            f"{probe_harness} {{prompt_file}}",
+            "--model",
+            "test-provider/ra-model",
+            env=env,
+        )
+        self.assertEqual(res2.returncode, 0, res2.stderr)
+        self.assertTrue(marker.exists(), "model should recover after Retry-After: 1s expires")
+
 
 if __name__ == "__main__":
     unittest.main()
