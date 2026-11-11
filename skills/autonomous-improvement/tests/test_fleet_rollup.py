@@ -189,5 +189,97 @@ class WatchdogAssetContractTests(unittest.TestCase):
         self.assertIn('tail -c 600 "$OUT" 2>/dev/null || true', self.watchdog)
 
 
+class GarbageAndTracelessWakeTests(unittest.TestCase):
+    def test_garbage_tool_call_exit_0_parks_model_and_trips_circuit_breaker(self) -> None:
+        import support
+
+        with support.tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            repo, _ = support.init_repo(tmp, name="garbage-wake", with_origin=True)
+            support.install_scripts(repo)
+            support.write_config(repo)
+            bin_dir = support.path_with_only(tmp, names=("git",))
+            gh = support.write(bin_dir / "gh", "#!/bin/sh\necho '[]'\n")
+            gh.chmod(0o755)
+            state_dir = repo / ".autonomous" / "state"
+            env = support.env_with_path(
+                bin_dir,
+                ORCH_STATE_DIR=str(state_dir),
+                ORCH_MIN_FREE_GB="0",
+            )
+            bad_harness = support.write(
+                tmp / "bad_harness.sh",
+                "#!/bin/sh\nprintf '> build · free\\n<tool_call> garbled\\n'\nexit 0\n",
+            )
+            bad_harness.chmod(0o755)
+
+            for i in range(3):
+                env_iter = dict(env)
+                # Ensure unique state or reset model_failures after first failure to prove 3 consecutive failed wakes
+                fail_file = state_dir / "model_failures"
+                if i > 0 and fail_file.exists():
+                    fail_file.unlink()
+                res = support.script(
+                    repo,
+                    "fleet.py",
+                    "wake",
+                    "--harness-cmd",
+                    f"{bad_harness} {{prompt_file}}",
+                    "--model",
+                    "openrouter/garbage-free",
+                    env=env_iter,
+                )
+                self.assertNotEqual(res.returncode, 0, res.stdout + res.stderr)
+                if i == 0:
+                    self.assertTrue(fail_file.exists())
+                    self.assertIn("openrouter/garbage-free", fail_file.read_text(encoding="utf-8"))
+
+            self.assertTrue(
+                (state_dir / "CIRCUIT_BREAKER").exists(),
+                "3 consecutive garbage-output exit-0 wakes must trip CIRCUIT_BREAKER",
+            )
+
+    def test_traceless_wakes_trip_circuit_breaker(self) -> None:
+        import support
+
+        with support.tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            repo, _ = support.init_repo(tmp, name="traceless-wake", with_origin=True)
+            support.install_scripts(repo)
+            support.write_config(repo)
+            bin_dir = support.path_with_only(tmp, names=("git",))
+            gh = support.write(bin_dir / "gh", "#!/bin/sh\necho '[]'\n")
+            gh.chmod(0o755)
+            state_dir = repo / ".autonomous" / "state"
+            env = support.env_with_path(
+                bin_dir,
+                ORCH_STATE_DIR=str(state_dir),
+                ORCH_MIN_FREE_GB="0",
+                ORCH_REQUIRE_AGENT_TRACE="1",
+            )
+            noop_harness = support.write(
+                tmp / "noop_harness.sh",
+                "#!/bin/sh\necho 'nothing happened'\nexit 0\n",
+            )
+            noop_harness.chmod(0o755)
+
+            for _ in range(3):
+                support.script(
+                    repo,
+                    "fleet.py",
+                    "wake",
+                    "--harness-cmd",
+                    f"{noop_harness} {{prompt_file}}",
+                    "--model",
+                    "test/noop",
+                    env=env,
+                )
+
+            self.assertTrue(
+                (state_dir / "CIRCUIT_BREAKER").exists(),
+                "3 consecutive traceless wakes under ORCH_REQUIRE_AGENT_TRACE=1 must trip CIRCUIT_BREAKER",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

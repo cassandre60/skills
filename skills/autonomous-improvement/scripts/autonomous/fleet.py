@@ -26,14 +26,12 @@ from __future__ import annotations
 
 import argparse
 import datetime
-import email.utils
 import hashlib
 import json
 import os
 import re
 import shlex
 import shutil
-import subprocess
 import sys
 import tempfile
 import time
@@ -43,11 +41,9 @@ from typing import Any, Dict, List, Optional, Tuple
 from common import (
     EXIT_NEGATIVE,
     EXIT_OK,
-    EXIT_USAGE,
     EnvError,
     Fatal,
     UsageError,
-    config_path,
     eprint,
     format_exit,
     git,
@@ -60,7 +56,6 @@ from common import (
     rel_path,
     repo_root,
     run,
-    state_dir_candidates,
     stream_label,
     test_for_source,
     write_json_atomic,
@@ -80,6 +75,9 @@ from fleet_cockpit import (
     run_dashboard_command,
 )
 from fleet_doctor import (
+    _auto_clear_circuit_breaker,
+    _check_consecutive_failed_wakes,
+    _circuit_breaker_path,
     _doctor_check,
     _doctor_run,
     _journal_age,
@@ -87,6 +85,7 @@ from fleet_doctor import (
     _resolve_min_free_gb,
     _resolve_state_dir,
     cmd_doctor,
+    cmd_reset_circuit,
     doctor_summary,
     run_doctor_checks,
 )
@@ -239,6 +238,7 @@ ORCH_MODEL_COOLDOWN_DEFAULT = 3600  # 1 hour
 ORCH_RETRY_AFTER_EXHAUSTION_DEFAULT = 1800  # 30 min
 ORCH_FAILURE_TTL_DEFAULT = 7 * 86400  # 7 days
 
+GARBAGE_TURN_PATTERN = re.compile(r"</?tool_call>|<\|tool_call\|>")
 OUTAGE_PATTERN = re.compile(
     r"503|Endpoint is unavailable|upstream request failed|connection reset|overloaded",
     re.IGNORECASE,
@@ -304,96 +304,6 @@ def _record_model_failure(state_dir: Path, model: str, reason: str = "") -> None
         fail_file.write_text("\n".join(entries) + "\n", encoding="utf-8")
     except Exception as exc:
         eprint(f"[warn] failed to record model failure: {exc}")
-
-
-def _circuit_breaker_path(state_dir: Path) -> Path:
-    return state_dir / "CIRCUIT_BREAKER"
-
-
-def _check_consecutive_failed_wakes(state_dir: Path) -> bool:
-    wakes_file = state_dir / "wakes.jsonl"
-    if not wakes_file.is_file():
-        return False
-    records = []
-    try:
-        for line in wakes_file.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line:
-                records.append(json.loads(line))
-    except Exception:
-        return False
-
-    turn_records = [
-        r
-        for r in records
-        if r.get("action") not in ("quiet", "cooling", "no-gap", "prompt-only")
-    ]
-    if len(turn_records) < 3:
-        return False
-
-    last_three = turn_records[-3:]
-    all_failed = all(r.get("action") == "launch-failed" for r in last_three)
-    if all_failed:
-        cb_path = _circuit_breaker_path(state_dir)
-        cb_path.write_text(
-            json.dumps(
-                {
-                    "schema": "circuit-breaker/1",
-                    "tripped_at": datetime.datetime.now(
-                        datetime.timezone.utc
-                    ).isoformat(),
-                    "reason": "3 consecutive failed wakes (launch-failed)",
-                    "last_records": last_three,
-                },
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
-        return True
-    return False
-
-
-def _auto_clear_circuit_breaker(root: Path, cb_path: Path) -> bool:
-    if not cb_path.is_file():
-        return False
-    try:
-        data = json.loads(cb_path.read_text(encoding="utf-8"))
-        tripped_str = data.get("tripped_at")
-        if tripped_str:
-            tripped_dt = datetime.datetime.fromisoformat(tripped_str)
-            proc = run(["git", "log", "-1", "--format=%cI"], cwd=root, quiet=True)
-            if proc.returncode == 0 and proc.stdout.strip():
-                commit_dt = datetime.datetime.fromisoformat(proc.stdout.strip())
-                if commit_dt > tripped_dt:
-                    cb_path.unlink(missing_ok=True)
-                    return True
-    except Exception:
-        pass
-    return False
-
-
-def cmd_reset_circuit(args: argparse.Namespace) -> int:
-    root = main_repo_root()
-    state_dir = _resolve_state_dir(root, getattr(args, "state_dir", None))
-    cb_path = _circuit_breaker_path(state_dir)
-    cleared = False
-    if cb_path.is_file():
-        cb_path.unlink()
-        cleared = True
-    payload = {
-        "tool": "fleet.py reset-circuit",
-        "cleared": cleared,
-        "circuit_breaker": str(cb_path),
-        "status": "ready" if cleared else "was-not-tripped",
-    }
-    if args.json:
-        print(json.dumps(payload, indent=2))
-    else:
-        if cleared:
-            print("[+] Circuit breaker reset: dispatch re-armed")
-        else:
-            print("[*] Circuit breaker was not tripped")
-    return EXIT_OK
 
 
 def _rollup_item_sha(item: Dict[str, Any]) -> Optional[str]:
@@ -1455,23 +1365,36 @@ def cmd_wake(args: argparse.Namespace) -> int:
                 return EXIT_OK
 
             launched = False
+            rr_dir = root / ".autonomous" / "run-records"
+            require_trace = os.environ.get("ORCH_REQUIRE_AGENT_TRACE") == "1" or bool(fleet_cfg.get("require_agent_trace"))
             for model in candidate_ladder:
                 argv = _render_harness_argv(template, prompt_file, prompt, model)
+                pre_rr = len(list(rr_dir.glob("rr-*.json"))) if rr_dir.is_dir() else 0
+                pre_head = get_main_sha(root)
                 try:
                     proc = run(argv, cwd=root, quiet=True)
                 except EnvError as exc:
                     eprint(f"[warn] harness launch failed: {exc}")
                     continue
+                combined_out = (proc.stdout or "") + "\n" + (proc.stderr or "")
                 tail = (proc.stdout or "").strip().splitlines()
                 if tail:
                     print(f"    harness: {tail[-1]}")
                 if proc.returncode == 0:
-                    record["action"] = "launched"
+                    post_rr = len(list(rr_dir.glob("rr-*.json"))) if rr_dir.is_dir() else 0
+                    if post_rr <= pre_rr and GARBAGE_TURN_PATTERN.search(combined_out):
+                        eprint(f"[warn] malformed tool-call output on {model or 'default'}; cooling and rotating")
+                        if model:
+                            _record_model_failure(state_dir, model)
+                        continue
+                    record["action"] = (
+                        "traceless"
+                        if (require_trace and post_rr <= pre_rr and get_main_sha(root) == pre_head)
+                        else "launched"
+                    )
                     record["model"] = model or None
                     launched = True
                     break
-
-                combined_out = (proc.stdout or "") + "\n" + (proc.stderr or "")
                 if OUTAGE_PATTERN.search(combined_out):
                     eprint(
                         f"[warn] harness exited {proc.returncode}"

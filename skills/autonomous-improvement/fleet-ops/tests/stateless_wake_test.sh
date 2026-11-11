@@ -47,6 +47,7 @@ case "$*" in
   *model-unavailable*) printf '\x1b[91m\x1b[1mError: \x1b[0mUpstream request failed: Model is unavailable.\n' ; exit 1 ;;
   *timeout-model*) exit 124 ;;
   *usage-credits*) printf '\x1b[91m\x1b[1mError: \x1b[0mAdd usage credits or subscribe and save up to 66%%: https://ollama.com/plans\n' ; exit 1 ;;
+  *garbage-free*) printf '> build · free\n<tool_call> garbled output\n' ; exit 0 ;;
   *) echo "wake: housekeeping done" ; exit 0 ;;
 esac
 EOF
@@ -436,6 +437,26 @@ if grep -q -- "-m provider/timeout-model" "$WAKE_LOG" 2>/dev/null; then
   ok "exit 124 transient timeout cooldown expired independently of 24h quota cooldown"
 else
   fail "exit 124 timeout stayed parked under 24h quota cooldown"
+fi
+
+# --- case 16b: exit 0 with leaked <tool_call> garbage output cools model and rotates (P1-4) ---
+: >"$WAKE_LOG"
+rm -f "$TMP/state/wake.json" "$TMP/state/wake_failures"
+PATH="$TMP/bin:$PATH" \
+  ORCH_REPO="$SKILL_ROOT" \
+  ORCH_STATE_DIR="$TMP/state" \
+  ORCH_WAKE_CMD='fake-harness "$1" ${2:+-m "$2"}' \
+  ORCH_MODEL_LADDER="openrouter/garbage-free opencode/mention-free" \
+  ORCH_TIMEOUT_COOLDOWN=60 \
+  ORCH_WAKE_TIMEOUT=20 \
+  ORCH_MIN_INTERVAL=0 \
+  GH_JSON="$TMP/prs-red.json" \
+  bash "$ASSETS" >/dev/null 2>&1
+RC=$?
+if [ "$RC" -eq 0 ] && grep -q "openrouter/garbage-free" "$TMP/state/wake_failures" 2>/dev/null && grep -q "opencode/mention-free" "$WAKE_LOG" 2>/dev/null; then
+  ok "exit 0 leaked <tool_call> garbage rotated to next model and cooled broken model"
+else
+  fail "exit 0 leaked <tool_call> garbage was NOT rotated or cooled"
 fi
 
 # --- case 17: ORCH_WAKE_ON_BACKLOG=1 wakes via built-in work-gate and passes multi-track prompt (issue #167) ---
