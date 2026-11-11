@@ -174,6 +174,38 @@ The three roles a worker (or a solo run) plays:
 - **Sentinel:** read-only diff and CI inspection. Checks evidence, file
   ownership, test weakening, and scope. Does not polish.
 
+### Master Cockpit & Interactive Supervisor
+
+When the owner uses a single interactive thread as a live dashboard and
+command center to oversee spawned worker subagents and background wakes:
+
+1. **Zero-token cockpit refresh (`fleet.py dashboard`)**:
+   At the start of a turn (or when asked for status), run
+   `python3 scripts/autonomous/fleet.py dashboard` (`--json` for structured
+   reads). It aggregates governor dispatch status, active owner directives,
+   spawned subagent workers (`.autonomous/workers.json`), linked git worktrees,
+   recent run records, the open PR matrix (checks, draft state, owner-asks),
+   model pool live/cooling status, and unclaimed backlog candidates without
+   reading raw worker transcripts.
+2. **Persistent steering bus (`fleet.py directive`)**:
+   When the owner gives a steering instruction (*"focus on module X"*,
+   *"repair PR #42 first"*, *"switch to Stream B"*), persist it immediately:
+   - `python3 scripts/autonomous/fleet.py directive add "<instruction>" [--priority high|normal|low] [--stream <S>] [--target <path>]`
+   - `python3 scripts/autonomous/fleet.py directive set "<instruction>"` (replaces prior active directives)
+   - `python3 scripts/autonomous/fleet.py directive done --id <dir-id>` / `directive clear`
+   Active directives are included in `fleet.py needs-brain` (waking an idle
+   stateless timer immediately) and rendered at the top of `_wake_prompt` so
+   both interactive dispatches and unattended wakes obey the owner's steering.
+3. **Subagent worker registry & context isolation (`fleet.py worker`)**:
+   - Before spawning a worker subagent, register it:
+     `python3 scripts/autonomous/fleet.py worker register --id <worker-or-session-id> --target <path> --stream <S> --slug <slug> --model <model> --summary "<task>"`
+   - When the worker finishes or blocks, update its record:
+     `python3 scripts/autonomous/fleet.py worker update --id <worker-or-session-id> --status completed|failed|blocked [--pr <n>] [--url <url>] --summary "<1-line outcome>"`
+   - **Anti-bloat rule**: worker subagents run in isolated subagent sessions
+     and must return **only a 5-line completion manifest** (`target`,
+     `outcome`, `pr_url`, `fail_to_pass_proof`, `gate_verdict`) to the Master
+     Cockpit thread — never raw test logs, compiler output, or full diffs.
+
 ## The CI green loop
 
 A PR is not done when it is created; it is done when it is merged. The gate

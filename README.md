@@ -67,8 +67,8 @@ skills/
     examples/   # 2 files
     fleet-ops/  # 16 files
     references/ # 11 files
-    scripts/    # 41 files
-    tests/      # 22 files
+    scripts/    # 42 files
+    tests/      # 23 files
   cliproxy-integration/
     SKILL.md
     FIELD-NOTES.md
