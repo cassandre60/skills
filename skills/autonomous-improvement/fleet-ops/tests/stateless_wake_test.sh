@@ -10,6 +10,7 @@
 #
 # Run: bash fleet-ops/tests/stateless_wake_test.sh
 set -u
+export ORCH_MIN_FREE_GB="${ORCH_MIN_FREE_GB:-0}"
 
 # This test lives at fleet-ops/tests/, one level deeper than the skill's own
 # tests: fleet-ops/ holds the elective keep-alive machinery. FLEET_OPS is the
@@ -44,6 +45,8 @@ case "$*" in
   *parse-error*) echo "Error: You must provide a message" ; exit 1 ;;
   *ansi-free-limit*) printf '\x1b[91m\x1b[1mError: \x1b[0mFree usage limit reached. Connect a provider or subscribe to OpenCode Go to keep going, or switch models.\n' ; exit 1 ;;
   *model-unavailable*) printf '\x1b[91m\x1b[1mError: \x1b[0mUpstream request failed: Model is unavailable.\n' ; exit 1 ;;
+  *timeout-model*) exit 124 ;;
+  *usage-credits*) printf '\x1b[91m\x1b[1mError: \x1b[0mAdd usage credits or subscribe and save up to 66%%: https://ollama.com/plans\n' ; exit 1 ;;
   *) echo "wake: housekeeping done" ; exit 0 ;;
 esac
 EOF
@@ -354,6 +357,44 @@ if [ "$RC" -eq 0 ] && ! grep -q "ARGS:" "$WAKE_LOG" 2>/dev/null && grep -qi "act
   ok "worktree cap prevents wake launch when exceeded"
 else
   fail "worktree cap did NOT prevent wake launch"
+fi
+
+# --- case 14: exit 124 timeout records model for cooldown (issue #162) ---
+: >"$WAKE_LOG"
+rm -f "$TMP/state/wake.json" "$TMP/state/wake_failures"
+PATH="$TMP/bin:$PATH" \
+  ORCH_REPO="$SKILL_ROOT" \
+  ORCH_STATE_DIR="$TMP/state" \
+  ORCH_WAKE_CMD='fake-harness "$1" ${2:+-m "$2"}' \
+  ORCH_MODEL_LADDER="provider/timeout-model provider/mention-free" \
+  ORCH_WAKE_TIMEOUT=20 \
+  ORCH_MIN_INTERVAL=0 \
+  GH_JSON="$TMP/prs-red.json" \
+  bash "$ASSETS" >/dev/null 2>&1
+RC=$?
+if [ "$RC" -eq 0 ] && grep -q "provider/timeout-model" "$TMP/state/wake_failures" 2>/dev/null; then
+  ok "exit 124 timeout records model for cooldown in wake_failures"
+else
+  fail "exit 124 timeout was NOT recorded in wake_failures"
+fi
+
+# --- case 15: usage-credits error triggers quota rotation (issue #162) ---
+: >"$WAKE_LOG"
+rm -f "$TMP/state/wake.json" "$TMP/state/wake_failures"
+PATH="$TMP/bin:$PATH" \
+  ORCH_REPO="$SKILL_ROOT" \
+  ORCH_STATE_DIR="$TMP/state" \
+  ORCH_WAKE_CMD='fake-harness "$1" ${2:+-m "$2"}' \
+  ORCH_MODEL_LADDER="ollama/usage-credits provider/mention-free" \
+  ORCH_WAKE_TIMEOUT=20 \
+  ORCH_MIN_INTERVAL=0 \
+  GH_JSON="$TMP/prs-red.json" \
+  bash "$ASSETS" >/dev/null 2>&1
+RC=$?
+if [ "$RC" -eq 0 ] && grep -q "ollama/usage-credits" "$TMP/state/wake_failures" 2>/dev/null; then
+  ok "usage-credits error triggers quota rotation and records in wake_failures"
+else
+  fail "usage-credits error was NOT rotated or recorded in wake_failures"
 fi
 
 if [ "$FAILED" -eq 0 ]; then

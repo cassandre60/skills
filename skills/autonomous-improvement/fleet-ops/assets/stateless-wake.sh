@@ -1,31 +1,39 @@
 #!/bin/bash
-# Stateless-wake launcher (issue #18): a timer STARTS a fresh headless run
-# instead of resuming one immortal session.
+# Stateless wake launcher for the autonomous-improvement Orchestrator.
 #
-# Flow per tick:
-#   1. flock (a slow wake must not overlap the next timer run);
-#   2. fleet kill switch present -> do nothing (the operator said stop);
+# Primary shape for unattended operation (references/05 §Stateless wake). A
+# timer runs this script on cadence:
+#   1. checks .autonomous/STOP — global kill-switch, exits 0 if present;
+#   2. checks fleet doctor's disk headroom floor — exits 0 if exhausted;
 #   3. `fleet.py needs-brain --json` in $ORCH_REPO — unchanged state means
-#      QUIET: nothing is launched, 0 tokens spent;
+#      it exits 0 (0 tokens spent, quiet hours stay free);
 #   4. otherwise launch $ORCH_WAKE_CMD once, walking $ORCH_MODEL_LADDER on
 #      quota failures (error-line anchored, same rule as the watchdog);
-#   5. record the attempt; on total failure exit 3 and CLEAR the recorded
-#      digest so the next tick retries the same state.
+#   5. exit 0 on success; exit 3 on total failure (every ladder model failed)
+#      so systemd OnFailure= / an owner notification can fire.
 #
-# No session id is read or written anywhere: that is the whole point.
+# Unlike the watchdog, this shape starts a FRESH headless run each wake:
+#   * needs NO session id (the whole point of the stateless switch);
+#   * creates NO runner processes when state has not changed;
+#   * works with opencode run / Claude Code headless / Codex headless
+#     (see fleet-ops/references/harness-adapters.md).
 #
-# Environment:
-#   ORCH_REPO          repo to run the predicate in (default: cwd)
-#   ORCH_STATE_DIR     durable state dir holding wake.json (default: ~/.local/share/orchestrator)
+# Environment variables (all optional; sensible defaults apply):
+#   ORCH_REPO          repo to wake in (default: $PWD)
+#   ORCH_STATE_DIR     directory holding wake.log, wake.json, and the
+#                      flock lockfile (default: $HOME/.local/share/orchestrator)
+#   ORCH_FLEET_PY      explicit path to fleet.py (default: $ORCH_REPO/scripts/autonomous/fleet.py)
+#   ORCH_MODEL_LADDER  space-separated model ids to try in order (default: one harness-default attempt)
 #   ORCH_WAKE_CMD      bash snippet; $1 = prompt text, $2 = model id ("" = harness default)
 #                      (default: opencode run ${2:+-m "$2"} "$1" — positional message; see the adapter row for why --auto is NOT in the default)
-#   ORCH_PROMPT_FILE   file whose contents become $1 (default: $STATE_DIR/wake-prompt.md;
-#                      falls back to a built-in prompt naming the skill's wake protocol)
-#   ORCH_MODEL_LADDER  space-separated model ids, most-preferred first (empty = one attempt)
+#   ORCH_PROMPT_FILE   file holding the prompt text (default: $ORCH_STATE_DIR/wake-prompt.md;
+#                      if absent, a minimal default prompt is used)
 #   ORCH_WAKE_TIMEOUT  seconds before the run is killed (default: 3600)
 #   ORCH_MIN_INTERVAL  minimum seconds between launches (default: 0)
 #   ORCH_MODEL_COOLDOWN / ORCH_FAILURE_TTL  shared semantics with the watchdog
 #                      (wake_failures cooldown 3600s, prune older than 7 days)
+#   ORCH_MASTER_SESSION_ID optional session ID for Master Cockpit status telemetry
+#   ORCH_WORK_GATE     optional executable gate to allow wake on backlog work even if PR state unchanged
 #
 # Exit codes: 0 = quiet (unchanged state) or the harness run completed;
 #             2 = misconfiguration (missing ORCH_REPO / predicate / a
@@ -70,6 +78,20 @@ WAKE_CMD="${ORCH_WAKE_CMD:-opencode run \${2:+-m \"\$2\"} \"\$1\"}"
 
 mkdir -p "$STATE_DIR"
 
+notify_cockpit() { # $1: badge, $2: text
+  local badge="$1"
+  local text="${2:-}"
+  local master="${ORCH_MASTER_SESSION_ID:-}"
+  [ -n "$master" ] || return 0
+  command -v opencode >/dev/null 2>&1 || return 0
+  opencode api PATCH "/api/session/$master" -d "{\"title\": \"Master Cockpit [$badge]\"}" >/dev/null 2>&1 || true
+  if [ -n "$text" ]; then
+    local escaped
+    escaped=$(python3 -c "import json,sys; print(json.dumps(sys.argv[1]))" "$text" 2>/dev/null || echo "\"$text\"")
+    opencode api POST "/api/session/$master/synthetic" -d "{\"text\": $escaped, \"resume\": false}" >/dev/null 2>&1 || true
+  fi
+}
+
 echo "$(date -Is) tick: repo=$REPO ladder=[$LADDER] interval=${MIN_INTERVAL}s" >>"$LOG"
 
 exec 9>"$STATE_DIR/stateless-wake.lock"
@@ -91,10 +113,23 @@ if [ ! -d "$REPO" ]; then
   exit 2
 fi
 
+# 1a. Routine build artifact purge and worktree prune (reclaim space).
+purge_build_artifacts() {
+  for d in "$REPO"-*; do
+    if [ -d "$d" ] && [ "$d" != "$REPO-*" ]; then
+      rm -rf "$d/build" "$d/.dart_tool"
+    fi
+  done
+  if [ -d "$REPO/.git" ] || git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
+    git -C "$REPO" worktree prune 2>/dev/null || true
+  fi
+}
+purge_build_artifacts
+
 # 1b. Disk headroom floor: never launch into an almost-full filesystem (issue #115).
 MIN_FREE_GB="${ORCH_MIN_FREE_GB:-5}"
 FREE_KB="$(df -k "$REPO" 2>/dev/null | awk 'NR==2 {print $4}')"
-if [ -n "$FREE_KB" ]; then
+if [ -n "$FREE_KB" ] && [ "$FREE_KB" -gt 0 ] 2>/dev/null; then
   FREE_GB=$(( FREE_KB / 1024 / 1024 ))
   if [ "$FREE_GB" -lt "$MIN_FREE_GB" ]; then
     echo "$(date -Is) disk headroom exhausted (${FREE_GB} GiB free < ${MIN_FREE_GB} GiB floor); not launching a wake" >>"$LOG"
@@ -102,7 +137,7 @@ if [ -n "$FREE_KB" ]; then
   fi
 fi
 
-# 1c. Routine worktree prune and concurrent worktree cap (issue #115).
+# 1c. Concurrent worktree cap (issue #115: prevent unbounded worktree buildup).
 MAX_WORKTREES="${ORCH_MAX_WORKTREES:-5}"
 if [ -d "$REPO/.git" ] || git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
   git -C "$REPO" worktree prune 2>/dev/null || true
@@ -125,8 +160,16 @@ NEEDS_BRAIN="$(
     | python3 -c 'import json,sys; print("yes" if json.load(sys.stdin).get("needs_brain") else "no")' 2>>"$LOG"
 )"
 if [ "${NEEDS_BRAIN:-no}" != "yes" ]; then
-  echo "$(date -Is) quiet: state unchanged since the last wake (0 tokens)" >>"$LOG"
-  exit 0
+  # PR state can be frozen for days while the owner is away (open PRs are
+  # handled later). The digest alone would park the factory forever, so a
+  # configured work-gate may still wake it when the backlog has a free target.
+  if [ -n "${ORCH_WORK_GATE:-}" ] && [ -x "$ORCH_WORK_GATE" ] && "$ORCH_WORK_GATE" >>"$LOG" 2>&1; then
+    echo "$(date -Is) work-gate: backlog work available; waking despite unchanged PR state" >>"$LOG"
+  else
+    echo "$(date -Is) quiet: state unchanged since the last wake (0 tokens)" >>"$LOG"
+    notify_cockpit "💤 Idle" ""
+    exit 0
+  fi
 fi
 
 # 3. Rate limit the launches (independent of the predicate's own cadence).
@@ -185,7 +228,7 @@ record_wake() { # $1 = exit code, $2 = duration s, $3 = model label
 # ANSI escape sequences are stripped before matching (issue #109): opencode
 # prints errors in color, and the escape prefix breaks the ^ anchor.
 ERROR_LINE_RE='^[[:space:]]*(Error|ERROR|error)\b|^[[:space:]]*HTTP[[:space:]]*429|^[[:space:]]*429[[:space:]]|curl: \(22\)|^[[:space:]]*[A-Za-z]+Error:'
-QUOTA_RE='rate limit|rate_limit|429|quota|too many requests|insufficient balance|balance is at|exceeded your current|overloaded|usage limit|model is unavailable|temporarily unavailable'
+QUOTA_RE='rate limit|rate_limit|429|quota|too many requests|insufficient balance|balance is at|exceeded your current|overloaded|usage limit|usage credits|subscribe and save|model is unavailable|is no longer available|temporarily unavailable'
 quota_failure() {
   sed -E 's/\x1B\[[0-9;]*[a-zA-Z]//g' "$1" 2>/dev/null \
     | grep -E "$ERROR_LINE_RE" \
@@ -230,24 +273,15 @@ read state/*.json + the ledger + the journal tail, act on fleet.py needs-brain's
 fi
 
 candidates=()
-if [ -f "$STATE_DIR/daily_exhausted_until" ]; then
-  until_ts=$(cat "$STATE_DIR/daily_exhausted_until" 2>/dev/null || echo "0")
-  now_ts=$(date +%s)
-  if [ -n "$until_ts" ] && [ "$now_ts" -lt "$until_ts" ]; then
-    echo "$(date -Is) daily quota exhausted until $until_ts; staying quiet (0 tokens)" >>"$LOG"
-    exit 0
-  else
-    rm -f "$STATE_DIR/daily_exhausted_until"
-  fi
-fi
 if [ -n "$LADDER" ]; then
   for model_id in $LADDER; do
     failed_recently "$model_id" && continue
     candidates+=("$model_id")
   done
   if [ "${#candidates[@]}" -eq 0 ]; then
-    echo "$(date -Is) every ladder model is in cooldown; trying the harness default once" >>"$LOG"
-    candidates+=("")
+    echo "$(date -Is) every ladder model is in cooldown; staying quiet to preserve account quota." >>"$LOG"
+    notify_cockpit "⚠️ Cooldown" "Every ladder model is in cooldown; staying quiet."
+    exit 0
   fi
 else
   candidates+=("")
@@ -256,6 +290,11 @@ fi
 echo "$(date -Is) DBG me=$0 sha=$(sha256sum "$0" | cut -c1-12) n=${#candidates[@]} first=[${candidates[0]:-NONE}]" >>"$LOG"
 echo "$(date -Is) candidates: ${candidates[*]:-<harness-default>}" >>"$LOG"
 OUT="$STATE_DIR/wake.out"
+# The harness must start inside the repository: AGENTS.md, project config and
+# the session project namespace are cwd-derived. Without this the wake lands
+# in $HOME's project, so the owner's ChessSRS TUI never shows the tab.
+cd "$REPO" || { echo "$(date -Is) repo missing: $REPO; no launch" >>"$LOG"; exit 2; }
+echo "$(date -Is) launch cwd=$(pwd)" >>"$LOG"
 attempt=0
 WAKE_START=$(date +%s)
 for model in "${candidates[@]}"; do
@@ -268,6 +307,7 @@ for model in "${candidates[@]}"; do
     continue
   }
   echo "$(date -Is) wake attempt $attempt on '$label'" >>"$LOG"
+  notify_cockpit "⏳ $label" "🚀 **Wake Started**: Attempting run on \`$label\`."
   timeout --signal=TERM --kill-after=60 "$NUDGE_TIMEOUT" \
     bash -c "$WAKE_CMD" _ "$PROMPT" "$model" >"$OUT" 2>&1
   RC=$?
@@ -275,6 +315,7 @@ for model in "${candidates[@]}"; do
   if [ "$RC" -ne 0 ]; then
     if quota_failure "$OUT"; then
       echo "$(date -Is) model '$label' answered with a quota/balance failure; rotating" >>"$LOG"
+      notify_cockpit "⚠️ Quota: $label" "⚠️ **Quota Limit**: Model \`$label\` returned quota/balance failure; rotating."
       if daily_limit_failure "$OUT"; then
         echo "$(date -Is) model '$label' exceeded DAILY limit; marking provider failed and backing off until 23:59" >>"$LOG"
         tomorrow=$(python3 -c 'import datetime; now=datetime.datetime.now(); tomorrow=now.replace(hour=0,minute=0,second=0,microsecond=0)+datetime.timedelta(days=1); print(int(tomorrow.timestamp()))')
@@ -296,13 +337,22 @@ for model in "${candidates[@]}"; do
       fi
     else
       echo "$(date -Is) wake on '$label' failed with exit $RC (non-quota); rotating" >>"$LOG"
+      # A timeout (124) means the model endpoint hung; cool it down so the
+      # next tick does not waste another 30 minutes on the same dead endpoint.
+      if [ "$RC" -eq 124 ] && [ -n "$model" ]; then
+        mark_failed "$model"
+      fi
     fi
     continue
   fi
   echo "$(date -Is) wake on '$label' finished; done" >>"$LOG"
+  notify_cockpit "🟢 Done" "✅ **Wake Finished**: Run on \`$label\` completed successfully."
+  purge_build_artifacts
   record_wake 0 "$(( $(date +%s) - WAKE_START ))" "$label"
   exit 0
 done
+
+purge_build_artifacts
 
 # Total failure: nobody woke. Clear the recorded digest so the NEXT tick
 # retries this same state instead of reading it as "already handled".
@@ -316,5 +366,6 @@ if path.is_file():
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 PY
 echo "$(date -Is) every attempted model failed; digest cleared for retry; exiting 3 (total failure)" >>"$LOG"
+notify_cockpit "🚨 Blocked" "🚨 **Wake Blocked**: Every attempted model failed or hit limits."
 record_wake 3 "$(( $(date +%s) - WAKE_START ))" ""
 exit 3
