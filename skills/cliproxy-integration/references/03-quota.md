@@ -44,7 +44,7 @@ Read the failure vocabulary:
 | `429 Individual quota reached` / `RESOURCE_EXHAUSTED` | that account's allowance is spent | wait for reset, or add accounts |
 | an `INSUFFICIENT_*`-style reason with no credits | allowance spent **and** no paid credits to cover overage | credits may help — verify the fallback actually fires |
 | `Budget pool quota has been exhausted. Please ask an administrator to increase the limit or select another budget pool.` | the relay's **group budget pool** is spent — not your key's model quota | only the relay operator or a pool reset clears it; rotating keys inside the same pool does nothing. Re-probe later before treating a key as dead — these can recover on their own |
-| `All credentials for model X are cooling down` | gateway-side state, not upstream truth | read the cooldown warn line first (see "state dump" below): reset-aligned fresh cooldowns are upstream truth — stop traffic and wait; a restart only clears *suspect* state |
+| `All credentials for model X are cooling down` | gateway-side state, not upstream truth | restart the gateway, then walk the pool with tiny probes (one per credential; automatic under round-robin) — the warn line's remaining values are not proof of exhaustion |
 | `circuit breaker open` | transient upstream instability | retry with backoff |
 
 Some gateways advertise a paid-credit fallback for exhausted quota. **Verify it works in your
@@ -111,11 +111,13 @@ auth unavailable: 10 of 10 candidate(s) for model "X" are in cooldown:
   the list are excluded silently — a `disabled` flag in the auth JSON, a dead refresh
   token, or a credential pinned busy by an in-flight request (session affinity). Diff the
   list against the directory; the dashboard does not show exclusions.
-- **`reason=quota` with long, mutually aligned `remaining` values** (all near one boundary)
-  means the gateway parsed each account's upstream reset time out of real 429 responses.
-  Recorded fresh by the running instance, that is upstream truth: a restart will not
-  shorten it — it re-fires the 429s and re-cools everything. Wait for the reset or add
-  accounts.
+- **The bookkeeping can be flat wrong.** Observed on a live pool: every credential sat
+  behind `reason=quota` cooldowns of ~125–134h, mutually aligned as if reset-parsed —
+  after a service restart, all ten answered `200` on back-to-back tiny probes. A
+  reset-aligned warn line is a hypothesis, not proof of exhaustion. The decisive, bounded
+  test for pool-wide cooldown: restart the gateway (clears in-memory state) and walk the
+  pool — one tiny probe per credential (automatic under `round-robin`; re-cooling failed
+  credentials is the cost of the walk). Trust the probes over the warn line.
 - **Short, divergent `remaining` values** are windows lifting soon. Lift time = journal
   timestamp (UTC) + `remaining`; the app-embedded timestamp may be local time.
 - **An interval-retrying client re-arms cooldowns at lift time.** The first retry after
