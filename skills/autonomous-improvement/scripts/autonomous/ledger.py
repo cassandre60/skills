@@ -863,6 +863,8 @@ def _closed_prs(
 ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
     """Closed PRs with their file lists, newest first as gh orders them."""
     fields_variants = (
+        "number,title,state,mergedAt,files,labels,body,closedAt",
+        "number,title,state,mergedAt,files,labels,body",
         "number,title,state,mergedAt,files,labels",
         "number,title,state,mergedAt,files",
     )
@@ -963,6 +965,33 @@ def cmd_sync_rejections(args: argparse.Namespace) -> int:
 
             seen.add(target)
             summary = f"owner closed #{number} unmerged: {title}".strip()
+            body_text = pr.get("body") or ""
+            fp_match = re.search(
+                r"(?:<!--\s*autonomous:fingerprint\s*([^\s>]+)\s*-->|Fingerprint:\s*([^\s]+)|\b(sha256:[a-f0-9]{16,64})\b)",
+                body_text,
+            )
+            idea_fp = None
+            if fp_match:
+                idea_fp = next((g for g in fp_match.groups() if g), None)
+
+            if idea_fp:
+                closed_at = pr.get("closedAt")
+                try:
+                    base_dt = (
+                        datetime.datetime.fromisoformat(closed_at.replace("Z", "+00:00"))
+                        if closed_at
+                        else datetime.datetime.now(datetime.timezone.utc)
+                    )
+                    expiry_dt = base_dt + datetime.timedelta(days=180)
+                    expiry_str = expiry_dt.strftime("%Y-%m-%d")
+                except Exception:
+                    expiry_str = (
+                        datetime.datetime.now(datetime.timezone.utc)
+                        + datetime.timedelta(days=180)
+                    ).strftime("%Y-%m-%d")
+
+                summary += f" [fingerprint: `{idea_fp}`] (expires: {expiry_str})"
+
             trigger = f"Any modification to {Path(target).name}."
             rows.append(
                 _row_text(stream, target, composite, "REJECTED", f"#{number}", summary, trigger)
