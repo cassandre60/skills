@@ -32,7 +32,13 @@
 #   ORCH_MIN_INTERVAL  minimum seconds between launches (default: 0)
 #   ORCH_MODEL_COOLDOWN / ORCH_FAILURE_TTL  shared semantics with the watchdog
 #                      (wake_failures cooldown 3600s, prune older than 7 days)
-#   ORCH_MASTER_SESSION_ID optional session ID for Master Cockpit status telemetry
+#   ORCH_TIMEOUT_COOLDOWN  cooldown seconds after exit 124 timeout (default: 1800)
+#   ORCH_PROVIDER_COOLDOWN set to 1 to park sibling provider/* models on quota
+#                      failure (default: 0 = per-model rotation so sibling free
+#                      models with independent quotas keep running)
+#   ORCH_MASTER_SESSION_ID optional session ID for Master Cockpit tab badge telemetry
+#   ORCH_COCKPIT_PUSH  set to 1 to also push terminal Done/Blocked summaries via
+#                      /synthetic (default: 0 = tab badge + cockpit-events.log only)
 #   ORCH_WORK_GATE     optional executable gate to allow wake on backlog work even if PR state unchanged
 #
 # Exit codes: 0 = quiet (unchanged state) or the harness run completed;
@@ -72,20 +78,32 @@ fi
 NUDGE_TIMEOUT="${ORCH_WAKE_TIMEOUT:-3600}"
 MIN_INTERVAL="${ORCH_MIN_INTERVAL:-0}"
 COOLDOWN="${ORCH_MODEL_COOLDOWN:-3600}"
+TIMEOUT_COOLDOWN="${ORCH_TIMEOUT_COOLDOWN:-1800}"
+PROVIDER_COOLDOWN="${ORCH_PROVIDER_COOLDOWN:-0}"
 FAIL_TTL="${ORCH_FAILURE_TTL:-604800}"
+EVENTS_LOG="$STATE_DIR/cockpit-events.log"
 PROMPT_FILE="${ORCH_PROMPT_FILE:-$STATE_DIR/wake-prompt.md}"
 WAKE_CMD="${ORCH_WAKE_CMD:-opencode run \${2:+-m \"\$2\"} \"\$1\"}"
 
 mkdir -p "$STATE_DIR"
 
-notify_cockpit() { # $1: badge, $2: text
+notify_cockpit() { # $1: badge, $2: text, $3: terminal_push (0|1)
   local badge="$1"
   local text="${2:-}"
+  local terminal_push="${3:-0}"
+  if [ -n "$text" ]; then
+    printf '%s [%s] %s\n' "$(date -Is)" "$badge" "$text" >>"$EVENTS_LOG" 2>/dev/null || true
+    if [ -f "$EVENTS_LOG" ]; then
+      tail -n 100 "$EVENTS_LOG" >"$EVENTS_LOG.tmp" 2>/dev/null && mv "$EVENTS_LOG.tmp" "$EVENTS_LOG" 2>/dev/null || true
+    fi
+  fi
   local master="${ORCH_MASTER_SESSION_ID:-}"
   [ -n "$master" ] || return 0
   command -v opencode >/dev/null 2>&1 || return 0
-  opencode api PATCH "/api/session/$master" -d "{\"title\": \"Master Cockpit [$badge]\"}" >/dev/null 2>&1 || true
-  if [ -n "$text" ]; then
+  local title_json
+  title_json=$(python3 -c "import json,sys; print(json.dumps({'title': 'Master Cockpit [' + sys.argv[1] + ']'}))" "$badge" 2>/dev/null || echo "{\"title\": \"Master Cockpit [$badge]\"}")
+  opencode api PATCH "/api/session/$master" -d "$title_json" >/dev/null 2>&1 || true
+  if [ "${ORCH_COCKPIT_PUSH:-0}" = "1" ] && [ "$terminal_push" = "1" ] && [ -n "$text" ]; then
     local escaped
     escaped=$(python3 -c "import json,sys; print(json.dumps(sys.argv[1]))" "$text" 2>/dev/null || echo "\"$text\"")
     opencode api POST "/api/session/$master/synthetic" -d "{\"text\": $escaped, \"resume\": false}" >/dev/null 2>&1 || true
@@ -184,14 +202,15 @@ touch "$HB"
 
 # 4. Cooldown bookkeeping, shared shape with the watchdog.
 prune_failures() {
-  local now tmp m ts
+  local now tmp m ts ttl
   [ -f "$FAIL_FILE" ] || return 0
   now=$(date +%s)
   tmp="$(mktemp)"
-  while read -r m ts; do
+  while read -r m ts ttl; do
     [ -n "${m:-}" ] || continue
     case "$ts" in ''|*[!0-9]*) continue ;; esac
-    [ $(( now - ts )) -lt "$FAIL_TTL" ] && printf '%s %s\n' "$m" "$ts" >>"$tmp"
+    case "${ttl:-}" in ''|*[!0-9]*) ttl="" ;; esac
+    [ $(( now - ts )) -lt "$FAIL_TTL" ] && printf '%s %s%s\n' "$m" "$ts" "${ttl:+ $ttl}" >>"$tmp"
   done <"$FAIL_FILE"
   mv "$tmp" "$FAIL_FILE"
 }
@@ -200,17 +219,24 @@ prune_failures
 failed_recently() { # $1: model id
   # `m` MUST be local: a global would clobber the caller's ladder loop
   # variable (and an empty failure file blanks it via read's EOF).
-  local model="$1" now ts m
+  local model="$1" now ts m ttl eff_cd
   now=$(date +%s)
   [ -f "$FAIL_FILE" ] || return 1
-  while read -r m ts; do
+  while read -r m ts ttl; do
     [ "$m" = "$model" ] || continue
-    [ $(( now - ts )) -lt "$COOLDOWN" ] && return 0
+    case "${ttl:-}" in ''|*[!0-9]*) eff_cd="$COOLDOWN" ;; *) eff_cd="$ttl" ;; esac
+    [ $(( now - ts )) -lt "$eff_cd" ] && return 0
   done <"$FAIL_FILE"
   return 1
 }
 
-mark_failed() { printf '%s %s\n' "$1" "$(date +%s)" >>"$FAIL_FILE"; }
+mark_failed() { # $1: model id, $2: optional custom cooldown seconds
+  if [ -n "${2:-}" ]; then
+    printf '%s %s %s\n' "$1" "$(date +%s)" "$2" >>"$FAIL_FILE"
+  else
+    printf '%s %s\n' "$1" "$(date +%s)" >>"$FAIL_FILE"
+  fi
+}
 
 # Fallback run record (plan 5.1): counts and exit codes only, written even
 # when the model forgets or dies. Absent runrecord.py (older installs) or
@@ -307,7 +333,8 @@ for model in "${candidates[@]}"; do
     continue
   }
   echo "$(date -Is) wake attempt $attempt on '$label'" >>"$LOG"
-  notify_cockpit "⏳ $label" "🚀 **Wake Started**: Attempting run on \`$label\`."
+  notify_cockpit "⏳ $label" "Wake started on $label" 0
+  ATTEMPT_START_MS="$(python3 -c 'import time; print(int(time.time()*1000))' 2>/dev/null || echo 0)"
   timeout --signal=TERM --kill-after=60 "$NUDGE_TIMEOUT" \
     bash -c "$WAKE_CMD" _ "$PROMPT" "$model" >"$OUT" 2>&1
   RC=$?
@@ -315,38 +342,34 @@ for model in "${candidates[@]}"; do
   if [ "$RC" -ne 0 ]; then
     if quota_failure "$OUT"; then
       echo "$(date -Is) model '$label' answered with a quota/balance failure; rotating" >>"$LOG"
-      notify_cockpit "⚠️ Quota: $label" "⚠️ **Quota Limit**: Model \`$label\` returned quota/balance failure; rotating."
-      if daily_limit_failure "$OUT"; then
-        echo "$(date -Is) model '$label' exceeded DAILY limit; marking provider failed and backing off until 23:59" >>"$LOG"
-        tomorrow=$(python3 -c 'import datetime; now=datetime.datetime.now(); tomorrow=now.replace(hour=0,minute=0,second=0,microsecond=0)+datetime.timedelta(days=1); print(int(tomorrow.timestamp()))')
-        echo "$tomorrow" > "$STATE_DIR/daily_exhausted_until"
-        [ -n "$model" ] && mark_provider_failed "$model"
-      else
-        [ -n "$model" ] && mark_provider_failed "$model"
-      fi
-      # Session hygiene: a failed opencode run creates a session that we don't
-      # want to linger in the owner's session list (three messages, then dead).
-      if command -v opencode >/dev/null 2>&1; then
-        RECENTID=$(python3 -c "import sqlite3, time; p='$STATE_DIR'+'/w.db'; import os; db_path=os.environ.get('ORCH_SESDB', '/home/ubuntu/.local/share/opencode/opencode.db'); db=sqlite3.connect('file:'+db_path+'?mode=ro', uri=True); rows=db.execute('select id from session_v2 order by time_created desc limit 1').fetchall(); print(rows[0][0] if rows else '')" || true)
-        if [ -n "$RECENTID" ]; then
-          # Cleanup only sessions created in the last 2 minutes
-          if python3 -c "import sqlite3, time, sys; sys.exit(0 if (lambda d: True)(0))" >/dev/null 2>&1; then
-            opencode session delete "$RECENTID" >/dev/null 2>&1 || true
-          fi
+      notify_cockpit "⚠️ Quota: $label" "Quota/balance limit on $label; rotating" 0
+      if [ -n "$model" ]; then
+        if [ "$PROVIDER_COOLDOWN" = "1" ]; then
+          mark_provider_failed "$model"
+        else
+          mark_failed "$model"
         fi
+      fi
+      # Session hygiene: delete any empty/dead session created by THIS failed attempt.
+      if command -v opencode >/dev/null 2>&1 && [ "${ATTEMPT_START_MS:-0}" -gt 0 ] 2>/dev/null; then
+        DEAD_IDS=$(python3 -c "import os, sqlite3; db_path=os.environ.get('ORCH_SESDB', os.path.expanduser('~/.local/share/opencode/opencode.db')); os.path.isfile(db_path) or exit(0); db=sqlite3.connect('file:'+db_path+'?mode=ro', uri=True); rows=db.execute(\"select id from session_v2 where time_created >= ? and (title is null or title = '')\", (int('${ATTEMPT_START_MS}'),)).fetchall(); print('\n'.join(r[0] for r in rows))" 2>/dev/null || true)
+        for dead_id in $DEAD_IDS; do
+          opencode session delete "$dead_id" >/dev/null 2>&1 || true
+        done
       fi
     else
       echo "$(date -Is) wake on '$label' failed with exit $RC (non-quota); rotating" >>"$LOG"
-      # A timeout (124) means the model endpoint hung; cool it down so the
-      # next tick does not waste another 30 minutes on the same dead endpoint.
+      # A timeout (124) means the model endpoint hung or overran; apply transient
+      # timeout cooldown so it recovers quickly without 24h starvation.
       if [ "$RC" -eq 124 ] && [ -n "$model" ]; then
-        mark_failed "$model"
+        notify_cockpit "⏱️ Timeout: $label" "Timed out on $label; cooling ${TIMEOUT_COOLDOWN}s and rotating" 0
+        mark_failed "$model" "$TIMEOUT_COOLDOWN"
       fi
     fi
     continue
   fi
   echo "$(date -Is) wake on '$label' finished; done" >>"$LOG"
-  notify_cockpit "🟢 Done" "✅ **Wake Finished**: Run on \`$label\` completed successfully."
+  notify_cockpit "🟢 Done" "Wake finished cleanly on $label" 1
   purge_build_artifacts
   record_wake 0 "$(( $(date +%s) - WAKE_START ))" "$label"
   exit 0
@@ -366,6 +389,6 @@ if path.is_file():
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 PY
 echo "$(date -Is) every attempted model failed; digest cleared for retry; exiting 3 (total failure)" >>"$LOG"
-notify_cockpit "🚨 Blocked" "🚨 **Wake Blocked**: Every attempted model failed or hit limits."
+notify_cockpit "🚨 Blocked" "All attempted models failed or hit limits" 1
 record_wake 3 "$(( $(date +%s) - WAKE_START ))" ""
 exit 3

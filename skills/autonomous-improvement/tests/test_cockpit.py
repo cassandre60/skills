@@ -330,7 +330,13 @@ class MasterCockpitTests(unittest.TestCase):
         import time
 
         (state_dir / "wake_failures").write_text(
-            f"provider-a/fast-free {int(time.time())}\n", encoding="utf-8"
+            f"provider-a/fast-free {int(time.time())}\n"
+            f"provider-b/backup-free {int(time.time()) - 10} 2\n",
+            encoding="utf-8",
+        )
+        (state_dir / "cockpit-events.log").write_text(
+            "2026-11-11T19:00:00+00:00 [🟢 Done] Wake finished cleanly on provider-b/backup-free\n",
+            encoding="utf-8",
         )
 
         # Add an active directive and a worker
@@ -403,10 +409,12 @@ class MasterCockpitTests(unittest.TestCase):
             "## Open PR Matrix",
             "## Model Pool Status",
             "## Next Unclaimed Candidates",
+            "## Recent Factory Events",
         ):
             self.assertIn(heading, dash_md.stdout)
         self.assertIn("ses_live_99", dash_md.stdout)
         self.assertIn("Fix PR #11 lint first", dash_md.stdout)
+        self.assertIn("Wake finished cleanly on provider-b/backup-free", dash_md.stdout)
 
 
 if __name__ == "__main__":
