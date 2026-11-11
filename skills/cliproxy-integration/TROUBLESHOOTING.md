@@ -81,7 +81,7 @@ fixed both protocol surfaces.
 | Panel says "access available" but requests fail | the **weekly** meter is spent; the short window being green doesn't matter | read both meters |
 | Some models fail, siblings work | quota **groups** — models share an allowance | probe one model per advertised group |
 | `All credentials ... cooling down` | gateway-side state | restart to clear in-memory cooldown, then re-read reality |
-| Instant 429 on every account for one model; tiny/no-system prompts pass; fresh chats fail | upstream client-name filter on the system prompt, not quota | populate top-level `antigravity: sensitive-words` on a build that wires it (≥ v8.0.67); bisect the payload to find the trigger word |
+| Instant 429 on every account for one model; tiny/no-system prompts pass; fresh chats fail | upstream client-name filter on the system prompt, not quota | populate `oauth.providers.antigravity.sensitive-words` (canonical on `config-version: 8`) on a build that wires it (≥ v8.0.67); bisect the payload to find the trigger word |
 | Mixed pool: frontier/premium models fail when routed to standard accounts | accounts have different tier capabilities | inspect `antigravity_capability_hints` in auth JSON without spending tokens; add `excluded_models` to non-pro auth files |
 | Persistent backoff after an auth error | retries can't fix auth | change the request or the credentials |
 
@@ -111,7 +111,7 @@ temporary fix reverts on DHCP renewal.
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| Service crash-loops (`listen tcp :8317: bind: address already in use` or `open bolt db: timeout`), but `curl` probes answer 200 | an unmanaged orphan gateway process (PPID 1) holds port 8317 and `kv.db` lock | check `ps -o pid,ppid,cmd -C cli-proxy-api` and `fuser -v kv.db`; kill orphan PID, then `systemctl --user restart <service>` |
+| Service crash-loops (`listen tcp :8317: bind: address already in use` or `open bolt db: timeout`), but `curl` probes answer 200 | an orphan process (`PPID 1`) or a competing systemd unit at the other scope (e.g. both system and user units enabled) holds port 8317 and `kv.db` lock | check `ps -o pid,ppid,cmd -C cli-proxy-api`, `systemctl status <service>`, `systemctl --user status <service>`, and `fuser -v kv.db`; disable the redundant unit (or kill the orphan PID), then restart the surviving unit |
 
 ## Config keeps reverting
 

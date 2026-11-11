@@ -176,10 +176,15 @@ Isolation protocol that found the trigger (tiny sequential probes, same pool, sa
 Remedy at the gateway — Antigravity sensitive-word obfuscation:
 
 ```yaml
-antigravity:            # top-level on a config-version: 8 file (the struct-backed key;
-  sensitive-words:      # a legacy oauth.providers.antigravity copy does not win on v8)
-  - "OpenCode"
-  - "opencode"
+# On config-version: 8, oauth.providers.antigravity.sensitive-words is the canonical path
+# (flattenV8 maps leaf fields individually; if both exist, it overwrites antigravity.sensitive-words,
+# and ValidateV8Config rejects legacy antigravity.* fields).
+oauth:
+  providers:
+    antigravity:
+      sensitive-words:
+        - "OpenCode"
+        - "opencode"
 ```
 
 - **The knob must be wired in the build.** v8.0.16 parsed the key and never called the
@@ -287,3 +292,10 @@ Key operational facts:
   models (`.excluded_models = ((.excluded_models // []) + $list)`).
 - **Include tier variants:** Include `-low`, `-medium`, and `-high` variants if upstream
   uses internal tiering, so any aliased or resolved model name is covered.
+- **Re-check hints when plans change:** Capability hints refresh dynamically as accounts
+  upgrade, downgrade, or get revoked:
+  - If a previously excluded account gains hints for frontier models, remove its stale
+    `excluded_models` entries so traffic can route to it.
+  - Conversely, if a previously capable account loses frontier hints (e.g. reverts to
+    `gemini-4-argon-disabled` / loses Claude 5.5), add those models to its `excluded_models`
+    so the gateway stops dispatching tier-restricted requests to it.
