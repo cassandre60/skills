@@ -95,6 +95,7 @@ class SaturationAndStandbyTests(unittest.TestCase):
         support.commit(repo, "initial commit")
 
         import datetime
+        import os
         now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
         (repo / ".autonomous").mkdir(parents=True, exist_ok=True)
         (repo / ".autonomous" / "saturation.json").write_text(
@@ -102,9 +103,13 @@ class SaturationAndStandbyTests(unittest.TestCase):
             encoding="utf-8",
         )
 
+        env = dict(os.environ)
+        env["ORCH_STATE_DIR"] = str(repo / ".autonomous" / "state")
+        env["ORCH_MIN_FREE_GB"] = "0"
         proc = support.run(
             [support.PYTHON, str(SCRIPTS / "fleet.py"), "needs-brain", "--json"],
             cwd=repo,
+            env=env,
         )
         self.assertEqual(proc.returncode, 0)
         data = json.loads(proc.stdout)
@@ -145,6 +150,8 @@ class SaturationAndStandbyTests(unittest.TestCase):
         import os
         env = dict(os.environ)
         env["PATH"] = f"{gh_bin}:{env.get('PATH', '')}"
+        env["ORCH_STATE_DIR"] = str(repo / ".autonomous" / "state")
+        env["ORCH_MIN_FREE_GB"] = "0"
 
         proc = support.run(
             [support.PYTHON, str(SCRIPTS / "fleet.py"), "needs-brain", "--json", "--require-gh"],
@@ -154,6 +161,62 @@ class SaturationAndStandbyTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0)
         data = json.loads(proc.stdout)
         self.assertTrue(data.get("needs_brain"))
+
+    def test_deep_standby_wakes_on_moved_main_and_owner_directive(self) -> None:
+        repo, _ = support.python_repo(self.tmp, name="event_wake_main_dir")
+        support.write(repo / "tests" / "test_app.py", "def test_ok(): pass\n")
+        (repo / ".github" / "workflows").mkdir(parents=True, exist_ok=True)
+        support.write(
+            repo / ".github" / "workflows" / "ci.yml",
+            "name: CI\non: [push, pull_request]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n    - run: python3 -m unittest\n",
+        )
+        support.commit(repo, "clean repo")
+
+        bin_dir = support.path_with_only(self.tmp, names=("git",))
+        gh = support.write(bin_dir / "gh", "#!/bin/sh\necho '[]'\n")
+        gh.chmod(0o755)
+        state_dir = repo / ".autonomous" / "state"
+        env = support.env_with_path(bin_dir, ORCH_STATE_DIR=str(state_dir), ORCH_MIN_FREE_GB="0")
+
+        # Initial wake records digest, then survey detects saturation + records main_sha
+        nb0 = support.run([support.PYTHON, str(SCRIPTS / "fleet.py"), "needs-brain", "--json"], cwd=repo, env=env)
+        self.assertEqual(nb0.returncode, 0)
+        surv = support.run([support.PYTHON, str(SCRIPTS / "survey.py"), "--json"], cwd=repo, env=env)
+        self.assertEqual(surv.returncode, 0)
+        sat_data = json.loads((repo / ".autonomous" / "saturation.json").read_text(encoding="utf-8"))
+        self.assertTrue(sat_data.get("saturated"))
+        self.assertTrue(sat_data.get("main_sha"))
+
+        # Scheduled wake while unchanged stays suppressed in deep standby
+        nb_quiet = support.run([support.PYTHON, str(SCRIPTS / "fleet.py"), "needs-brain", "--json"], cwd=repo, env=env)
+        self.assertEqual(nb_quiet.returncode, 0)
+        self.assertFalse(json.loads(nb_quiet.stdout).get("needs_brain"))
+
+        # 1. Moving main must wake even during deep standby
+        support.write(repo / "src" / "extra.py", "x = 1\n")
+        support.commit(repo, "owner pushes commit on main")
+        nb_main = support.run([support.PYTHON, str(SCRIPTS / "fleet.py"), "needs-brain", "--json"], cwd=repo, env=env)
+        self.assertEqual(nb_main.returncode, 0)
+        self.assertTrue(json.loads(nb_main.stdout).get("needs_brain"), nb_main.stdout)
+
+        # Second tick after moved main with no further change stays quiet
+        nb_main2 = support.run([support.PYTHON, str(SCRIPTS / "fleet.py"), "needs-brain", "--json"], cwd=repo, env=env)
+        self.assertFalse(json.loads(nb_main2.stdout).get("needs_brain"), nb_main2.stdout)
+
+        # 2. Adding an owner directive must wake even during deep standby
+        add_dir = support.run(
+            [support.PYTHON, str(SCRIPTS / "fleet.py"), "directive", "add", "audit parser"],
+            cwd=repo,
+            env=env,
+        )
+        self.assertEqual(add_dir.returncode, 0, add_dir.stderr)
+        nb_dir = support.run([support.PYTHON, str(SCRIPTS / "fleet.py"), "needs-brain", "--json"], cwd=repo, env=env)
+        self.assertEqual(nb_dir.returncode, 0)
+        self.assertTrue(json.loads(nb_dir.stdout).get("needs_brain"), nb_dir.stdout)
+
+        # Second tick with same active directive stays quiet
+        nb_dir2 = support.run([support.PYTHON, str(SCRIPTS / "fleet.py"), "needs-brain", "--json"], cwd=repo, env=env)
+        self.assertFalse(json.loads(nb_dir2.stdout).get("needs_brain"), nb_dir2.stdout)
 
 
 if __name__ == "__main__":
