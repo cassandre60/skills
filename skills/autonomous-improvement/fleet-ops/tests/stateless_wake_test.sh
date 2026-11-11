@@ -551,6 +551,47 @@ else
   fail "update-skills.sh overwrote install despite failing gate"
 fi
 
+# --- case 19: update-skills.sh defaults to isolated cache mirror and refuses dirty tracked trees (P0-4) ---
+ISO_HOME="$TMP/isolated-home"
+DEV_COPY="$ISO_HOME/github-projects/skills"
+mkdir -p "$DEV_COPY/skills/autonomous-improvement/fleet-ops/assets"
+cp "$FLEET_OPS/assets/update-skills.sh" "$DEV_COPY/skills/autonomous-improvement/fleet-ops/assets/update-skills.sh"
+( cd "$DEV_COPY" && git init -q -b feature/wip && git add -A \
+  && GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t git commit -qm wip ) >/dev/null 2>&1
+# Reset origin back to working v2 commit so the mirror clone passes gates
+( cd "$TMP/seed" && git reset --hard HEAD~1 >/dev/null 2>&1 && git push -qf origin main >/dev/null 2>&1 )
+env -u ORCH_SKILLS_CLONE -u XDG_CACHE_HOME \
+  HOME="$ISO_HOME" \
+  ORCH_SKILLS_REPO="$UPD_ORIGIN" \
+  ORCH_SKILLS_INSTALL_DIR="$TMP/iso-install" \
+  ORCH_INSTALL_DIR="$TMP/iso-orch" \
+  ORCH_STATE_DIR="$TMP/iso-state" \
+  ORCH_SYSTEMD_USER_DIR="$TMP/no-systemd" \
+  ORCH_UPDATE_SKIP_TESTS=1 \
+  bash "$DEV_COPY/skills/autonomous-improvement/fleet-ops/assets/update-skills.sh" >/dev/null 2>&1
+if [ -d "$ISO_HOME/.cache/orchestrator/skills-mirror/.git" ] && [ "$(git -C "$DEV_COPY" rev-parse --abbrev-ref HEAD)" = "feature/wip" ]; then
+  ok "update-skills.sh defaults to XDG cache mirror and leaves dev checkout untouched"
+else
+  fail "update-skills.sh touched dev checkout or missed isolated cache mirror"
+fi
+
+# Dirty tracked file in ORCH_SKILLS_CLONE must abort before fetch/checkout/reset
+echo "# dirty-local-edit" >> "$UPD_CLONE/scripts/check_skills.py"
+ORCH_SKILLS_CLONE="$UPD_CLONE" \
+ORCH_SKILLS_INSTALL_DIR="$UPD_INSTALL" \
+ORCH_INSTALL_DIR="$UPD_ORCH" \
+ORCH_STATE_DIR="$TMP/upd-state-dirty" \
+ORCH_SYSTEMD_USER_DIR="$TMP/no-systemd" \
+ORCH_FORCE_SYNC=1 \
+  bash "$FLEET_OPS/assets/update-skills.sh" >/dev/null 2>&1
+DIRTY_RC=$?
+if [ "$DIRTY_RC" -ne 0 ] && grep -q "dirty-local-edit" "$UPD_CLONE/scripts/check_skills.py" 2>/dev/null \
+   && grep -qi "uncommitted tracked changes" "$TMP/upd-state-dirty/skill-update.log" 2>/dev/null; then
+  ok "update-skills.sh aborted on dirty tracked tree and preserved local edit"
+else
+  fail "update-skills.sh did NOT abort safely on dirty tracked tree"
+fi
+
 if [ "$FAILED" -eq 0 ]; then
   echo "PASS: stateless wake launcher"
   exit 0
