@@ -606,7 +606,7 @@ def survey_repo(
             recs = load_run_records(records_dir)
             for r in recs:
                 ch = r.get("chosen")
-                if ch:
+                if isinstance(ch, str) and ch:
                     past_tracks.append(TOOL_TRACK.get(ch, ch))
         except Exception:
             pass

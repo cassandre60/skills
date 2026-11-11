@@ -34,9 +34,7 @@ try:
 except ImportError:
     EXIT_OK = 0
     EXIT_NEGATIVE = 1
-
-    class UsageError(Exception):
-        pass
+    UsageError: type[Exception] = Exception
 
     def repo_root(start: Optional[os.PathLike | str] = None) -> Path:
         return Path(start or Path.cwd()).resolve()
@@ -44,8 +42,8 @@ except ImportError:
     def load_config(root: Path, explicit: Optional[os.PathLike | str] = None) -> Dict[str, Any]:
         return {}
 
-    def hash_at_head(root: Path, rel: str) -> Optional[str]:
-        p = root / rel
+    def hash_at_head(root: Path, path: str) -> Optional[str]:
+        p = root / path
         if p.is_file():
             return hashlib.sha256(p.read_bytes()).hexdigest()[:16]
         return None
