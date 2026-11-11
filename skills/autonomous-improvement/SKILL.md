@@ -35,10 +35,10 @@ runner-up, what was filed (links), what needs the owner, not configured skips.
 - **Fleet mode (opt-in).** Worker dispatch, beats, watchdogs, and unattended
   wake loops are for an explicit owner ask or a `vm`/`ci` environment
   (`session.environment` in config) — never a personal-laptop default. The
-  orchestrator duties live in "Roles" in `04`; the unattended stack is in
-  `05`, whose primary shape is stateless — `fleet.py wake` (snapshot →
-  needs-brain → one fresh run) — with the session-id/wake-grid boot kept as
-  the long-lived-session fallback.
+  orchestrator duties and Master Cockpit (`fleet.py dashboard`, `directive`,
+  `worker`) live in `04`; the unattended stack is in `05`, whose primary shape
+  is stateless (`fleet.py wake`: snapshot → needs-brain → one fresh run) with
+  the session-id/wake-grid boot kept as the long-lived-session fallback.
 
 Fleet rules that bind once fleet mode is on: on a quota error **rotate the
 model**, never retry the same pool ("Model rotation", `05`); a PR is not done

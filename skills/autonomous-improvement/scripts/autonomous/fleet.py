@@ -67,6 +67,18 @@ from common import (
 )
 
 
+from fleet_cockpit import (
+    _ai_policy_hit,
+    _referee_incidents,
+    _render_evidence_body,
+    active_directive_reasons,
+    build_dashboard_payload,
+    cmd_directive,
+    cmd_worker,
+    format_directives_block,
+    register_cockpit_subparsers,
+    render_dashboard_markdown,
+)
 from fleet_doctor import (
     _doctor_check,
     _doctor_run,
@@ -981,6 +993,7 @@ def cmd_needs_brain(args: argparse.Namespace) -> int:
         return EXIT_OK
 
     reasons = _wake_reasons(open_states, issues=issues_data)
+    reasons.extend(active_directive_reasons(root))
     kill_switch_file = str((cfg.get("fleet", {}) or {}).get("kill_switch_file") or ".autonomous/STOP")
     kill_switch_paths = [
         root / kill_switch_file,
@@ -1256,6 +1269,7 @@ def _needs_brain_from_states(
     can_dispatch = len(open_states) < max_open and not disk_exhausted
     if can_dispatch:
         reasons.append("queue-headroom")
+    reasons.extend(active_directive_reasons(root))
     active_reasons = (
         ["disk-headroom-exhausted"]
         if disk_exhausted
@@ -1306,6 +1320,7 @@ def _wake_prompt(
         )
     if not snapshot.get("open_prs"):
         lines.append("- (none)")
+    lines.extend(format_directives_block(root))
     lines += [
         "",
         "Duties, in order:",
@@ -1683,43 +1698,25 @@ def cmd_claim(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-def _render_evidence_body(data: Dict[str, Any]) -> str:
-    runs = data["runs"]
-    lines = ["## Summary", ""]
-    if data["kind"] == "mutant":
-        mutant = data["mutant"]
-        lines.append(
-            f"Kills the surviving mutant at `{mutant['file']}:{mutant['line']}`"
-            + (f" ({mutant['description']})" if mutant.get("description") else "")
-            + " with a test-only change."
-        )
-        lines += [
-            "",
-            "```diff",
-            f"-{mutant['original']}",
-            f"+{mutant['mutated']}",
-            "```",
-        ]
-        red_label = "mutant applied"
+def cmd_dashboard(args: argparse.Namespace) -> int:
+    root = main_repo_root()
+    cfg = load_config(root, args.config)
+    state_dir = _resolve_state_dir(root, getattr(args, "state_dir", None))
+    payload = build_dashboard_payload(
+        root,
+        cfg,
+        state_dir,
+        fetch_prs_fn=fetch_gh_prs,
+        evaluate_pr_fn=evaluate_pr_checks,
+        load_cooling_fn=_load_cooling_models,
+        require_gh=bool(getattr(args, "require_gh", False)),
+        limit=int(getattr(args, "limit", 10) or 10),
+    )
+    if getattr(args, "json", False):
+        print(json.dumps(payload, indent=2))
     else:
-        files = ", ".join(f"`{item['path']}`" for item in data.get("test_files") or [])
-        lines.append(f"Fixes a defect reproduced on the unmodified base. Repro: {files}.")
-        red_label = "unmodified base"
-    lines += [
-        "",
-        "## Evidence (`.autonomous/evidence.json`, schema 1)",
-        "",
-        f"- Base: `{data.get('base_sha')}` ({data.get('base_ref')})",
-        f"- Red ({red_label}): exit {runs['red']['exit']} — {runs['red'].get('summary', '')}",
-        f"- Green (this branch): exit {runs['green']['exit']} — {runs['green'].get('summary', '')}",
-        f"- Pass-to-pass: exit {runs['pass_to_pass']['exit']} — {runs['pass_to_pass'].get('summary', '')}",
-        f"- Test cmd: `{data.get('test_cmd')}`",
-        f"- Verdict: **{data.get('verdict')}**",
-        "",
-        "Rendered by `fleet.py publish` from the evidence artifact; "
-        "re-validate with `python3 scripts/autonomous/evidence.py check`.",
-    ]
-    return "\n".join(lines) + "\n"
+        print(render_dashboard_markdown(payload), end="")
+    return EXIT_OK
 
 
 def _list_all(root: Path, kind: str) -> List[Dict[str, Any]]:
@@ -1833,31 +1830,6 @@ def _publish_issues(root: Path, args: argparse.Namespace) -> int:
         for outcome in outcomes:
             print(f"[*] {outcome['key']}: {outcome['action']} {outcome['kind']} #{outcome['number']}")
     return EXIT_OK
-
-
-def _ai_policy_hit(root: Path) -> bool:
-    """True when the repo's own docs forbid AI-generated contributions.
-
-    Guarded import: conventions.py is a sibling script; when it is absent or
-    unreadable the trust tier alone decides.
-    """
-    try:
-        import conventions
-
-        return bool(conventions.read_conventions(root).get("ai_policy", {}).get("found"))
-    except Exception:  # missing helper, missing gh, unreadable docs: never crash publish
-        return False
-
-
-def _referee_incidents(root: Path) -> int:
-    """Owner-maintained incident count (.autonomous/referee-incidents.txt)."""
-    path = root / ".autonomous" / "referee-incidents.txt"
-    if not path.is_file():
-        return 0
-    try:
-        return int((path.read_text(encoding="utf-8").strip() or "0"))
-    except ValueError:
-        return 0
 
 
 def cmd_publish(args: argparse.Namespace) -> int:
@@ -2014,6 +1986,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_reset.add_argument("--state-dir", help="directory holding CIRCUIT_BREAKER")
     p_reset.add_argument("--json", action="store_true", help="emit JSON")
 
+    register_cockpit_subparsers(subparsers)
+
     args = parser.parse_args(argv)
 
     try:
@@ -2039,6 +2013,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             return cmd_pool(args)
         if args.command == "reset-circuit":
             return cmd_reset_circuit(args)
+        if args.command == "dashboard":
+            return cmd_dashboard(args)
+        if args.command == "directive":
+            return cmd_directive(args)
+        if args.command == "worker":
+            return cmd_worker(args)
         raise UsageError(f"unknown command: {args.command}")
     except (UsageError, EnvError, Fatal) as exc:
         return format_exit(exc)
