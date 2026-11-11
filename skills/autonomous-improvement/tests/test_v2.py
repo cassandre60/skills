@@ -4432,6 +4432,41 @@ class SecurityStreamTests(RepoTestCase):
             res = script(repo, "ledger.py", "next", "--stream", stream, "--json")
             self.assertEqual(res.returncode, 0, res.stderr)
 
+    def test_secret_scan_ignores_unquoted_code_expressions_and_env_lookups(self):
+        repo = self.tmp / "expr-repo"
+        repo.mkdir(parents=True, exist_ok=True)
+        write(
+            repo / "lib" / "auth.dart",
+            "void f1(dynamic userToCheck) { final token = userToCheck.token; }\n"
+            "void f2(dynamic authResp) { final token = authResp.accessToken; }\n"
+            "void f3(dynamic response) { final token = response.body.trim(); }\n"
+            "void f4() { final token = Platform.environment['LICHESS_TOKEN']; }\n"
+            "void f5(dynamic request) { final token = request.body.split(',')[0]; }\n",
+        )
+        write(
+            repo / "src" / "env_reader.py",
+            'import os\napi_key = os.environ.get("API_KEY")\n'
+            'SECRET_TOKEN = "${PROD_SECRET_VALUE_HERE}"\n',
+        )
+        write(
+            repo / ".env.example",
+            "API_TOKEN=your_token_placeholder_here\n"
+            "DB_PASSWORD=${DB_PASSWORD_VALUE}\n"
+            "OAUTH_SECRET=authResp.accessToken\n",
+        )
+        res_clean = self.adv_run(repo, "secrets", "--json")
+        self.assertEqual(res_clean.returncode, 0, res_clean.stdout + res_clean.stderr)
+        self.assertEqual(json.loads(res_clean.stdout)["candidates"], [])
+
+        real_quoted = "sk_test_" + "9876543210abcdef123456"
+        real_env = "AbCdEfGhIjKlMnOp" + "QrStUvWxYz123456"
+        write(repo / "src" / "leak.py", f'API_KEY = "{real_quoted}"\n')
+        write(repo / ".env", f"API_TOKEN={real_env}\n")
+        res_dirty = self.adv_run(repo, "secrets", "--json")
+        self.assertEqual(res_dirty.returncode, 1, res_dirty.stdout + res_dirty.stderr)
+        files = sorted({c["file"] for c in json.loads(res_dirty.stdout)["candidates"]})
+        self.assertEqual(files, [".env", "src/leak.py"])
+
 
 class FuzzSeedTests(RepoTestCase):
     """Stream C (issue #25): recorded-seed fuzz + deterministic shrink.

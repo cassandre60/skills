@@ -50,8 +50,8 @@ from common import EXIT_OK, Fatal, eprint
 SCHEMA = "advisory/1"
 SEEN_SCHEMA = "advisory-seen/1"
 
-# Every pattern captures the secret value as group 1; artifacts only ever
-# receive the redacted form, never the capture.
+# Every pattern captures the secret value as group "secret" (or group 1);
+# artifacts only ever receive the redacted form, never the capture.
 SECRET_PATTERNS = [
     ("aws-access-key", re.compile(r"(?<![A-Z0-9])(AKIA[0-9A-Z]{16})(?![A-Z0-9])")),
     ("github-token", re.compile(r"\b(ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})")),
@@ -61,11 +61,26 @@ SECRET_PATTERNS = [
     (
         "key-assignment",
         re.compile(
-            r"(?i)\b(?:api[_-]?key|secret|token|password|passwd|pwd)\b[\"\']?\s*[:=]\s*[\"\']?"
-            r"([A-Za-z0-9_\-/+=.]{16,})[\"\']?"
+            r"(?i)\b(?:api[_-]?key|secret|token|password|passwd|pwd)\b[\"\']?\s*[:=]\s*"
+            r"([\"\'])(?P<secret>[A-Za-z0-9_\-/+=.]{16,})\1"
+        ),
+    ),
+    (
+        "env-assignment",
+        re.compile(
+            r"^[ \t]*(?:export[ \t]+)?[A-Z0-9_]*(?:API_KEY|SECRET|TOKEN|PASSWORD|PASSWD|PWD)[A-Z0-9_]*"
+            r"[ \t]*=[ \t]*(?P<secret>[^\s#\"\'();]{16,})[ \t]*(?:#.*)?$"
         ),
     ),
 ]
+
+_DOTTED_IDENT_RE = re.compile(
+    r"^[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)+$"
+)
+_PLACEHOLDER_RE = re.compile(
+    r"^(?:changeme|replace[_-]?me|your[_-].*[_-]?here|placeholder|todo|x{8,}|0{8,}|<[^>]+>)$",
+    re.IGNORECASE,
+)
 
 SKIP_DIRS = {
     ".git",
@@ -194,14 +209,29 @@ def iter_text_files(base: Path, patterns: list[str]) -> list[Path]:
         deduped.append(path)
     return deduped
 
+def _is_false_positive_secret(rule: str, value: str, raw_line: str, end_pos: int) -> bool:
+    if rule in ("key-assignment", "env-assignment"):
+        if "$" in value or "{" in value or "}" in value:
+            return True
+        if _DOTTED_IDENT_RE.fullmatch(value):
+            return True
+        if _PLACEHOLDER_RE.fullmatch(value):
+            return True
+        if re.match(r"^[ \t]*[\(\[]", raw_line[end_pos:]):
+            return True
+    return False
+
+
 def scan_secrets(
     rel: str, line_no: int, raw_line: str
 ) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
     for rule, pattern in SECRET_PATTERNS:
         for match in pattern.finditer(raw_line):
-            value = match.group(1)
+            value = match.groupdict().get("secret") or match.group(1)
             if not value or len(value) < 8:
+                continue
+            if _is_false_positive_secret(rule, value, raw_line, match.end()):
                 continue
             name = f"{rule}"
             findings.append(
