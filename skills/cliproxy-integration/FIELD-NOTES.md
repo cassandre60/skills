@@ -318,3 +318,17 @@ cleared the most accurate data available, re-fired the 429s, and re-cooled every
 clearing; reset-aligned remainings recorded fresh are upstream truth. And an
 interval-retrying client defeats the wait anyway — it re-cools each credential at lift
 time — so stop the client before the earliest lift, then probe once.
+
+## The rule that died within the hour
+
+The entry above merged a claim that did not survive its next test. The same pool,
+restarted and walked with ten tiny probes, answered `200` on **all ten** credentials —
+the ~130h "reset-aligned" cooldowns were pure bookkeeping drift, not upstream truth.
+The rule now says the opposite: a cooldown warn line is a hypothesis; restart + probe
+walk is the *first* remedy for pool-wide cooldown, and probes outrank the warn line.
+(03-quota.md was corrected in the same pass; this entry stays as the record of the
+wrong turn.)
+
+**Rule this produced:** a diagnosis is only as good as its last probe. A rule merged
+from a single observation deserves a re-probe before it is trusted as a standing
+instruction — and a contradicted rule is corrected the same day, in the same home.
