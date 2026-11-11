@@ -752,9 +752,15 @@ def survey_repo(
     saturation_file = root / ".autonomous" / "saturation.json"
     if saturated:
         import datetime
+
+        sat_main_sha = ""
+        code_sha, out_sha = _run_cmd(["git", "rev-parse", "HEAD"], root)
+        if code_sha == 0 and out_sha.strip():
+            sat_main_sha = out_sha.strip()
         sat_data = {
             "saturated": True,
-            "timestamp": datetime.datetime.now(datetime.UTC).isoformat(),
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "main_sha": sat_main_sha,
             "reason": reason,
         }
         (root / ".autonomous").mkdir(parents=True, exist_ok=True)

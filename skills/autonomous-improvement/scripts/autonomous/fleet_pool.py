@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import re
 import subprocess
@@ -210,10 +211,51 @@ def saturation_info(root: Path) -> Dict[str, Any]:
                     "saturated": True,
                     "status": "saturated",
                     "timestamp": sat_data.get("timestamp"),
+                    "main_sha": sat_data.get("main_sha") or "",
                     "reason": sat_data.get("reason"),
                 }
         except Exception:
             pass
     return sat_info
+
+
+def deep_standby_suppressed(
+    root: Path,
+    sat_info: Dict[str, Any],
+    previous: Dict[str, Any],
+    main_sha: str,
+    open_states: List[Dict[str, Any]],
+    issues_data: List[Dict[str, Any]],
+    directives_present: bool,
+    standby_hours: float,
+) -> Tuple[bool, bool]:
+    """Return (suppressed, standby_expired) for Deep Standby honest halt."""
+    if not sat_info.get("saturated"):
+        return False, False
+    prev_repo = previous.get("repo") if previous else None
+    prev_wake_sha = (
+        previous.get("main_sha")
+        if previous and (not prev_repo or prev_repo == str(root))
+        else ""
+    )
+    prev_main = str(sat_info.get("main_sha") or prev_wake_sha or "")
+    main_moved = bool(main_sha and prev_main and main_sha != prev_main)
+    if open_states or issues_data or directives_present or main_moved:
+        return False, False
+    ts = sat_info.get("timestamp")
+    if not ts:
+        return False, True
+    try:
+        now = datetime.datetime.now(datetime.timezone.utc)
+        elapsed = (now - datetime.datetime.fromisoformat(str(ts).replace("Z", "+00:00"))).total_seconds()
+    except ValueError:
+        return False, True
+    if elapsed < standby_hours * 3600:
+        return True, False
+    try:
+        (root / ".autonomous" / "saturation.json").unlink(missing_ok=True)
+    except OSError:
+        pass
+    return False, True
 
 
