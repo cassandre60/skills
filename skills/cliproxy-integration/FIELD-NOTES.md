@@ -357,12 +357,15 @@ dressed it as quota exhaustion. The client's harness prompt opens by naming itse
 every request from it was rejected on every account.
 
 The user then named the gateway's obfuscation setting — they knew their gateway better
-than the agent's theory pile. The config already listed the words, under a legacy key the
-v8 loader does not back, in a build that parsed the knob without wiring it (v8.0.16). The
-fix was the documented top-level `antigravity: sensitive-words` block plus an upgrade to
-the release that actually calls the obfuscator (v8.0.67, shipped the same morning). After
-it: every previously failing shape, including the exact replica and the full streaming
-shape, returned 200.
+than the agent's theory pile. The config already listed the words at the canonical
+`config-version: 8` path (`oauth.providers.antigravity.sensitive-words`, which `flattenV8`
+maps into `cfg.Antigravity` and prefers over any legacy top-level `antigravity:` block), in
+a build that parsed the knob without wiring it (v8.0.16). The fix was upgrading to the
+release that actually calls the obfuscator on Antigravity request paths (v8.0.67, shipped
+the same morning). After it: every previously failing shape, including the exact replica
+and the full streaming shape, returned 200. (An initial note claiming top-level
+`antigravity:` overrides `oauth.providers.antigravity` had `config_v8.go`'s `old`/`current`
+mapping backwards and was corrected after checking `flattenV8` directly.)
 
 Dead theories from this session, for the record: input size (25K and 44.8K tokens
 passed), the 64K output ask (passed), 6-way concurrency (passed), account health and
@@ -427,10 +430,15 @@ database lock timeout, triggering `Restart=always`.
 
 Checking `ps -o pid,ppid,cmd -C cli-proxy-api` and `fuser -v ~/.cli-proxy-api/kv.db` exposed
 the rogue PID. Killing it freed the port and lock, allowing systemd's instance to start
-cleanly and stabilize at `NRestarts=0`.
+cleanly and stabilize at `NRestarts=0`. Later, inspecting `/proc/<pid>/environ` and
+`cgroup` on a newly respawned `PPID 1` instance exposed the root cause of the respawns:
+a second, system-level systemd unit (`/etc/systemd/system/cliproxyapi.service`) was also
+enabled alongside the user-level unit, endlessly retrying every 15s (`RestartSec=15`).
+`sudo systemctl disable --now cliproxyapi.service` ended the conflict permanently.
 
 **Rules this produced:**
 - Auth file `capability_hints` are free upstream ground truth — inspect them before probing.
 - When `curl` works but systemd logs `bind: address already in use` or DB lock timeout, look
-  for an orphan process with `PPID 1`. Never assume a passing curl means the service unit
-  is healthy.
+  for an orphan process with `PPID 1` **and** check both `systemctl` and `systemctl --user`
+  for a competing enabled unit. Never assume a passing curl means the service unit is
+  healthy.

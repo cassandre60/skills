@@ -102,25 +102,33 @@ Yet running `curl http://127.0.0.1:8317/v1/models` succeeds instantly.
 
 ### Why it happens
 
-An **orphaned gateway process** (PPID 1, not managed by systemd) is already running in the
-background, bound to port 8317, and holding an exclusive lock on `kv.db`.
+An **orphaned or duplicate gateway process** (PPID 1, not managed by the active unit —
+commonly an unmanaged background launch or a **second systemd unit at the other scope**,
+e.g. `/etc/systemd/system/cliproxyapi.service` enabled alongside
+`~/.config/systemd/user/cliproxyapi.service`) is already running, bound to port 8317, and
+holding an exclusive lock on `kv.db`.
 
-1. The orphan handles incoming requests and hot-reloads configuration files via its file
-   watcher (so test probes return 200).
-2. Meanwhile, systemd tries to start its configured service instance.
+1. The competing instance handles incoming requests and hot-reloads configuration files via
+   its file watcher (so test probes return 200).
+2. Meanwhile, the unit you are inspecting tries to start its configured service instance.
 3. The new instance attempts to bind port 8317 or open `kv.db`. It fails with `bind: address
    already in use` or Bolt DB lock timeout and exits immediately.
-4. Because the unit has `Restart=always` (or `RestartSec=5`), systemd restarts it in a
-   continuous loop.
+4. Because `Restart=always` (or `RestartSec=5`) is set on the unit(s), systemd restarts it in
+   a continuous loop — and if the *other* systemd unit owns the extra PID, simply killing
+   that PID only triggers its own `Restart=always` to respawn it.
 
 ### Diagnosis and resolution
 
-1. **Check for rogue processes:**
+1. **Check for rogue processes and duplicate systemd units:**
    ```bash
    ps -o pid,ppid,lstart,cmd -C cli-proxy-api
+   systemctl status <service> --no-pager       # system-wide unit
+   systemctl --user status <service> --no-pager # user unit
    ```
-   Compare running PIDs with `systemctl --user show <service> -p MainPID`. If you see an
-   unmanaged process (often `PPID 1`), that is the orphan.
+   Compare running PIDs with the `MainPID` of whichever unit you intend to keep. If you see
+   an unmanaged `PPID 1` process, inspect `/proc/<pid>/cgroup` or check the other systemd
+   scope — a competing enabled system unit shows up under `/system.slice/...` with `PPID 1`
+   from your user session's perspective.
 
 2. **Inspect the port and database lock:**
    ```bash
@@ -128,9 +136,10 @@ background, bound to port 8317, and holding an exclusive lock on `kv.db`.
    fuser -v ~/.cli-proxy-api/kv.db
    ```
 
-3. **Kill the orphan and restart cleanly:**
+3. **Disable the redundant unit (if any), kill the orphan, and restart cleanly:**
    ```bash
-   kill <orphan-pid>
+   sudo systemctl disable --now <service>   # if a competing system unit is enabled
+   kill <orphan-pid>                        # if still running unowned
    systemctl --user restart <service>
    ```
 
