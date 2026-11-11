@@ -686,6 +686,7 @@ def survey_repo(
     chosen: dict[str, Any] | None = None
     runner_up: dict[str, Any] | None = None
     reason = "no tool scored above threshold 0.25"
+    saturated = False
 
     if picks and picks[0]["score"] >= THRESHOLD:
         chosen = picks[0]
@@ -719,6 +720,39 @@ def survey_repo(
 
         if len(picks) > 1 and picks[1]["score"] >= THRESHOLD:
             runner_up = picks[1]
+    else:
+        # Saturation check (§3.3 Honest Halt)
+        has_ready_p0_p3 = False
+        backlog_file = root / ".autonomous" / "backlog.json"
+        if backlog_file.is_file():
+            try:
+                bdata = json.loads(backlog_file.read_text(encoding="utf-8"))
+                for it in bdata.get("items") or []:
+                    if it.get("status") == "ready" and it.get("priority") in ("P0", "P1", "P2", "P3"):
+                        has_ready_p0_p3 = True
+                        break
+            except Exception:
+                pass
+
+        if not has_ready_p0_p3 and red_ci_strength == 0.0:
+            saturated = True
+            reason = "honest halt: repo is saturated (no candidates, no ready P0-P3 backlog items, CI green)"
+
+    saturation_file = root / ".autonomous" / "saturation.json"
+    if saturated:
+        import datetime
+        sat_data = {
+            "saturated": True,
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "reason": reason,
+        }
+        (root / ".autonomous").mkdir(parents=True, exist_ok=True)
+        saturation_file.write_text(json.dumps(sat_data, indent=2), encoding="utf-8")
+    elif saturation_file.is_file() and chosen is not None:
+        try:
+            saturation_file.unlink()
+        except OSError:
+            pass
 
     if limit is not None and limit > 0:
         picks = picks[:limit]
@@ -729,6 +763,7 @@ def survey_repo(
         "chosen": chosen,
         "runner_up": runner_up,
         "reason": reason,
+        "saturated": saturated,
     }
 
 

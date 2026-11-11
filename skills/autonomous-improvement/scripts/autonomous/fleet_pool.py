@@ -196,3 +196,23 @@ def evaluate_track_caps(
         res[trk] = {"open": count, "cap": cap, "capped": count >= cap}
     return res
 
+
+def saturation_info(root: Path) -> Dict[str, Any]:
+    """Read saturation state from .autonomous/saturation.json."""
+    sat_path = root / ".autonomous" / "saturation.json"
+    sat_info: Dict[str, Any] = {"saturated": False, "status": "active"}
+    if sat_path.is_file():
+        try:
+            sat_data = json.loads(sat_path.read_text(encoding="utf-8"))
+            if sat_data.get("saturated"):
+                sat_info = {
+                    "saturated": True,
+                    "status": "saturated",
+                    "timestamp": sat_data.get("timestamp"),
+                    "reason": sat_data.get("reason"),
+                }
+        except Exception:
+            pass
+    return sat_info
+
+
