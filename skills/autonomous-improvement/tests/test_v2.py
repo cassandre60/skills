@@ -1299,6 +1299,90 @@ class OrchestratorTests(RepoTestCase):
         branch = git(repo, "rev-parse", "--verify", "refs/heads/test/clean")
         self.assertNotEqual(branch.returncode, 0)
 
+    def test_cleanup_ignores_disposable_runtime_artifacts(self):
+        repo, _ = self.make_origin_repo()
+        self.assertEqual(self.create(repo, "runtime-artifacts", ("--type", "test")).returncode, 0)
+        worktree = repo.parent / f"{repo.name}-runtime-artifacts"
+        write(worktree / "change.txt", "x\n")
+        commit(worktree, "pushed")
+        self.assertEqual(git(worktree, "push", "-u", "origin", "test/runtime-artifacts").returncode, 0)
+        # Disposable runtime artifacts left behind by evidence.py / mutation_engine.py / builds
+        write(worktree / ".autonomous" / "evidence.json", "{}\n")
+        write(worktree / "build" / "out.bin", "bin\n")
+        write(worktree / ".dart_tool" / "package_config.json", "{}\n")
+        result = self.cleanup(repo, "runtime-artifacts")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(worktree.exists())
+
+    def test_sweep_worktrees_reclaims_settled_and_stale_but_keeps_human(self):
+        repo, _ = self.make_origin_repo()
+        # 1. Registered agent worktree for a MERGED PR (with disposable .autonomous artifacts)
+        self.assertEqual(self.create(repo, "merged-task", ("--type", "test")).returncode, 0)
+        wt_merged = repo.parent / f"{repo.name}-merged-task"
+        write(wt_merged / ".autonomous" / "mutant-cache.json", "{}\n")
+
+        # 2. Unregistered ad-hoc agent worktree for a CLOSED PR
+        wt_closed = repo.parent / f"{repo.name}-audit-closed"
+        self.assertEqual(
+            git(repo, "worktree", "add", str(wt_closed), "-b", "audit/closed-task").returncode,
+            0,
+        )
+
+        # 3. Stale abandoned dirty registered worktree (> 24h old)
+        self.assertEqual(self.create(repo, "stale-dirty", ("--type", "test")).returncode, 0)
+        wt_stale = repo.parent / f"{repo.name}-stale-dirty"
+        write(wt_stale / "abandoned_edit.py", "x = 1\n")
+        old_ts = time.time() - 30 * 3600
+        os.utime(wt_stale, (old_ts, old_ts))
+        reg_path = repo / ".git" / "autonomous-worktrees.json"
+        reg_entries = json.loads(reg_path.read_text(encoding="utf-8"))
+        for item in reg_entries:
+            if item.get("slug") == "stale-dirty":
+                item["created_at"] = "2020-01-01T00:00:00+00:00"
+        reg_path.write_text(json.dumps(reg_entries, indent=2), encoding="utf-8")
+
+        # 4. Unrelated human dirty worktree (never touched by sweep-worktrees)
+        wt_human = repo.parent / f"{repo.name}-my-feature"
+        self.assertEqual(
+            git(repo, "worktree", "add", str(wt_human), "-b", "feat/human-work").returncode,
+            0,
+        )
+        write(wt_human / "wip.py", "wip = True\n")
+
+        bin_dir = self.tmp / "sweep-bin"
+        bin_dir.mkdir(exist_ok=True)
+        gh_stub = write(
+            bin_dir / "gh",
+            "#!/bin/sh\n"
+            'echo \'[{"headRefName":"test/merged-task","state":"MERGED"},{"headRefName":"audit/closed-task","state":"CLOSED"}]\'\n',
+        )
+        gh_stub.chmod(0o755)
+        env = dict(os.environ)
+        env["PATH"] = f"{bin_dir}:{env.get('PATH', '')}"
+
+        res = script(
+            repo,
+            "orchestrator.py",
+            "sweep-worktrees",
+            "--stale-hours",
+            "24",
+            "--json",
+            env=env,
+        )
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        payload = json.loads(res.stdout)
+        removed_paths = {item["path"] for item in payload["removed"]}
+        self.assertIn(str(wt_merged.resolve()), removed_paths)
+        self.assertIn(str(wt_closed.resolve()), removed_paths)
+        self.assertIn(str(wt_stale.resolve()), removed_paths)
+        self.assertFalse(wt_merged.exists())
+        self.assertFalse(wt_closed.exists())
+        self.assertFalse(wt_stale.exists())
+        # Human feature worktree must stay untouched!
+        self.assertTrue(wt_human.exists())
+        git(repo, "worktree", "remove", "--force", str(wt_human))
+        git(repo, "branch", "-D", "feat/human-work")
+
     def test_verify_gate_after_commit(self):
         repo, _ = self.make_origin_repo()
         args_file = self.tmp / "gate-args.json"

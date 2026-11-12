@@ -629,6 +629,63 @@ else
   fail "update-skills.sh did NOT abort safely on dirty tracked tree"
 fi
 
+# --- case 20: failed wake attempt reclaims any worktree it created (issue #177) ---
+WT_GC_REPO="$TMP/wt-gc-repo"
+mkdir -p "$WT_GC_REPO/scripts"
+cp -r "$SKILL_ROOT/scripts/autonomous" "$WT_GC_REPO/scripts/autonomous"
+( cd "$WT_GC_REPO" && git init -q -b main && git add -A \
+  && GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t git commit -qm base ) >/dev/null 2>&1
+cat >"$TMP/bin/timeout-creating-wt" <<'EOF'
+#!/bin/bash
+git worktree add "$PWD-aborted-task" -b "test/aborted-task" -q
+echo "unsaved junk" > "$PWD-aborted-task/junk.txt"
+exit 124
+EOF
+chmod +x "$TMP/bin/timeout-creating-wt"
+mkdir -p "$TMP/state-wtgc"
+PATH="$TMP/bin:$PATH" \
+  ORCH_REPO="$WT_GC_REPO" \
+  ORCH_STATE_DIR="$TMP/state-wtgc" \
+  ORCH_WAKE_CMD='timeout-creating-wt' \
+  ORCH_MODEL_LADDER="opencode/alpha-free" \
+  ORCH_WAKE_TIMEOUT=20 \
+  ORCH_MIN_INTERVAL=0 \
+  GH_JSON="$TMP/prs-red.json" \
+  bash "$ASSETS" >/dev/null 2>&1
+if [ ! -d "${WT_GC_REPO}-aborted-task" ] && [ "$(git -C "$WT_GC_REPO" worktree list --porcelain | grep -c '^worktree ')" -eq 1 ]; then
+  ok "failed wake attempt automatically cleaned up its orphaned worktree"
+else
+  fail "failed wake attempt left orphaned worktree behind"
+fi
+
+# --- case 21: pre-wake sweep-worktrees reclaims settled worktree before max_worktrees check (issue #177) ---
+git -C "$WT_GC_REPO" worktree add -q "${WT_GC_REPO}-audit-settled" -b "audit/settled-task"
+cat >"$TMP/bin/gh-settled" <<'EOF'
+#!/bin/sh
+echo '[{"number": 7, "headRefName": "audit/settled-task", "headRefOid": "sha-7", "state": "MERGED", "statusCheckRollup": [{"name": "unit-tests", "status": "COMPLETED", "conclusion": "FAILURE"}]}]'
+EOF
+chmod +x "$TMP/bin/gh-settled"
+# Create a bin dir where `gh` returns the settled PR list
+mkdir -p "$TMP/bin-settled"
+cp "$TMP/bin/fake-harness" "$TMP/bin-settled/fake-harness"
+cp "$TMP/bin/gh-settled" "$TMP/bin-settled/gh"
+: >"$WAKE_LOG"
+rm -f "$TMP/state-wtgc/wake.json" "$TMP/state-wtgc/wake_failures"
+PATH="$TMP/bin-settled:$PATH" \
+  ORCH_REPO="$WT_GC_REPO" \
+  ORCH_STATE_DIR="$TMP/state-wtgc" \
+  ORCH_WAKE_CMD='fake-harness "$1" ${2:+-m "$2"}' \
+  ORCH_MODEL_LADDER="opencode/mention-free" \
+  ORCH_MAX_WORKTREES=1 \
+  ORCH_WAKE_TIMEOUT=20 \
+  ORCH_MIN_INTERVAL=0 \
+  bash "$ASSETS" >/dev/null 2>&1
+if [ ! -d "${WT_GC_REPO}-audit-settled" ] && grep -q "ARGS:" "$WAKE_LOG" 2>/dev/null; then
+  ok "pre-wake sweep-worktrees reclaimed settled worktree before max_worktrees check"
+else
+  fail "pre-wake sweep-worktrees did NOT reclaim settled worktree or blocked wake"
+fi
+
 if [ "$FAILED" -eq 0 ]; then
   echo "PASS: stateless wake launcher"
   exit 0

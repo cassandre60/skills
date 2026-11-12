@@ -175,7 +175,7 @@ if [ ! -d "$REPO" ]; then
   exit 2
 fi
 
-# 1a. Routine build artifact purge and worktree prune (reclaim space).
+# 1a. Routine build artifact purge, worktree GC, and prune (reclaim space).
 purge_build_artifacts() {
   for d in "$REPO"-*; do
     if [ -d "$d" ] && [ "$d" != "$REPO-*" ]; then
@@ -183,9 +183,45 @@ purge_build_artifacts() {
     fi
   done
   if [ -d "$REPO/.git" ] || git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
+    if [ "${ORCH_SWEEP_WORKTREES:-1}" = "1" ] && [ -f "$SKILL_SCRIPTS_DIR/orchestrator.py" ]; then
+      ( cd "$REPO" && python3 "$SKILL_SCRIPTS_DIR/orchestrator.py" sweep-worktrees \
+          --active-grace-minutes "${ORCH_WORKTREE_GRACE_MINUTES:-120}" \
+          --stale-hours "${ORCH_STALE_WORKTREE_HOURS:-24}" ) >>"$LOG" 2>&1 || true
+    fi
     git -C "$REPO" worktree prune 2>/dev/null || true
   fi
 }
+
+cleanup_attempt_worktrees() { # $1: pre-attempt worktrees file, $2: exit code
+  local pre_file="$1" rc="$2" post_file wt wt_real repo_real wt_branch
+  [ -d "$REPO/.git" ] || git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1 || return 0
+  repo_real="$(cd "$REPO" && pwd -P)"
+  post_file="$(mktemp)"
+  git -C "$REPO" worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p' >"$post_file" || true
+  while IFS= read -r wt; do
+    [ -n "$wt" ] || continue
+    wt_real="$(cd "$wt" 2>/dev/null && pwd -P || printf '%s' "$wt")"
+    [ "$wt_real" = "$repo_real" ] && continue
+    grep -Fxq -- "$wt" "$pre_file" 2>/dev/null && continue
+    if [ "$rc" -ne 0 ]; then
+      # Aborted/timed-out attempt: reclaim the orphaned worktree created by this attempt.
+      wt_branch="$(git -C "$wt" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+      rm -rf "$wt/.autonomous" "$wt/build" "$wt/.dart_tool" 2>/dev/null || true
+      git -C "$REPO" worktree remove --force "$wt" >>"$LOG" 2>&1 || true
+      if [ -n "$wt_branch" ] && [ "$wt_branch" != "HEAD" ] && [ "$wt_branch" != "main" ] && [ "$wt_branch" != "master" ]; then
+        git -C "$REPO" branch -D "$wt_branch" >>"$LOG" 2>&1 || true
+      fi
+      echo "$(date -Is) cleaned orphaned worktree from failed attempt: $wt" >>"$LOG"
+    fi
+  done <"$post_file"
+  rm -f "$post_file"
+  if [ "$rc" -eq 0 ] && [ "${ORCH_SWEEP_WORKTREES:-1}" = "1" ] && [ -f "$SKILL_SCRIPTS_DIR/orchestrator.py" ]; then
+    # Completed attempt: remove any freshly-created clean/pushed worktree immediately (grace=0, no force-stale).
+    ( cd "$REPO" && python3 "$SKILL_SCRIPTS_DIR/orchestrator.py" sweep-worktrees \
+        --active-grace-minutes 0 --stale-hours -1 ) >>"$LOG" 2>&1 || true
+  fi
+}
+
 purge_build_artifacts
 
 # 1b. Disk headroom floor: never launch into an almost-full filesystem (issue #115).
@@ -396,9 +432,13 @@ for model in "${candidates[@]}"; do
   if [ -d "$REPO/.autonomous/run-records" ]; then
     PRE_RR_COUNT="$(find "$REPO/.autonomous/run-records" -maxdepth 1 -name 'rr-*.json' 2>/dev/null | wc -l | tr -d ' ')"
   fi
+  PRE_WTS_FILE="$(mktemp)"
+  git -C "$REPO" worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p' >"$PRE_WTS_FILE" || true
   timeout --signal=TERM --kill-after=60 "$NUDGE_TIMEOUT" \
     bash -c "$WAKE_CMD" _ "$PROMPT" "$model" >"$OUT" 2>&1
   RC=$?
+  cleanup_attempt_worktrees "$PRE_WTS_FILE" "$RC"
+  rm -f "$PRE_WTS_FILE"
   tail -c 800 "$OUT" >>"$LOG"
   if [ "$RC" -ne 0 ]; then
     if quota_failure "$OUT"; then
