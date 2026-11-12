@@ -287,10 +287,19 @@ def scan_spec_trace(
     base: Path,
     spec_id_re: re.Pattern[str] = SPEC_ID,
     ignore_ids: set[str] | None = None,
+    ignore_spec_pattern: re.Pattern[str] | None = None,
 ) -> list[dict[str, Any]]:
     spec_text = spec.read_text(encoding="utf-8", errors="replace")
     ignored = ignore_ids or set()
-    defined = set(spec_id_re.findall(spec_text)) - ignored
+
+    def is_ignored(sid: str) -> bool:
+        if sid in ignored:
+            return True
+        if ignore_spec_pattern and ignore_spec_pattern.search(sid):
+            return True
+        return False
+
+    defined = {sid for sid in spec_id_re.findall(spec_text) if not is_ignored(sid)}
     if not defined:
         return []
     cited: dict[str, str] = {}
@@ -309,7 +318,7 @@ def scan_spec_trace(
             ):
                 cleaned_line = NOQA_COMMENT.sub("", line)
                 for match in spec_id_re.findall(cleaned_line):
-                    if match in ignored:
+                    if is_ignored(match):
                         continue
                     cited.setdefault(match, f"{_rel_label(test_file, base)}:{lineno}")
     findings: list[dict[str, Any]] = []
@@ -391,9 +400,25 @@ def cmd_check(args: argparse.Namespace) -> int:
             except re.error:
                 spec_id_re = SPEC_ID
         ignore_ids = {str(x) for x in (dt_cfg.get("ignore_spec_ids") or [])}
+        raw_ignore_pat = dt_cfg.get("ignore_spec_pattern")
+        ignore_spec_pat = None
+        if isinstance(raw_ignore_pat, str) and raw_ignore_pat.strip():
+            try:
+                ignore_spec_pat = re.compile(raw_ignore_pat)
+            except re.error:
+                pass
         if dt_cfg.get("spec_trace", True):
             tests_root = next(((base / n) for n in ("tests", "test") if (base / n).is_dir()), None)
-            candidates.extend(scan_spec_trace(spec, tests_root, base, spec_id_re=spec_id_re, ignore_ids=ignore_ids))
+            candidates.extend(
+                scan_spec_trace(
+                    spec,
+                    tests_root,
+                    base,
+                    spec_id_re=spec_id_re,
+                    ignore_ids=ignore_ids,
+                    ignore_spec_pattern=ignore_spec_pat,
+                )
+            )
 
     # Spec-shaped files are the contract side: a drifted symbol there is an
     # ISSUE (direction call), not a candidate the runner auto-flags; and the

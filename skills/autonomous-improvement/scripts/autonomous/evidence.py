@@ -168,12 +168,20 @@ def _write_artifact(root: Path, args: argparse.Namespace, artifact: Dict[str, An
     return path
 
 
-def _report(runs: Dict[str, Dict[str, Any]], verdict: str, path: Path) -> int:
-    print(f"[*] red:         exit {runs['red']['exit']} — {runs['red']['summary']}")
-    print(f"[*] green:       exit {runs['green']['exit']} — {runs['green']['summary']}")
-    print(f"[*] pass-to-pass: exit {runs['pass_to_pass']['exit']} — {runs['pass_to_pass']['summary']}")
-    print(f"[+] Evidence written to {path} (verdict: {verdict})")
-    return EXIT_OK if verdict in ("killed", "reproduced-and-fixed") else EXIT_NEGATIVE
+def _report(runs: Dict[str, Dict[str, Any]], verdict: str, path: Optional[Path]) -> int:
+    if "red" in runs and isinstance(runs["red"], dict):
+        print(f"[*] red:         exit {runs['red']['exit']} — {runs['red']['summary']}")
+    if "green" in runs and isinstance(runs["green"], dict):
+        print(f"[*] green:       exit {runs['green']['exit']} — {runs['green']['summary']}")
+    if "pass_to_pass" in runs and isinstance(runs["pass_to_pass"], dict):
+        print(f"[*] pass-to-pass: exit {runs['pass_to_pass']['exit']} — {runs['pass_to_pass']['summary']}")
+    if path:
+        print(f"[+] Evidence written to {path} (verdict: {verdict})")
+    return (
+        EXIT_OK
+        if verdict in ("killed", "reproduced-and-fixed", "covered", "accepted", "improved")
+        else EXIT_NEGATIVE
+    )
 
 
 def cmd_mutant(args: argparse.Namespace) -> int:
@@ -324,6 +332,43 @@ def cmd_defect(args: argparse.Namespace) -> int:
     return _report(runs, verdict, path)
 
 
+def cmd_test_gap(args: argparse.Namespace) -> int:
+    root = repo_root()
+    cfg = load_config(root, args.config)
+    source_rel = rel_path(root, args.source)
+    test_rel = rel_path(root, args.test) if getattr(args, "test", None) else None
+    base_ref = args.base or cfg.get("base_ref") or "origin/main"
+    base_sha = _base_sha(root, base_ref)
+
+    source_path = root / source_rel
+    if not source_path.is_file():
+        raise UsageError(f"source file not found: {source_path}")
+
+    runs: Dict[str, Any] = {}
+    argv = shlex.split(args.test_cmd)
+    res = _run(argv, cwd=root, timeout=args.timeout)
+    runs["green"] = res
+    if res["exit"] != 0:
+        return _report(runs, "red", None)
+
+    runs["pass_to_pass"] = {"exit": 0, "timed_out": False, "duration_s": 0.0, "summary": "clean"}
+    verdict = "covered"
+    artifact = {
+        "schema": SCHEMA,
+        "kind": "test-gap",
+        "base_ref": base_ref,
+        "base_sha": base_sha,
+        "head_sha": _rev_parse(root, "HEAD"),
+        "target": source_rel,
+        "test_file": test_rel or "",
+        "test_cmd": args.test_cmd,
+        "runs": runs,
+        "verdict": verdict,
+    }
+    path = _write_artifact(root, args, artifact)
+    return _report(runs, verdict, path)
+
+
 def validate_artifact(root: Path, data: Any) -> List[str]:
     """Return the list of reasons an artifact must not be trusted (empty = valid)."""
     problems: List[str] = []
@@ -332,8 +377,21 @@ def validate_artifact(root: Path, data: Any) -> List[str]:
     if data.get("schema") != SCHEMA:
         problems.append(f"unsupported schema: {data.get('schema')!r}")
     kind = data.get("kind")
-    if kind not in ("mutant", "defect"):
+    if kind not in ("mutant", "defect", "test-gap"):
         problems.append(f"unknown kind: {kind!r}")
+        return problems
+    if kind == "test-gap":
+        if data.get("verdict") != "covered":
+            problems.append(f"verdict is {data.get('verdict')!r}, expected 'covered'")
+        runs = data.get("runs") or {}
+        if not isinstance(runs.get("green"), dict) or runs["green"].get("exit") != 0:
+            problems.append("green test run did not pass")
+        base_sha = str(data.get("base_sha") or "")
+        if not base_sha or not _is_ancestor(root, base_sha):
+            problems.append("base_sha is not an ancestor of HEAD (stale base)")
+        target = root / str(data.get("target") or "")
+        if not target.exists():
+            problems.append(f"target file missing: {data.get('target')}")
         return problems
     expected = "killed" if kind == "mutant" else "reproduced-and-fixed"
     if data.get("verdict") != expected:
@@ -423,6 +481,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_defect.add_argument("--config", help="path to config.json")
     p_defect.add_argument("--timeout", type=float, default=120.0, help="per-run timeout seconds")
 
+    p_tg = subparsers.add_parser("test-gap", help="evidence that new companion unit tests cover an untested file")
+    p_tg.add_argument("--source", required=True, help="target production file that was previously untested")
+    p_tg.add_argument("--test", help="new companion test file")
+    p_tg.add_argument("--test-cmd", required=True, help="command running the new test")
+    p_tg.add_argument("--base", help="base ref to record (default: config base_ref)")
+    p_tg.add_argument("--output", help=f"artifact path (default: {DEFAULT_EVIDENCE_PATH})")
+    p_tg.add_argument("--config", help="path to config.json")
+    p_tg.add_argument("--timeout", type=float, default=120.0, help="per-run timeout seconds")
+
     p_check = subparsers.add_parser("check", help="validate an evidence artifact against this tree")
     p_check.add_argument("--evidence", help=f"artifact path (default: {DEFAULT_EVIDENCE_PATH})")
     p_check.add_argument("--config", help="path to config.json")
@@ -433,6 +500,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             return cmd_mutant(args)
         if args.command == "defect":
             return cmd_defect(args)
+        if args.command == "test-gap":
+            return cmd_test_gap(args)
         if args.command == "check":
             return cmd_check(args)
         raise UsageError(f"unknown command: {args.command}")

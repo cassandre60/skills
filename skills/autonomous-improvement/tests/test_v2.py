@@ -2207,6 +2207,25 @@ class EvidenceTests(RepoTestCase):
         self.assertIn("recorded", result.stdout + result.stderr)
         script(repo, "orchestrator.py", "cleanup-worktree", "--slug", "weak", "--force")
 
+    def test_test_gap_evidence_records_green_run_and_validates(self):
+        repo = self._repo()
+        write(repo / "tests" / "test_app.py", "def test_ok(): assert True\n")
+        commit(repo, "new test")
+        res = script(
+            repo, "evidence.py", "test-gap",
+            "--source", "src/app.py",
+            "--test", "tests/test_app.py",
+            "--test-cmd", f"{PYTHON} -c pass",
+        )
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        artifact = json.loads((repo / ".autonomous" / "evidence.json").read_text())
+        self.assertEqual(artifact["kind"], "test-gap")
+        self.assertEqual(artifact["verdict"], "covered")
+        self.assertEqual(artifact["target"], "src/app.py")
+
+        check_res = script(repo, "evidence.py", "check")
+        self.assertEqual(check_res.returncode, 0, check_res.stdout + check_res.stderr)
+
 
 @unittest.skipUnless(
     all(shutil.which(tool) for tool in ("bash", "flock", "timeout", "stat", "date")),
@@ -2970,6 +2989,38 @@ class FleetClaimPublishTests(RepoTestCase):
         pr = self._state(state)["prs"][0]
         self.assertFalse(pr["draft"])
         self.assertIn(f"#{issue_number}", pr["body"])
+
+    def test_publish_test_gap_evidence_renders_summary_and_flips_ready(self):
+        repo = self._repo()
+        state = self.tmp / "gh-state.json"
+        env = self._gh_stub(state)
+        seeded = self._state(state)
+        seeded["prs"].append({
+            "number": 8, "title": "WIP: [TEST] Create unit tests for app",
+            "headRefName": "test/test-app", "state": "OPEN", "draft": True, "body": "",
+        })
+        state.write_text(json.dumps(seeded))
+        write(repo / "tests" / "test_app.py", "def test_ok(): pass\n")
+        commit(repo, "add helper test")
+        push(repo)
+
+        ev_res = script(
+            repo, "evidence.py", "test-gap",
+            "--source", "src/app.py",
+            "--test", "tests/test_app.py",
+            "--test-cmd", f"{PYTHON} -c pass",
+        )
+        self.assertEqual(ev_res.returncode, 0, ev_res.stdout + ev_res.stderr)
+
+        res = script(
+            repo, "fleet.py", "publish", "--pr", "8",
+            "--title", "test(app): add companion unit test coverage", env=env,
+        )
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        pr = self._state(state)["prs"][0]
+        self.assertFalse(pr["draft"])
+        self.assertIn("covered", pr["body"])
+        self.assertIn("companion unit test coverage", pr["body"])
 
 
 class StreamBScanTests(RepoTestCase):

@@ -483,3 +483,16 @@ Short operational briefs for the multi-track harvesters (§7 of the plan).
 - **Rules**: Never create a branch or PR; cite primary sources (RFCs, official docs, CVEs).
 - **Output**: One structured GitHub issue with actionable citations.
 
+## Multi-Agent Project Improvement (Invoking at Project Root)
+
+When invoked interactively at the project root with an open goal to improve the project:
+1. **Harvest candidates**: Run `python3 scripts/autonomous/backlog.py harvest --json` to discover candidates across all 5 tracks (`test`, `bug`, `refactor`, `research`, `ci`) in `.autonomous/backlog.json`.
+2. **Review top opportunities**: Read `.autonomous/backlog.json` and `python3 scripts/autonomous/survey.py --json`.
+3. **Dispatch parallel specialized subagents**:
+   - For a `test` candidate (untested module): claim via `fleet.py claim --item <id>` and spawn a `test-builder` subagent.
+   - For a `bug` lead: claim via `fleet.py claim --item <id>` and spawn a `bug-hunter` subagent (prove red on main -> fix -> green).
+   - For a `research` candidate: spawn a `researcher` subagent to audit dependencies/advisories and file a structured RFC issue.
+   - For a `refactor` candidate: claim via `fleet.py claim --item <id>` and spawn a `refactorer` subagent (prove metrics improve, tests green).
+4. **Coordinate via Master Cockpit**: Register each spawned worker in `.autonomous/workers.json` (`fleet.py worker register --id <session_id> --target <target> --track <track>`), monitor live progress with `fleet.py dashboard`, and ensure subagents do not collide on targets or shared serialization files.
+5. **Publish**: On completion, verify gates (`orchestrator.py verify-gate`), generate track evidence (`evidence.py mutant|defect|test-gap`), and publish (`fleet.py publish --pr <num>`).
+
