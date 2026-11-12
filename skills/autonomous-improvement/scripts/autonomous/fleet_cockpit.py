@@ -98,6 +98,11 @@ def _render_evidence_body(data: dict[str, Any]) -> str:
             "```",
         ]
         red_label = "mutant applied"
+    elif data["kind"] == "test-gap":
+        target = data.get("target") or data.get("source") or "target"
+        tf = f" in `{data['test_file']}`" if data.get("test_file") else ""
+        lines.append(f"Adds companion unit test coverage for previously untested `{target}`{tf}.")
+        red_label = "missing companion test"
     else:
         files = ", ".join(f"`{item['path']}`" for item in data.get("test_files") or [])
         lines.append(f"Fixes a defect reproduced on the unmodified base. Repro: {files}.")
@@ -107,9 +112,14 @@ def _render_evidence_body(data: dict[str, Any]) -> str:
         "## Evidence (`.autonomous/evidence.json`, schema 1)",
         "",
         f"- Base: `{data.get('base_sha')}` ({data.get('base_ref')})",
-        f"- Red ({red_label}): exit {runs['red']['exit']} — {runs['red'].get('summary', '')}",
-        f"- Green (this branch): exit {runs['green']['exit']} — {runs['green'].get('summary', '')}",
-        f"- Pass-to-pass: exit {runs['pass_to_pass']['exit']} — {runs['pass_to_pass'].get('summary', '')}",
+    ]
+    if "red" in runs and isinstance(runs["red"], dict):
+        lines.append(f"- Red ({red_label}): exit {runs['red']['exit']} — {runs['red'].get('summary', '')}")
+    if "green" in runs and isinstance(runs["green"], dict):
+        lines.append(f"- Green (this branch): exit {runs['green']['exit']} — {runs['green'].get('summary', '')}")
+    if "pass_to_pass" in runs and isinstance(runs["pass_to_pass"], dict):
+        lines.append(f"- Pass-to-pass: exit {runs['pass_to_pass']['exit']} — {runs['pass_to_pass'].get('summary', '')}")
+    lines += [
         f"- Test cmd: `{data.get('test_cmd')}`",
         f"- Verdict: **{data.get('verdict')}**",
         "",

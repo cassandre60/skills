@@ -49,6 +49,17 @@ SCHEMA = "test-gap/1"
 SKIP_DIRS = {".git", ".dart_tool", ".agents", ".opencode", "build", "node_modules", "__pycache__", ".autonomous", ".venv", "venv"}
 GENERATED_SUFFIXES = (".g.dart", ".freezed.dart", ".mocks.dart", ".gen.dart", ".pb.go", "_pb2.py", ".d.ts")
 
+
+def is_generated_source(path_str: str) -> bool:
+    if path_str.endswith(GENERATED_SUFFIXES):
+        return True
+    p = Path(path_str)
+    if "l10n" in p.parts and (path_str.endswith(".dart") and "l10n" in p.name.lower()):
+        return True
+    if re.search(r"(?:^|/)l10n_[a-z]{2,}(?:_[A-Za-z0-9]+)?\.dart$", path_str):
+        return True
+    return False
+
 SOURCE_EXTENSIONS = {
     ".py",
     ".dart",
@@ -127,7 +138,7 @@ def find_test_gaps(
     for rel in sorted(matched_paths):
         if any(part in SKIP_DIRS for part in Path(rel).parts):
             continue
-        if rel.endswith(GENERATED_SUFFIXES):
+        if is_generated_source(rel):
             continue
         ext = Path(rel).suffix.lower()
         if ext not in SOURCE_EXTENSIONS:

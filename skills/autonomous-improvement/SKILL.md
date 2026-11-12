@@ -30,15 +30,14 @@ runner-up, what was filed (links), what needs the owner, not configured skips.
 
 ## Modes: adapt, don't assume
 
-- **Single session (default).** You run the per-task protocol (`04`) yourself.
-  This is the mode for personal machines and ordinary engagements.
+- **Single session (default).** Run the per-task protocol (`04`) yourself, or harvest
+  the backlog and dispatch subagents across tracks (`test`, `bug`, `refactor`, `research`)
+  via the Master Cockpit (`fleet.py dashboard`, `worker`).
 - **Fleet mode (opt-in).** Worker dispatch, beats, watchdogs, and unattended
   wake loops are for an explicit owner ask or a `vm`/`ci` environment
   (`session.environment` in config) — never a personal-laptop default. The
-  orchestrator duties and Master Cockpit (`fleet.py dashboard`, `directive`,
-  `worker`) live in `04`; the unattended stack is in `05`, whose primary shape
-  is stateless (`fleet.py wake`: snapshot → needs-brain → one fresh run) with
-  the session-id/wake-grid boot kept as the long-lived-session fallback.
+  orchestrator duties and Master Cockpit (`04`) coordinate stateless wakes
+  (`fleet.py wake`: snapshot → needs-brain → fresh run; details in `05`).
 
 Fleet rules that bind once fleet mode is on: on a quota error **rotate the
 model**, never retry the same pool ("Model rotation", `05`); a PR is not done
@@ -115,13 +114,11 @@ examples. The ledger is `docs/AUTONOMOUS_WORK_LEDGER.md` (copy from
 
 1. Pick the tool from the menu above (a first cycle runs the foundation
    passes before anything heavier).
-2. `python3 scripts/autonomous/ledger.py next --stream <X>` selects the
-   target (`--rank risk` for churn/issue-intake ordering — see
-   `references/02-ledger-and-dedup.md`); `orchestrator.py create-worktree`
+2. Harvest the multi-track backlog (`backlog.py harvest`) or survey (`survey.py`);
+   `fleet.py claim --item <id>` (or `ledger.py next`) claims it; `orchestrator.py`
    isolates it.
-3. Run the tool's finder, triage, prove red/green (Law 1), generate the
-   evidence artifact (`evidence.py mutant|defect` — it runs red, green, and
-   pass-to-pass itself), commit, then `orchestrator.py verify-gate --worktree .`
+3. Run the track's brief (`04`), prove red/green (Law 1), generate evidence
+   (`evidence.py mutant|defect|test-gap`), verify (`verify-gate`).
 4. Push, open the PR, record the audit on that branch — or, if the ledger is
    a protected path, report the row text for the wave's batched ledger PR
    (see `04`).

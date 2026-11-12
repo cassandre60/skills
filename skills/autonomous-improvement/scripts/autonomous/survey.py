@@ -52,6 +52,7 @@ THRESHOLD = 0.25
 DEFAULT_WEIGHTS: dict[str, float] = {
     "defect-repair": 1.0,
     "security": 0.9,
+    "bug-scout": 0.85,
     "lens": 0.85,
     "docs-reconcile": 0.8,
     "test-gap": 0.75,
@@ -59,6 +60,7 @@ DEFAULT_WEIGHTS: dict[str, float] = {
     "adversarial": 0.6,
     "mutation": 0.5,
     "complexity": 0.4,
+    "upstream": 0.35,
     "ci-audit": 0.35,
     "simplification": 0.3,
     "fuzz": 0.3,
@@ -68,6 +70,7 @@ DEFAULT_WEIGHTS: dict[str, float] = {
 TOOL_TRACK: dict[str, str] = {
     "defect-repair": "bug",
     "security": "bug",
+    "bug-scout": "bug",
     "flake": "bug",
     "adversarial": "bug",
     "lens": "refactor",
@@ -78,6 +81,7 @@ TOOL_TRACK: dict[str, str] = {
     "fuzz": "test",
     "ci-audit": "ci",
     "docs-reconcile": "ci",
+    "upstream": "research",
     "performance": "refactor",
 }
 
@@ -94,6 +98,13 @@ TOOL_METADATA: dict[str, dict[str, Any]] = {
         "finder_cmd": ["python3", "scripts/autonomous/advisory.py", "secrets"],
         "oracle_cmd": ["python3", "scripts/autonomous/advisory.py", "secrets"],
         "tier": "T2",
+        "needs_config": False,
+    },
+    "bug-scout": {
+        "stream": "E",
+        "finder_cmd": ["python3", "scripts/autonomous/bug_scout.py"],
+        "oracle_cmd": ["python3", "scripts/autonomous/repair.py", "verify-red"],
+        "tier": "T3",
         "needs_config": False,
     },
     "lens": {
@@ -122,6 +133,13 @@ TOOL_METADATA: dict[str, dict[str, Any]] = {
         "finder_cmd": ["python3", "scripts/autonomous/test_gap.py"],
         "oracle_cmd": ["python3", "scripts/autonomous/evidence.py", "mutant"],
         "tier": "T2",
+        "needs_config": False,
+    },
+    "upstream": {
+        "stream": "K",
+        "finder_cmd": ["python3", "scripts/autonomous/upstream.py"],
+        "oracle_cmd": ["python3", "scripts/autonomous/advisory.py", "deps"],
+        "tier": "T1",
         "needs_config": False,
     },
     "flake": {
@@ -540,6 +558,62 @@ def check_fuzz(root: Path, cfg: dict[str, Any]) -> tuple[float, dict[str, Any]]:
     return 0.0, {}
 
 
+def check_bug_scout(root: Path, cfg: dict[str, Any]) -> tuple[float, dict[str, Any]]:
+    """Check for defect leads (error swallowing, null panics) via bug_scout.py."""
+    bs_script = SCRIPT_DIR / "bug_scout.py"
+    if not bs_script.is_file():
+        return 0.0, {}
+    code, out = _run_cmd([sys.executable, str(bs_script), "--json"], root)
+    if out.strip():
+        try:
+            data = json.loads(out)
+            candidates = data.get("candidates", [])
+            if candidates:
+                return 1.0, {"bug_lead_count": len(candidates), "top_targets": [c.get("title", "") for c in candidates[:5]]}
+        except Exception:
+            pass
+    return 0.0, {}
+
+
+def check_upstream(root: Path, cfg: dict[str, Any]) -> tuple[float, dict[str, Any]]:
+    """Check for major dependency upgrades and manifest research via upstream.py."""
+    up_script = SCRIPT_DIR / "upstream.py"
+    if not up_script.is_file():
+        return 0.0, {}
+    code, out = _run_cmd([sys.executable, str(up_script), "--json"], root)
+    if out.strip():
+        try:
+            data = json.loads(out)
+            candidates = data.get("candidates", [])
+            if candidates:
+                return 1.0, {"upgrade_count": len(candidates), "top_targets": [c.get("title", "") for c in candidates[:5]]}
+        except Exception:
+            pass
+    return 0.0, {}
+
+
+def _normalize_track(ch: str) -> str:
+    if ch in TOOL_TRACK:
+        return TOOL_TRACK[ch]
+    low = ch.lower()
+    for t in ("defect", "bug", "flake", "security"):
+        if t in low:
+            return "bug"
+    for t in ("test", "mutation"):
+        if t in low:
+            return "test"
+    for t in ("complexity", "refactor", "simplify", "lens", "ratchet"):
+        if t in low:
+            return "refactor"
+    for t in ("research", "upstream"):
+        if t in low:
+            return "research"
+    for t in ("ci", "docs", "workflow"):
+        if t in low:
+            return "ci"
+    return ch
+
+
 def survey_repo(
     root: Path,
     profile_path: Path | None = None,
@@ -592,10 +666,13 @@ def survey_repo(
     cx_strength, cx_sigs = check_complexity(root, cfg)
     simp_strength, simp_sigs = check_simplification(root)
     fuzz_strength, fuzz_sigs = check_fuzz(root, cfg)
+    bs_strength, bs_sigs = check_bug_scout(root, cfg)
+    up_strength, up_sigs = check_upstream(root, cfg)
 
     signal_strengths: dict[str, tuple[float, dict[str, Any]]] = {
         "defect-repair": (red_ci_strength, red_ci_sigs),
         "security": (sec_strength, sec_sigs),
+        "bug-scout": (bs_strength, bs_sigs),
         "lens": (lens_strength, lens_sigs),
         "docs-reconcile": (drift_strength, drift_sigs),
         "ci-audit": (ci_strength, ci_sigs),
@@ -604,6 +681,7 @@ def survey_repo(
         "adversarial": (smell_strength, smell_sigs),
         "mutation": (mut_strength, mut_sigs),
         "complexity": (cx_strength, cx_sigs),
+        "upstream": (up_strength, up_sigs),
         "simplification": (simp_strength, simp_sigs),
         "fuzz": (fuzz_strength, fuzz_sigs),
         "performance": (bench_strength if bench_strength > 0 else 0.0, bench_sigs),
@@ -618,7 +696,7 @@ def survey_repo(
             for r in recs:
                 ch = r.get("chosen")
                 if isinstance(ch, str) and ch:
-                    past_tracks.append(TOOL_TRACK.get(ch, ch))
+                    past_tracks.append(_normalize_track(ch))
         except Exception:
             pass
 
@@ -708,6 +786,10 @@ def survey_repo(
             reason = "docs-reconcile chosen: documentation drift detected"
         elif tool_name == "security":
             reason = "security chosen: secrets or advisories detected"
+        elif tool_name == "bug-scout":
+            reason = "bug-scout chosen: unhandled defect leads detected"
+        elif tool_name == "upstream":
+            reason = "upstream chosen: dependency upgrades or research spikes detected"
         elif tool_name == "flake":
             reason = "flake chosen: test flakes recorded"
         elif tool_name == "adversarial":

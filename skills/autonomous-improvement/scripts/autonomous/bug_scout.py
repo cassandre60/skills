@@ -48,6 +48,17 @@ SKIP_DIRS = {".git", ".dart_tool", ".agents", ".opencode", "build", "node_module
 GENERATED_SUFFIXES = (".g.dart", ".freezed.dart", ".mocks.dart", ".gen.dart", ".pb.go", "_pb2.py", ".d.ts")
 
 
+def is_generated_source(path_str: str) -> bool:
+    if path_str.endswith(GENERATED_SUFFIXES):
+        return True
+    p = Path(path_str)
+    if "l10n" in p.parts and (path_str.endswith(".dart") and "l10n" in p.name.lower()):
+        return True
+    if re.search(r"(?:^|/)l10n_[a-z]{2,}(?:_[A-Za-z0-9]+)?\.dart$", path_str):
+        return True
+    return False
+
+
 def scan_bugs(root: Path, cfg: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     if cfg is None:
         cfg = load_config(root)
@@ -71,7 +82,7 @@ def scan_bugs(root: Path, cfg: dict[str, Any] | None = None) -> list[dict[str, A
             rel = str(p.relative_to(root))
             if any(part in SKIP_DIRS for part in Path(rel).parts):
                 continue
-            if rel.endswith(GENERATED_SUFFIXES):
+            if is_generated_source(rel):
                 continue
             if excludes and match_any(rel, excludes):
                 continue

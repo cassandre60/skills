@@ -78,10 +78,6 @@ from fleet_doctor import (
     _auto_clear_circuit_breaker,
     _check_consecutive_failed_wakes,
     _circuit_breaker_path,
-    _doctor_check,
-    _doctor_run,
-    _journal_age,
-    _origin_repo_slug,
     _resolve_min_free_gb,
     _resolve_state_dir,
     cmd_doctor,
@@ -90,9 +86,7 @@ from fleet_doctor import (
     run_doctor_checks,
 )
 from fleet_pool import (
-    _keep_matches,
-    _opencode_model_ids,
-    _resolve_model_pool,
+    _resolve_model_pool as _resolve_model_pool,
     cmd_pool,
     deep_standby_suppressed,
     evaluate_track_caps,
@@ -1505,6 +1499,8 @@ def cmd_claim(args: argparse.Namespace) -> int:
 
     item_id: Optional[str] = None
     item_fp: Optional[str] = None
+    item_track: Optional[str] = None
+    item_title: Optional[str] = None
     if getattr(args, "item", None):
         from backlog import harvest_backlog, load_open_claims
 
@@ -1518,6 +1514,8 @@ def cmd_claim(args: argparse.Namespace) -> int:
             raise UsageError(f"backlog item not found: {args.item}")
 
         item_id, item_fp = matched["id"], matched.get("fingerprint")
+        item_track = matched.get("track")
+        item_title = matched.get("title")
         target = rel_path(root, matched["target_paths"][0])
         stream = normalize_stream(matched["stream"])
         if item_fp and item_fp in load_open_claims(root)[0]:
@@ -1603,9 +1601,21 @@ def cmd_claim(args: argparse.Namespace) -> int:
         )
         return EXIT_NEGATIVE
 
+    claim_record = {
+        "item_id": item_id,
+        "fingerprint": item_fp,
+        "track": item_track,
+        "stream": stream,
+        "target": target,
+        "slug": slug,
+        "branch": branch,
+    }
+    write_json_atomic(worktree / ".autonomous" / "claim.json", claim_record)
+
+    track_str = f" · Track: {item_track}" if item_track else ""
     body = (
         "## Claim (WIP)\n\n"
-        f"Target: `{target}` · Stream: {stream_label(stream)} · "
+        f"Target: `{target}` · Stream: {stream_label(stream)}{track_str} · "
         f"Composite: `{composite}`\n\n"
     )
     if item_fp:
@@ -1617,10 +1627,15 @@ def cmd_claim(args: argparse.Namespace) -> int:
         "this stub is replaced then, and only then does the PR flip ready.\n"
     )
     _ensure_label(root)
+    pr_title = (
+        f"WIP: [{item_track.upper()}] {item_title}"
+        if (item_track and item_title)
+        else f"WIP: {stream_label(stream)} claim {target}"
+    )
     output = _gh(
         root,
         ["pr", "create", "--draft", "--head", branch,
-         "--title", f"WIP: {stream_label(stream)} claim {target}",
+         "--title", pr_title,
          "--body-file", _body_file(body), "--label", CLAIM_LABEL],
         "pr create",
     )
@@ -1628,6 +1643,7 @@ def cmd_claim(args: argparse.Namespace) -> int:
     payload = {
         "target": target,
         "stream": stream,
+        "track": item_track,
         "slug": slug,
         "branch": branch,
         "worktree": str(worktree),
@@ -1802,12 +1818,24 @@ def cmd_publish(args: argparse.Namespace) -> int:
         evidence_path = root / evidence_path
     data, problems = validate_evidence_file(root, evidence_path)
     if problems or data is None:
-        listing = "\n  ".join(problems or ["no artifact"])
-        raise Fatal(
-            "evidence artifact is not publishable; the draft stays draft:\n  " + listing
-        )
-    body = _render_evidence_body(data)
-    link = _survivor_issue_link(root, data)
+        claim_file = root / ".autonomous" / "claim.json"
+        claim_data = {}
+        if claim_file.is_file():
+            try:
+                claim_data = json.loads(claim_file.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        track = claim_data.get("track")
+        if track in ("research", "ci") or getattr(args, "body", None):
+            body = getattr(args, "body", None) or f"## Summary\n\nCompleted {track} task for `{claim_data.get('target', '')}`.\n"
+        else:
+            listing = "\n  ".join(problems or ["no artifact"])
+            raise Fatal(
+                "evidence artifact is not publishable; the draft stays draft:\n  " + listing
+            )
+    else:
+        body = _render_evidence_body(data)
+    link = _survivor_issue_link(root, data) if data is not None else None
     if link is not None:
         body = body.rstrip("\n") + f"\n\nTracks the survivor issue #{link}.\n"
     if args.dry_run:
@@ -1906,6 +1934,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_pub.add_argument("--config", help="path to config.json")
     p_pub.add_argument("--pr", type=int, help="draft PR number to publish")
     p_pub.add_argument("--title", help="final PR title")
+    p_pub.add_argument("--body", help="custom PR description")
     p_pub.add_argument("--evidence", help="evidence artifact path")
     p_pub.add_argument("--dry-run", action="store_true", help="print the rendered body only")
     p_pub.add_argument("--issues-from", help="engine JSON: file one issue per survivor (deduped)")
