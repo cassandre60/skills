@@ -86,6 +86,7 @@ from fleet_doctor import (
     run_doctor_checks,
 )
 from fleet_pool import (
+    _resolve_model_pool as _resolve_model_pool,
     cmd_pool,
     deep_standby_suppressed,
     evaluate_track_caps,
