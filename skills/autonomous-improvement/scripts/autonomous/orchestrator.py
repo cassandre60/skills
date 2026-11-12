@@ -21,6 +21,8 @@ import argparse
 import datetime
 import json
 import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -580,6 +582,50 @@ def _unpushed(root: Path, cfg: Dict[str, Any]) -> List[str]:
     return [line for line in log.stdout.splitlines() if line.strip()]
 
 
+DISPOSABLE_DIR_NAMES = (".autonomous", "build", ".dart_tool", "__pycache__", ".pytest_cache")
+
+
+def _porcelain_path(entry: str) -> str:
+    # `git status --porcelain -z` entries look like "XY path" (or "R  old\0new" handled separately)
+    raw = entry[3:] if len(entry) > 3 else entry
+    return raw.strip()
+
+
+def _is_disposable_dirty_entry(entry: str) -> bool:
+    if not entry.startswith(("?? ", "!! ")):
+        return False
+    rel = _porcelain_path(entry).rstrip("/")
+    if not rel:
+        return False
+    first = Path(rel).parts[0]
+    return first in DISPOSABLE_DIR_NAMES
+
+
+def _partition_dirty(status_stdout: str) -> Tuple[List[str], List[str]]:
+    real_dirty: List[str] = []
+    disposable_dirty: List[str] = []
+    for part in status_stdout.split("\0"):
+        if not part.strip():
+            continue
+        if _is_disposable_dirty_entry(part):
+            disposable_dirty.append(part)
+        else:
+            real_dirty.append(part)
+    return real_dirty, disposable_dirty
+
+
+def _purge_disposable_artifacts(worktree: Path) -> None:
+    for name in (".autonomous", "build", ".dart_tool", "__pycache__", ".pytest_cache"):
+        target = worktree / name
+        if target.is_dir() and not target.is_symlink():
+            shutil.rmtree(target, ignore_errors=True)
+        elif target.is_file():
+            try:
+                target.unlink()
+            except OSError:
+                pass
+
+
 def cmd_cleanup_worktree(args: argparse.Namespace) -> int:
     root = main_repo_root()
     cfg = load_config(root, args.config)
@@ -600,15 +646,15 @@ def cmd_cleanup_worktree(args: argparse.Namespace) -> int:
         _save_registry(root, [item for item in entries if item.get("slug") != slug])
         return EXIT_OK
 
-    status = git(["status", "--porcelain", "-z"], cwd=path, quiet=True)
-    dirty = [part for part in status.stdout.split("\0") if part.strip()]
+    status = git(["status", "--porcelain", "-z", "--untracked-files=all"], cwd=path, quiet=True)
+    real_dirty, disposable_dirty = _partition_dirty(status.stdout)
     unpushed = _unpushed(path, cfg)
 
-    if (dirty or unpushed) and not args.force:
+    if (real_dirty or unpushed) and not args.force:
         lines = [f"refusing to remove {path}"]
-        if dirty:
+        if real_dirty:
             lines.append("uncommitted changes:")
-            lines.extend("  " + item for item in dirty[:20])
+            lines.extend("  " + item for item in real_dirty[:20])
         if unpushed:
             lines.append("unpushed commits:")
             lines.extend("  " + item for item in unpushed[:20])
@@ -616,12 +662,17 @@ def cmd_cleanup_worktree(args: argparse.Namespace) -> int:
         raise Fatal("\n".join(lines))
 
     if args.force:
-        if dirty:
-            print(f"[!] --force discards {len(dirty)} uncommitted change(s) in {path}")
+        if real_dirty:
+            print(f"[!] --force discards {len(real_dirty)} uncommitted change(s) in {path}")
         if unpushed:
             print(f"[!] --force discards {len(unpushed)} unpushed commit(s):")
             for line in unpushed:
                 print(f"    {line}")
+        _purge_disposable_artifacts(path)
+        run(["git", "worktree", "remove", "--force", str(path)], cwd=root, check=True)
+    elif disposable_dirty:
+        _purge_disposable_artifacts(path)
+        print(f"[*] Removing worktree {path} (cleaned {len(disposable_dirty)} disposable runtime artifact(s))")
         run(["git", "worktree", "remove", "--force", str(path)], cwd=root, check=True)
     else:
         print(f"[*] Removing clean worktree {path}")
@@ -640,6 +691,222 @@ def cmd_cleanup_worktree(args: argparse.Namespace) -> int:
                 eprint(f"[warn] could not delete branch {branch}: {proc.stderr.strip()}")
             else:
                 print(f"[+] Deleted branch {branch}")
+    return EXIT_OK
+
+
+def _parse_worktree_porcelain(stdout: str) -> List[Dict[str, str]]:
+    items: List[Dict[str, str]] = []
+    cur: Dict[str, str] = {}
+    for line in stdout.splitlines():
+        if not line.strip():
+            if cur.get("path"):
+                items.append(cur)
+            cur = {}
+            continue
+        if line.startswith("worktree "):
+            cur["path"] = line[len("worktree ") :].strip()
+        elif line.startswith("HEAD "):
+            cur["head"] = line[len("HEAD ") :].strip()
+        elif line.startswith("branch "):
+            ref = line[len("branch ") :].strip()
+            cur["branch"] = ref[len("refs/heads/") :] if ref.startswith("refs/heads/") else ref
+        elif line.strip() == "detached":
+            cur["branch"] = ""
+    if cur.get("path"):
+        items.append(cur)
+    return items
+
+
+def _fetch_pr_states_by_branch(root: Path) -> Dict[str, str]:
+    """Best-effort map of headRefName -> MERGED|CLOSED|OPEN (newest wins)."""
+    try:
+        proc = subprocess.run(
+            ["gh", "pr", "list", "--state", "all", "--limit", "200", "--json", "headRefName,state"],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return {}
+    try:
+        rows = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(rows, list):
+        return {}
+    out: Dict[str, str] = {}
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        branch = str(item.get("headRefName") or "")
+        state = str(item.get("state") or "").upper()
+        if branch and state and branch not in out:
+            out[branch] = state
+    return out
+
+
+_AGENT_NAME_RE = re.compile(
+    r"(?:^|/)(?:wake[-_]|.*-wake-|.*-mutation|.*-audit|.*-pr\d+-fix)|^(?:audit|test|wake)/"
+)
+
+
+def _is_agent_worktree(path: Path, branch: str, registered_paths: set[str], pr_state: str) -> bool:
+    if str(path.resolve()) in registered_paths:
+        return True
+    if pr_state in ("MERGED", "CLOSED"):
+        return True
+    if _AGENT_NAME_RE.search(branch) or _AGENT_NAME_RE.search(path.name):
+        return True
+    if "/tmp/" in str(path) and "wake" in path.name:
+        return True
+    return False
+
+
+def _worktree_age_seconds(path: Path, reg_entry: Optional[Dict[str, Any]], now_ts: float) -> float:
+    mtimes: List[float] = []
+    if path.exists():
+        try:
+            mtimes.append(path.stat().st_mtime)
+        except OSError:
+            pass
+    if reg_entry and reg_entry.get("created_at"):
+        try:
+            dt = datetime.datetime.fromisoformat(str(reg_entry["created_at"]).replace("Z", "+00:00"))
+            mtimes.append(dt.timestamp())
+        except (ValueError, TypeError):
+            pass
+    if not mtimes:
+        return 0.0
+    return max(0.0, now_ts - max(mtimes))
+
+
+def cmd_sweep_worktrees(args: argparse.Namespace) -> int:
+    """Safely garbage-collect finished, merged/closed, or stale agent worktrees."""
+    root = main_repo_root()
+    cfg = load_config(root, args.config)
+    now_ts = datetime.datetime.now(datetime.timezone.utc).timestamp()
+    active_grace_s = max(0.0, float(args.active_grace_minutes) * 60.0)
+    stale_s = max(0.0, float(args.stale_hours) * 3600.0) if args.stale_hours is not None else -1.0
+
+    git(["worktree", "prune"], cwd=root, quiet=True)
+    proc = git(["worktree", "list", "--porcelain"], cwd=root, quiet=True)
+    if proc.returncode != 0:
+        raise Fatal(f"git worktree list failed: {proc.stderr.strip()}")
+
+    listed = _parse_worktree_porcelain(proc.stdout)
+    entries = _load_registry(root)
+    reg_by_path: Dict[str, Dict[str, Any]] = {
+        str(Path(str(e.get("path", ""))).resolve()): e for e in entries if e.get("path")
+    }
+    registered_paths = set(reg_by_path.keys())
+    pr_states = _fetch_pr_states_by_branch(root)
+
+    removed: List[Dict[str, Any]] = []
+    skipped: List[Dict[str, Any]] = []
+    removed_paths: set[str] = set()
+    root_resolved = root.resolve()
+
+    for item in listed:
+        wt_path = Path(item["path"]).resolve()
+        if wt_path == root_resolved:
+            continue
+        branch = item.get("branch", "")
+        pr_state = pr_states.get(branch, "")
+        reg_entry = reg_by_path.get(str(wt_path))
+
+        if not wt_path.exists():
+            removed_paths.add(str(wt_path))
+            removed.append({"path": str(wt_path), "branch": branch, "reason": "missing-dir"})
+            continue
+
+        if not _is_agent_worktree(wt_path, branch, registered_paths, pr_state):
+            skipped.append({"path": str(wt_path), "branch": branch, "reason": "non-agent"})
+            continue
+
+        age_s = _worktree_age_seconds(wt_path, reg_entry, now_ts)
+        status = git(["status", "--porcelain", "-z", "--untracked-files=all"], cwd=wt_path, quiet=True)
+        real_dirty, _disposable = _partition_dirty(status.stdout)
+        unpushed = _unpushed(wt_path, cfg)
+
+        reason = ""
+        force_needed = False
+        delete_branch = False
+
+        if pr_state in ("MERGED", "CLOSED") and not real_dirty and (not unpushed or pr_state == "MERGED"):
+            reason = f"pr-{pr_state.lower()}"
+            force_needed = True
+            delete_branch = not args.keep_branches
+        elif not real_dirty and not unpushed and age_s >= active_grace_s:
+            reason = "clean-idle"
+            force_needed = True
+            delete_branch = (not args.keep_branches) and (pr_state != "OPEN")
+        elif stale_s >= 0 and age_s >= stale_s:
+            reason = "stale-abandoned"
+            force_needed = True
+            delete_branch = (not args.keep_branches) and (pr_state in ("MERGED", "CLOSED"))
+        else:
+            skipped.append({
+                "path": str(wt_path),
+                "branch": branch,
+                "reason": "active-or-dirty",
+                "age_minutes": round(age_s / 60.0, 1),
+            })
+            continue
+
+        if not args.dry_run:
+            _purge_disposable_artifacts(wt_path)
+            rm_args = ["git", "worktree", "remove"]
+            if force_needed:
+                rm_args.append("--force")
+            rm_args.append(str(wt_path))
+            rm_proc = run(rm_args, cwd=root, quiet=True)
+            if rm_proc.returncode != 0:
+                skipped.append({
+                    "path": str(wt_path),
+                    "branch": branch,
+                    "reason": f"remove-failed: {rm_proc.stderr.strip()}",
+                })
+                continue
+            if delete_branch and branch:
+                git(["branch", "-D", branch], cwd=root, quiet=True)
+            removed_paths.add(str(wt_path))
+
+        removed.append({
+            "path": str(wt_path),
+            "branch": branch,
+            "reason": reason,
+            "age_minutes": round(age_s / 60.0, 1),
+        })
+
+    if not args.dry_run:
+        git(["worktree", "prune"], cwd=root, quiet=True)
+        kept_entries = [
+            e
+            for e in entries
+            if e.get("path")
+            and str(Path(str(e["path"])).resolve()) not in removed_paths
+            and Path(str(e["path"])).exists()
+        ]
+        if len(kept_entries) != len(entries):
+            _save_registry(root, kept_entries)
+
+    payload = {
+        "schema": "sweep-worktrees/1",
+        "dry_run": bool(args.dry_run),
+        "removed": removed,
+        "skipped": skipped,
+    }
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        verb = "Would remove" if args.dry_run else "Removed"
+        print(f"[*] {verb} {len(removed)} stale/finished worktree(s); kept {len(skipped)}")
+        for item in removed:
+            print(f"  - {item['path']} ({item['reason']})")
     return EXIT_OK
 
 
@@ -679,6 +946,28 @@ def build_parser() -> argparse.ArgumentParser:
     cleanup_parser.add_argument("--force", action="store_true", help="discard dirty/unpushed work")
     cleanup_parser.add_argument("--delete-branch", action="store_true", help="delete the branch")
     cleanup_parser.set_defaults(func=cmd_cleanup_worktree)
+
+    sweep_parser = subparsers.add_parser(
+        "sweep-worktrees",
+        parents=[common_parent],
+        help="garbage-collect merged/closed, clean idle, or stale agent worktrees",
+    )
+    sweep_parser.add_argument(
+        "--active-grace-minutes",
+        type=float,
+        default=120.0,
+        help="minutes before removing clean idle agent worktrees (default: 120)",
+    )
+    sweep_parser.add_argument(
+        "--stale-hours",
+        type=float,
+        default=24.0,
+        help="hours before force-reclaiming abandoned dirty/unpushed agent worktrees (-1 to disable, default: 24)",
+    )
+    sweep_parser.add_argument("--keep-branches", action="store_true", help="do not delete local branches")
+    sweep_parser.add_argument("--dry-run", action="store_true", help="report what would be removed without touching disk")
+    sweep_parser.add_argument("--json", action="store_true", help="emit JSON")
+    sweep_parser.set_defaults(func=cmd_sweep_worktrees)
     return parser
 
 
