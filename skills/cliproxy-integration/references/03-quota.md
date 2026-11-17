@@ -173,28 +173,46 @@ Isolation protocol that found the trigger (tiny sequential probes, same pool, sa
    cooldown wrapper keeps the walk hitting live credentials — down to a minimal string,
    then test word candidates directly (`opencode` vs `OpenCode` vs `open code`).
 
-Remedy at the gateway — Antigravity sensitive-word obfuscation:
+Remedy at the gateway — Antigravity sensitive-word obfuscation and replacement:
 
 ```yaml
-# On config-version: 8, oauth.providers.antigravity.sensitive-words is the canonical path
-# (flattenV8 maps leaf fields individually; if both exist, it overwrites antigravity.sensitive-words,
-# and ValidateV8Config rejects legacy antigravity.* fields).
+# On config-version: 8, configure under oauth.providers.antigravity:
 oauth:
   providers:
     antigravity:
       sensitive-words:
         - "OpenCode"
         - "opencode"
+        - "harness"
+      # When upstream inspects compound tool identifiers (e.g. tools.opencode.*):
+      sensitive-words-replace:
+        "tools.opencode.": "tools.oc."
+        "tools.opencode": "tools.oc"
+      sensitive-patterns-replace:
+        - pattern: 'tools\.opencode\.'
+          replacement: 'tools.oc.'
 ```
 
 - **The knob must be wired in the build.** v8.0.16 parsed the key and never called the
   obfuscator on Antigravity request paths; v8.0.67 calls it on execute, stream, and
   token-count paths. A config knob that parses is not a knob that works — confirm against
   the release's source, or probe live.
-- The obfuscation inserts **U+034F (combining grapheme joiner)** after the first rune of
-  each alphanumeric subword. The tested upstream honored that (`o\u034Fpencode` → 200) but
-  **stripped U+200B zero-width space** (`o\u200Bpencode` → still 429). Invisible-character
-  schemes are not interchangeable; the CGJ variant is the one that worked.
+- The `sensitive-words` obfuscation inserts **U+034F (combining grapheme joiner)** after the first
+  rune of each alphanumeric subword. The tested upstream honored that (`o\u034Fpencode` → 200) but
+  **stripped U+200B zero-width space** (`o\u200Bpencode` → still 429).
+- **Compound signature bypass (`tools.opencode.`):** When upstream normalizes unicode or explicitly
+  matches the tool namespace `tools.opencode.session_move`, CGJ alone is insufficient.
+  `sensitive-words-replace` (literal mapping) and `sensitive-patterns-replace` (RE2 list) perform
+  direct string substitutions on outbound Antigravity payloads. Replacing `tools.opencode.` with
+  `tools.oc.` bypasses the filter completely (HTTP 200).
+- **Client-side execution safety:** If the LLM generates Javascript invoking `tools.oc.*`,
+  an OpenCode plugin can hook `execute.before` to rewrite `tools.oc.` back to `tools.opencode.`
+  before Node VM evaluation:
+  ```typescript
+  if (typeof container.code === "string" && container.code.includes("tools.oc.")) {
+    container.code = container.code.replaceAll("tools.oc.", "tools.opencode.")
+  }
+  ```
 - It rewrites only `request.systemInstruction` — which is exactly where the
   chat-completions→Antigravity translator places client system messages, i.e. the poisoned
   field. The client needs no changes; the gateway transforms the payload before dispatch.

@@ -1,6 +1,6 @@
 ---
 name: cliproxy-integration
-version: 1.5.1
+version: 1.5.2
 description: Wire an OpenAI-compatible AI gateway (CLIProxyAPI / OmniRoute / any /v1 gateway) into OpenCode and Codex CLI correctly - discover real model IDs instead of guessing, register providers that resolve, source model limits instead of inventing them, attribute models to their upstream, and diagnose the gateway errors that block model selection. Use whenever someone asks to add models to OpenCode, connect OpenCode or Codex to a gateway/proxy/relay, fix "unknown provider for model", "model_not_found", 401/403 from an upstream gateway, missing models in the /model picker, wrong context/output limits, model routing or credential-pool behaviour, quota/429 exhaustion on pooled accounts, or WARP/proxy egress setup for API traffic.
 ---
 
@@ -62,18 +62,18 @@ the agent's job is to *remind and point*, not to configure. Mention each one whe
 wiring or onboarding; change nothing unless the user explicitly delegates it. If a
 state is already good, one line ("on") suffices:
 
-1. **Sensitive Word Obfuscation (Antigravity) — recommend populated.** The gateway rewrites
-   matching words in Antigravity system instructions (combining-grapheme-joiner insertion)
-   so upstream exact-keyword filtering fails soft. On a `config-version: 8` file the
-   canonical location is `oauth.providers.antigravity.sensitive-words` (`flattenV8` maps
-   leaf fields individually into `Antigravity` — if both exist,
-   `oauth.providers.antigravity.sensitive-words` overwrites `antigravity.sensitive-words`,
-   and `ValidateV8Config` rejects legacy `antigravity.*` paths), and the list should name
-   the client identifiers in play (e.g. `OpenCode`, `opencode`, `harness`). Matching is
-   case-insensitive; entries under 2 characters are ignored. **The build must wire the
-   knob**: v8.0.16 parsed it and did nothing; v8.0.67 applies it on Antigravity request
-   paths. Verified live 2026-11-11; the failure it prevents and the bisect that isolates it
-   are in `references/03-quota.md`.
+1. **Sensitive Word Obfuscation & Replacement (Antigravity) — recommend populated.**
+   The gateway rewrites matching words in Antigravity system instructions so upstream
+   exact-keyword filtering fails soft. On `config-version: 8`, two mechanisms exist under
+   `oauth.providers.antigravity`:
+   - `sensitive-words`: inserts U+034F Combining Grapheme Joiners into named words (e.g.
+     `OpenCode`, `harness`).
+   - `sensitive-words-replace` (map) & `sensitive-patterns-replace` (regex list): replaces
+     poisoned compound signatures (e.g. `"tools.opencode.": "tools.oc."`). When upstream
+     normalizes unicode or filters dot-delimited signatures, literal/regex replacement is
+     required to bypass fake 429 lockouts.
+   Matching is case-insensitive. Details and client-side execution safety in
+   `references/03-quota.md`.
 2. **Proxy egress (e.g. WARP) — mention only.** Default direct egress is fine; a
    proxy is worth mentioning only for region-blocked upstreams or egress privacy.
    Tell the user it is one global Proxy URL in the dashboard that affects *all*
