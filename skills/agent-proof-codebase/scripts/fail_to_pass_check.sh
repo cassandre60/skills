@@ -18,27 +18,37 @@ BASE="${1:-}"; CMD="${2:-}"; HEAD_REF="${3:-HEAD}"
 if [[ -z "$BASE" || -z "$CMD" ]]; then
   echo "usage: $0 BASE_REF \"TEST COMMAND\" [HEAD_REF]" >&2; exit 2
 fi
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
+  echo "error: not inside a git repository" >&2; exit 2; }
+cd "$REPO_ROOT"
 REGEX="${TEST_PATH_REGEX:-(^|/)(tests?|__tests__|spec|specs|integration_test)(/|$)|(_test|_spec|\.test|\.spec)\.|(^|/)test_[^/]*$}"
 
-mapfile -t TEST_FILES < <(git diff --name-only --diff-filter=AM --no-renames "$BASE...$HEAD_REF" | grep -E "$REGEX" || true)
+mapfile -t TEST_FILES < <(git -c core.quotePath=false diff --name-only --diff-filter=AM --no-renames "$BASE...$HEAD_REF" | grep -E "$REGEX" || true)
 if [[ ${#TEST_FILES[@]} -eq 0 ]]; then
   echo "FAIL: the change adds or modifies no test files; a bug fix must ship a regression test." >&2
   exit 1
 fi
 echo "test files from the change:"; printf '  %s\n' "${TEST_FILES[@]}"
 
-WT="$(mktemp -d)"
-cleanup() { git worktree remove --force "$WT" >/dev/null 2>&1 || rm -rf "$WT"; }
+WT_BASE="$(mktemp -d)"
+WT_HEAD="$(mktemp -d)"
+HEAD_LOG="$(mktemp)"
+cleanup() {
+  git worktree remove --force "$WT_BASE" >/dev/null 2>&1 || rm -rf "$WT_BASE"
+  git worktree remove --force "$WT_HEAD" >/dev/null 2>&1 || rm -rf "$WT_HEAD"
+  git worktree prune >/dev/null 2>&1 || true
+  rm -f "$HEAD_LOG"
+}
 trap cleanup EXIT
-git worktree add --detach "$WT" "$BASE" >/dev/null 2>&1 || { echo "cannot create worktree at $BASE" >&2; exit 2; }
+git worktree add --detach "$WT_BASE" "$BASE" >/dev/null 2>&1 || { echo "cannot create worktree at $BASE" >&2; exit 2; }
 
 for f in "${TEST_FILES[@]}"; do
-  mkdir -p "$WT/$(dirname "$f")"
-  git show "$HEAD_REF:$f" > "$WT/$f" || { echo "cannot read $f at $HEAD_REF" >&2; exit 2; }
+  mkdir -p "$WT_BASE/$(dirname "$f")"
+  git show "$HEAD_REF:$f" > "$WT_BASE/$f" || { echo "cannot read $f at $HEAD_REF" >&2; exit 2; }
 done
 
 echo "== running tests against OLD source + NEW tests (must fail) =="
-OUT_BASE="$(cd "$WT" && bash -c "$CMD" 2>&1)"; RC_BASE=$?
+OUT_BASE="$(cd "$WT_BASE" && bash -c "$CMD" 2>&1)"; RC_BASE=$?
 echo "$OUT_BASE" | tail -n 40
 if [[ $RC_BASE -eq 0 ]]; then
   echo "FAIL: tests pass on the base code, so they do not demonstrate the bug." >&2; exit 1
@@ -49,8 +59,8 @@ if [[ -n "${EXPECT_PATTERN:-}" ]] && ! grep -Eq "$EXPECT_PATTERN" <<<"$OUT_BASE"
 fi
 
 echo "== running tests on the change itself (must pass) =="
-git checkout -q --detach "$HEAD_REF" 2>/dev/null || true
-bash -c "$CMD" >/tmp/f2p_head.log 2>&1; RC_HEAD=$?
-tail -n 20 /tmp/f2p_head.log
+git worktree add --detach "$WT_HEAD" "$HEAD_REF" >/dev/null 2>&1 || { echo "cannot create worktree at $HEAD_REF" >&2; exit 2; }
+(cd "$WT_HEAD" && bash -c "$CMD") >"$HEAD_LOG" 2>&1; RC_HEAD=$?
+tail -n 20 "$HEAD_LOG"
 if [[ $RC_HEAD -ne 0 ]]; then echo "FAIL: tests do not pass on the change." >&2; exit 1; fi
 echo "OK: fail-to-pass verified"

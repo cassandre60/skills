@@ -409,3 +409,12 @@ class GenericPairAnalyzerTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         data = json.loads(proc.stdout)
         self.assertEqual(data["server_ms"], 900.0)
+
+    def test_cli_runs_with_stripped_docstrings_flag(self):
+        proc = subprocess.run(
+            [sys.executable, "-OO", str(SCRIPT), "--help"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)

@@ -82,12 +82,20 @@ class SurveyTests(unittest.TestCase):
         )
 
     def _clean_repo(self) -> Path:
+        import hashlib
+
+        def blob9(p: Path) -> str:
+            raw = p.read_bytes()
+            return hashlib.sha1(f"blob {len(raw)}\0".encode() + raw).hexdigest()[:9]
+
         repo, _ = support.python_repo(self.tmp, name="clean")
+        app_h = blob9(repo / "src" / "app.py")
+        test_h = blob9(repo / "tests" / "test_app.py")
         ledger = repo / "docs" / "AUTONOMOUS_WORK_LEDGER.md"
         ledger.write_text(
             support.ledger_text(
-                support.row("src/app.py", "aa11bb"),
-                support.row("tests/test_app.py", "cc22dd", status="SOUND"),
+                support.row("src/app.py", f"{app_h}:{test_h}"),
+                support.row("tests/test_app.py", f"{test_h}:-", status="SOUND"),
             ),
             encoding="utf-8",
         )

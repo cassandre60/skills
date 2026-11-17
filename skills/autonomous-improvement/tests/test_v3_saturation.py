@@ -43,8 +43,11 @@ class SaturationAndStandbyTests(unittest.TestCase):
 
     def test_survey_detects_saturation_and_emits_honest_halt(self) -> None:
         repo, _ = support.python_repo(self.tmp, name="survey_sat")
-        # Ensure tests exist for src/app.py so test_gap does not fire
-        support.write(repo / "tests" / "test_app.py", "def test_ok(): pass\n")
+        # Ensure tests exist for src/app.py (with a real assertion so Stream B does not flag no-assertion)
+        support.write(
+            repo / "tests" / "test_app.py",
+            "from src.app import f\n\ndef test_ok():\n    assert f(1, 1) is True\n",
+        )
         # Ensure .github/workflows exists and runs tests on PRs so ci_audit does not fire
         (repo / ".github" / "workflows").mkdir(parents=True, exist_ok=True)
         support.write(
@@ -164,7 +167,10 @@ class SaturationAndStandbyTests(unittest.TestCase):
 
     def test_deep_standby_wakes_on_moved_main_and_owner_directive(self) -> None:
         repo, _ = support.python_repo(self.tmp, name="event_wake_main_dir")
-        support.write(repo / "tests" / "test_app.py", "def test_ok(): pass\n")
+        support.write(
+            repo / "tests" / "test_app.py",
+            "from src.app import f\n\ndef test_ok():\n    assert f(1, 1) is True\n",
+        )
         (repo / ".github" / "workflows").mkdir(parents=True, exist_ok=True)
         support.write(
             repo / ".github" / "workflows" / "ci.yml",
