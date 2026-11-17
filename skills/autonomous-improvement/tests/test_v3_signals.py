@@ -279,6 +279,23 @@ class SurveySignalsTests(unittest.TestCase):
         self.assertIn("bug-scout", picks)
         self.assertEqual(data["chosen"]["tool"], "bug-scout")
 
+    def test_vacuous_test_smell_scores_adversarial_in_survey(self) -> None:
+        repo, _ = support.python_repo(self.tmp, name="advsmell")
+        support.write(
+            repo / "tests" / "test_vacuous.py",
+            "import time\n\ndef test_sleepy_vacuous():\n    time.sleep(0.2)\n    assert True\n",
+        )
+        support.git(repo, "add", "-A")
+        support.git(repo, "commit", "-qm", "add vacuous test")
+
+        proc = self.survey(repo)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        payload = json.loads(proc.stdout)
+        picks = {p["tool"]: p for p in payload.get("picks", [])}
+        self.assertIn("adversarial", picks, f"adversarial missing from picks: {picks}")
+        self.assertGreaterEqual(picks["adversarial"]["score"], 0.25)
+        self.assertGreaterEqual(picks["adversarial"]["signals"].get("smell_count", 0), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

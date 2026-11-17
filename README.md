@@ -55,6 +55,7 @@ skills/
     assets/     # 11 files
     references/ # 13 files
     scripts/    # 9 files
+    tests/      # 1 file
   autonomous-improvement/
     SKILL.md
     CHANGELOG-v2.md

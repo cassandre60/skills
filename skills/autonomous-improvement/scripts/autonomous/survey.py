@@ -325,7 +325,7 @@ def check_adversarial(root: Path, cfg: dict[str, Any]) -> tuple[float, dict[str,
     if out.strip():
         try:
             data = json.loads(out)
-            candidates = data.get("candidates", [])
+            candidates = data if isinstance(data, list) else data.get("candidates", [])
             if candidates:
                 return 1.0, {"smell_count": len(candidates)}
         except Exception:
