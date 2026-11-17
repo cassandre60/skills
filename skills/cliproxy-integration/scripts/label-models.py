@@ -118,7 +118,7 @@ def main() -> int:
                 if not isinstance(entry, dict):
                     continue
                 context = (entry.get("limit") or {}).get("context")
-                if not isinstance(context, int) or context <= 0:
+                if not isinstance(context, int) or isinstance(context, bool) or context <= 0:
                     unlabelled.append(f"{section}:{provider_name}/{model_id}")
                     continue
 
@@ -177,9 +177,9 @@ def main() -> int:
                 if not isinstance(entry, dict):
                     continue
                 context = (entry.get("limit") or {}).get("context")
-                if not isinstance(context, int) or context <= 0:
+                if not isinstance(context, int) or isinstance(context, bool) or context <= 0:
                     continue
-                if not str(entry.get("name", "")).endswith(format_label(context)):
+                if not str(entry.get("name") or model_id).endswith(format_label(context)):
                     mismatches.append(f"{section}:{provider_name}/{model_id}")
 
     print(f"\nbackup: {dest}")

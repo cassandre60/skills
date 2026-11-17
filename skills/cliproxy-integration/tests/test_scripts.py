@@ -30,6 +30,7 @@ class _StubGatewayHandler(BaseHTTPRequestHandler):
     models_payload: dict = {"data": []}
     reject_status: int | None = None
     reject_body: str = ""
+    chat_responses: dict[str, tuple[int, dict]] = {}
 
     def log_message(self, format: str, *args) -> None:  # noqa: A002
         return
@@ -74,6 +75,14 @@ class _StubGatewayHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b'{"error":{"code":"bad_json","message":"malformed json"}}')
             return
+        model_name = str(body.get("model", ""))
+        if model_name in self.chat_responses:
+            status_code, custom_payload = self.chat_responses[model_name]
+            self.send_response(status_code)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(custom_payload).encode("utf-8"))
+            return
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
@@ -98,6 +107,7 @@ class CliproxyScriptsTests(unittest.TestCase):
         models_payload: dict | None = None,
         reject_status: int | None = None,
         reject_body: str = "",
+        chat_responses: dict[str, tuple[int, dict]] | None = None,
     ) -> str:
         class Handler(_StubGatewayHandler):
             pass
@@ -106,6 +116,7 @@ class CliproxyScriptsTests(unittest.TestCase):
         Handler.models_payload = models_payload or {"data": []}
         Handler.reject_status = reject_status
         Handler.reject_body = reject_body
+        Handler.chat_responses = chat_responses or {}
 
         server = HTTPServer(("127.0.0.1", 0), Handler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -266,6 +277,58 @@ class CliproxyScriptsTests(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, f"stdout={proc.stdout}\nstderr={proc.stderr}")
         self.assertIn("all models responded", proc.stdout)
+
+    def test_probe_models_error_shapes_empty_choices_and_cli_validation(self) -> None:
+        base_url = self._start_server(
+            chat_responses={
+                "m-num-err": (429, {"error": {"code": 429, "message": "Quota exceeded"}}),
+                "m-str-err": (403, {"error": "API_KEY_INVALID: expired"}),
+                "m-empty-choices": (200, {"choices": []}),
+            }
+        )
+        p_num = subprocess.run(
+            ["bash", str(SCRIPTS / "probe-models.sh"), "--base-url", base_url, "--model", "m-num-err"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(p_num.returncode, 1)
+        self.assertIn("429 Quota exceeded", p_num.stdout)
+
+        p_str = subprocess.run(
+            ["bash", str(SCRIPTS / "probe-models.sh"), "--base-url", base_url, "--model", "m-str-err"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(p_str.returncode, 1)
+        self.assertIn("err API_KEY_INVALID", p_str.stdout)
+
+        p_empty = subprocess.run(
+            ["bash", str(SCRIPTS / "probe-models.sh"), "--base-url", base_url, "--model", "m-empty-choices"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(p_empty.returncode, 1, f"empty choices must fail! stdout={p_empty.stdout}")
+
+        p_bad_mt = subprocess.run(
+            ["bash", str(SCRIPTS / "probe-models.sh"), "--base-url", base_url, "--max-tokens", "abc", "--model", "m1"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(p_bad_mt.returncode, 2)
+        self.assertIn("--max-tokens", p_bad_mt.stderr)
+
+        p_missing_val = subprocess.run(
+            ["bash", str(SCRIPTS / "probe-models.sh"), "--base-url"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+        self.assertEqual(p_missing_val.returncode, 2)
 
 
 if __name__ == "__main__":

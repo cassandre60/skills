@@ -110,7 +110,11 @@ def main() -> int:
 
     try:
         catalog = fetch_catalog(args.base_url, api_key, args.timeout)
-    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as exc:
+    except urllib.error.HTTPError as exc:
+        print(f"error: could not read catalog: {exc}", file=sys.stderr)
+        exc.close()
+        return 2
+    except (urllib.error.URLError, TimeoutError) as exc:
         print(f"error: could not read catalog: {exc}", file=sys.stderr)
         return 2
     except (json.JSONDecodeError, OSError) as exc:
@@ -139,15 +143,15 @@ def main() -> int:
         for model_id, entry in models.items():
             if not isinstance(entry, dict):
                 continue
-            limits = entry.setdefault("limit", {})
-            ctx, out = catalog.get(model_id, (None, None))
             if model_id not in catalog:
                 absent.append(f"{section}:{model_id}")
                 continue
+            ctx, out = catalog.get(model_id, (None, None))
             if ctx is None:
                 # In the catalog, but the gateway publishes no context limit for it.
                 no_limits.append(f"{section}:{model_id}")
                 continue
+            limits = entry.setdefault("limit", {})
             before = (limits.get("context"), limits.get("output"))
             # A catalog may publish context but not output. In that case keep whatever the
             # config already has - otherwise the comparison below never matches and the

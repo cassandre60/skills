@@ -20,16 +20,25 @@ BASE_URL=""; API_KEY=""; PROBE_MODELS=(); MAX_TOKENS=30
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --base-url)  BASE_URL="${2:-}"; shift 2 ;;
-    --api-key)   API_KEY="${2:-}";  shift 2 ;;
-    --model)     PROBE_MODELS+=("${2:-}"); shift 2 ;;
-    --max-tokens) MAX_TOKENS="${2:-5}"; shift 2 ;;
+    --base-url)
+      [[ $# -ge 2 ]] || { echo "error: --base-url requires a value" >&2; exit 2; }
+      BASE_URL="$2"; shift 2 ;;
+    --api-key)
+      [[ $# -ge 2 ]] || { echo "error: --api-key requires a value" >&2; exit 2; }
+      API_KEY="$2"; shift 2 ;;
+    --model)
+      [[ $# -ge 2 ]] || { echo "error: --model requires a value" >&2; exit 2; }
+      PROBE_MODELS+=("$2"); shift 2 ;;
+    --max-tokens)
+      [[ $# -ge 2 ]] || { echo "error: --max-tokens requires a value" >&2; exit 2; }
+      MAX_TOKENS="$2"; shift 2 ;;
     -h|--help)   sed -n '2,12p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 
 [[ -n "$BASE_URL" ]] || { echo "error: --base-url required" >&2; exit 2; }
+[[ "$MAX_TOKENS" =~ ^[1-9][0-9]*$ ]] || { echo "error: --max-tokens must be a positive integer" >&2; exit 2; }
 command -v curl >/dev/null || { echo "error: curl required" >&2; exit 2; }
 
 # Normalise: accept host:port, with or without /v1
@@ -47,8 +56,8 @@ catalog=$(curl -s --max-time 20 "${auth[@]}" "$BASE_URL/models") || {
 # Some gateways 401 on /models while serving chat fine; local gateways may serve
 # /models with no --api-key at all. Parse .data whenever present.
 if command -v jq >/dev/null && printf '%s' "$catalog" | jq -e '.data | type == "array"' >/dev/null 2>&1; then
-  printf '%s' "$catalog" | jq -r '.data[] | "  \(.id)\t[\(.owned_by // "?")]"' | sort
-  mapfile -t ALL < <(printf '%s' "$catalog" | jq -r '.data[].id')
+  printf '%s' "$catalog" | jq -r '.data[] | "  \(.id // "?")\t[\(.owned_by // "?")]"' | sort
+  mapfile -t ALL < <(printf '%s' "$catalog" | jq -r '.data[].id // empty')
 elif [[ -z "$API_KEY" ]]; then
   echo "  (listing unavailable without --api-key - pass --api-key or --model to probe specific IDs)"
   ALL=()
@@ -81,11 +90,22 @@ for m in "${TARGETS[@]}"; do
 
   if command -v jq >/dev/null; then
     verdict=$(printf '%s' "$body" | jq -r '
-      if .choices then "OK      " + (((.choices[0].message.content // "") | tostring)[0:24])
-      elif .error then (.error.code // "err") + " " + ((.error.message // "") | tostring)[0:70]
-      else "UNPARSED " + ((. | tostring)[0:70]) end' 2>/dev/null)
+      if (.choices | type == "array" and length > 0) then
+        "OK      " + (((.choices[0].message.content // "") | tostring)[0:24])
+      elif (.error | type == "object") then
+        ((.error.code // "err") | tostring) + " " + ((.error.message // "") | tostring)[0:70]
+      elif .error != null then
+        "err " + ((.error | tostring)[0:70])
+      else
+        "UNPARSED " + ((. | tostring)[0:70])
+      end' 2>/dev/null)
+    [[ -n "$verdict" ]] || verdict="UNPARSED ${body:0:70}"
   else
-    [[ "$body" == *'"choices"'* ]] && verdict="OK" || verdict="FAIL ${body:0:70}"
+    if [[ "$body" == *'"choices"'* ]] && [[ "$body" != *'"choices":[]'* ]] && [[ "$body" != *'"choices": []'* ]]; then
+      verdict="OK"
+    else
+      verdict="FAIL ${body:0:70}"
+    fi
   fi
 
   case "$verdict" in OK*) ;; *) fail=1 ;; esac
