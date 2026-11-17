@@ -48,19 +48,31 @@ class RootScriptsTests(unittest.TestCase):
         _git(repo, "add", ".")
         _git(repo, "commit", "-m", "initial")
 
-        # Plant untracked files both at top-level of skill and inside subdirectory
+        # Plant untracked files, an untracked symlink to tracked SKILL.md, and an untracked skill dir
         (skill / "UNTRACKED_NOTE.md").write_text("scratch\n", encoding="utf-8")
         (skill / "references" / "untracked_scratch.md").write_text("scratch\n", encoding="utf-8")
+        (skill / "references" / "untracked_link.md").symlink_to(skill / "SKILL.md")
+        untracked_skill = repo / "skills" / "untracked-wip"
+        untracked_skill.mkdir(parents=True)
+        (untracked_skill / "SKILL.md").write_text(
+            "---\nname: untracked-wip\ndescription: Untracked wip.\n---\n# WIP\n",
+            encoding="utf-8",
+        )
 
         gen.ROOT = repo
         gen.SKILLS_DIR = repo / "skills"
+        table = gen.render_skills_table()
         layout = gen.render_layout()
+        self.assertNotIn("untracked-wip", table)
+        self.assertNotIn("untracked-wip", layout)
         self.assertNotIn("UNTRACKED_NOTE.md", layout)
         self.assertIn("references/ # 1 file", layout)
 
     def test_check_skills_catches_gemini_keys_root_docs_secrets_and_fleet_ops_refs(self) -> None:
         chk = _load_script("check_skills", "check_skills.py")
         repo = self.tmp / "repo"
+        repo.mkdir(parents=True, exist_ok=True)
+        (repo / "README.md").write_text("# Root readme\n", encoding="utf-8")
         skill = repo / "skills" / "alpha"
         skill.mkdir(parents=True)
         # Construct synthetic token dynamically so this test file never trips secret regexes
@@ -70,6 +82,9 @@ class RootScriptsTests(unittest.TestCase):
         (skill / "SKILL.md").write_text(
             "---\nname: alpha\ndescription: Use when testing.\n---\n"
             "Broken ref: `fleet-ops/missing-runner.sh`\n"
+            "Broken example ref: `assets/nonexistent.example`\n"
+            "Escaping link: [root](../../README.md)\n"
+            "Escaping backtick: `scripts/../../../README.md`\n"
             "Allowed local ref: `evals/heldout.local.json`\n",
             encoding="utf-8",
         )
@@ -91,6 +106,9 @@ class RootScriptsTests(unittest.TestCase):
         self.assertIn("Google/Gemini API key", joined)
         self.assertIn("AWS access key ID", joined)
         self.assertIn("`fleet-ops/missing-runner.sh`", joined)
+        self.assertIn("`assets/nonexistent.example`", joined)
+        self.assertIn("(../../README.md)", joined)
+        self.assertIn("`scripts/../../../README.md`", joined)
         self.assertNotIn("heldout.local.json", joined)
 
 

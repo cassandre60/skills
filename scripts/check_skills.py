@@ -124,6 +124,7 @@ def check_secrets(base_dir: Path, issues: list):
 
 def check_relative_references(skill_dir: Path, issues: list):
     """Ensure explicit relative path references inside skill files point to real targets."""
+    skill_root = skill_dir.resolve()
     path_pattern = re.compile(
         r"`((?:references|scripts|assets|fleet-ops|evals)/[a-zA-Z0-9_\-\./]+)`"
     )
@@ -133,6 +134,7 @@ def check_relative_references(skill_dir: Path, issues: list):
         if not path.is_file() or _is_ignored_rel_path(path, skill_dir):
             continue
         content = path.read_text(encoding="utf-8", errors="ignore")
+        rel_doc = path.relative_to(ROOT) if ROOT in path.parents else path
 
         # Check explicit relative markdown links
         for match in link_pattern.finditer(content):
@@ -140,20 +142,20 @@ def check_relative_references(skill_dir: Path, issues: list):
             if not target_str:
                 continue
             resolved = (path.parent / target_str).resolve()
-            if not resolved.exists():
+            if not resolved.exists() or not resolved.is_relative_to(skill_root):
                 issues.append(
-                    f"{path.relative_to(ROOT)}: broken markdown link '({target_str})'"
+                    f"{rel_doc}: broken markdown link '({target_str})'"
                 )
 
         # Check backtick path mentions like `references/foo.md` or `scripts/bar.py`
         for match in path_pattern.finditer(content):
             target_str = match.group(1).strip()
-            if target_str.endswith((".example", ".template", ".local.json")):
+            if target_str.endswith(".local.json"):
                 continue
             resolved = (skill_dir / target_str).resolve()
-            if not resolved.exists():
+            if not resolved.exists() or not resolved.is_relative_to(skill_root):
                 issues.append(
-                    f"{path.relative_to(ROOT)}: referenced path `{target_str}` does not exist in skill"
+                    f"{rel_doc}: referenced path `{target_str}` does not exist in skill"
                 )
 
 def main():

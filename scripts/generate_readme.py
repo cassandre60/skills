@@ -18,6 +18,7 @@ Usage:
     python3 scripts/generate_readme.py          # rewrite README.md in place
     python3 scripts/generate_readme.py --check  # exit 1 if README.md is stale
 """
+import os
 import re
 import subprocess
 import sys
@@ -72,27 +73,8 @@ def parse_frontmatter(skill_md: Path) -> tuple[str, str]:
     return name, description
 
 
-def render_skills_table() -> str:
-    rows = []
-    for skill_dir in sorted(p for p in SKILLS_DIR.iterdir() if p.is_dir()):
-        if skill_dir.name.startswith("."):
-            continue
-        skill_md = skill_dir / "SKILL.md"
-        if not skill_md.exists():
-            continue
-        name, description = parse_frontmatter(skill_md)
-        if name != skill_dir.name:
-            raise ValueError(
-                f"{skill_md}: frontmatter name '{name}' != directory '{skill_dir.name}'"
-            )
-        cell = description.replace("|", "\\|")
-        rows.append(f"| **[{name}](./skills/{name}/SKILL.md)** | {cell} |")
-    header = "| Skill | Use it when |\n|---|---|"
-    return header + "\n" + "\n".join(rows)
-
-
 def _git_tracked_skill_files(root: Path) -> set[Path] | None:
-    """Return resolved paths of git-tracked files under skills/, or None outside git."""
+    """Return repo-relative paths of git-tracked files under skills/, or None outside git."""
     try:
         proc = subprocess.run(
             ["git", "ls-files", "-z", "skills"],
@@ -105,8 +87,41 @@ def _git_tracked_skill_files(root: Path) -> set[Path] | None:
     if proc.returncode != 0 or not proc.stdout:
         return None
     entries = proc.stdout.decode("utf-8", errors="surrogateescape").split("\0")
-    tracked = {(root / rel).resolve() for rel in entries if rel}
-    return {p for p in tracked if p.is_file()}
+    return {
+        Path(rel)
+        for rel in entries
+        if rel and os.path.lexists(root / rel) and not os.path.isdir(root / rel)
+    }
+
+
+def _is_counted_file(path: Path, tracked: set[Path] | None) -> bool:
+    if tracked is not None:
+        try:
+            rel = path.relative_to(ROOT)
+        except ValueError:
+            return False
+        return rel in tracked and os.path.lexists(path) and not os.path.isdir(path)
+    return path.is_file() and not path.is_symlink()
+
+
+def render_skills_table() -> str:
+    tracked = _git_tracked_skill_files(ROOT)
+    rows = []
+    for skill_dir in sorted(p for p in SKILLS_DIR.iterdir() if p.is_dir()):
+        if skill_dir.name.startswith("."):
+            continue
+        skill_md = skill_dir / "SKILL.md"
+        if not _is_counted_file(skill_md, tracked):
+            continue
+        name, description = parse_frontmatter(skill_md)
+        if name != skill_dir.name:
+            raise ValueError(
+                f"{skill_md}: frontmatter name '{name}' != directory '{skill_dir.name}'"
+            )
+        cell = description.replace("|", "\\|")
+        rows.append(f"| **[{name}](./skills/{name}/SKILL.md)** | {cell} |")
+    header = "| Skill | Use it when |\n|---|---|"
+    return header + "\n" + "\n".join(rows)
 
 
 def render_layout() -> str:
@@ -115,16 +130,14 @@ def render_layout() -> str:
     for skill_dir in sorted(p for p in SKILLS_DIR.iterdir() if p.is_dir()):
         if skill_dir.name.startswith("."):
             continue
-        skill_resolved = skill_dir.resolve()
-        if tracked is not None and not any(skill_resolved in f.parents for f in tracked):
+        skill_rel = skill_dir.relative_to(ROOT)
+        if tracked is not None and not any(skill_rel in f.parents for f in tracked):
             continue
         out.append(f"  {skill_dir.name}/")
         top_files = sorted(
             p.name
             for p in skill_dir.iterdir()
-            if p.is_file()
-            and not p.name.startswith(".")
-            and (tracked is None or p.resolve() in tracked)
+            if not p.name.startswith(".") and _is_counted_file(p, tracked)
         )
         # Entry point first: it is the file the table links to.
         top_files = sorted(top_files, key=lambda n: (n != "SKILL.md", n))
@@ -137,8 +150,7 @@ def render_layout() -> str:
             count = sum(
                 1
                 for p in sub.rglob("*")
-                if p.is_file()
-                and (tracked is None or p.resolve() in tracked)
+                if _is_counted_file(p, tracked)
                 and not any(
                     part.startswith(".") or part == "__pycache__"
                     for part in p.relative_to(sub).parts
