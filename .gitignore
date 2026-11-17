@@ -12,5 +12,6 @@ __pycache__/
 skills/autonomous-improvement/evals/heldout.local.json
 
 # Synthetic CLIProxyAPI captures used as test fixtures.
-!skills/cliproxy-log-inspection/tests/fixtures/*.log
+!skills/context-optimization/tests/fixtures/*.log
 .autonomous/
+.ruff_cache/
