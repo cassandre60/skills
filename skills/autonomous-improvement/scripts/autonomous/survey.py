@@ -326,6 +326,13 @@ def check_adversarial(root: Path, cfg: dict[str, Any]) -> tuple[float, dict[str,
         try:
             data = json.loads(out)
             candidates = data if isinstance(data, list) else data.get("candidates", [])
+            ledger_path = root / cfg.get("ledger_path", "docs/AUTONOMOUS_WORK_LEDGER.md")
+            if candidates and ledger_path.is_file():
+                l_text = ledger_path.read_text(encoding="utf-8", errors="replace")
+                candidates = [
+                    c for c in candidates
+                    if not (isinstance(c, dict) and c.get("file") and _is_file_audited_in_ledger(l_text, c["file"]))
+                ]
             if candidates:
                 return 1.0, {"smell_count": len(candidates)}
         except Exception:
