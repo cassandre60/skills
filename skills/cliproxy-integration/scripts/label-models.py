@@ -169,6 +169,8 @@ def main() -> int:
     mismatches = []
     for section in ("provider", "providers"):
         for provider_name, provider in (written.get(section) or {}).items():
+            if args.provider != "all" and provider_name != args.provider:
+                continue
             if not isinstance(provider, dict):
                 continue
             for model_id, entry in (provider.get("models") or {}).items():
