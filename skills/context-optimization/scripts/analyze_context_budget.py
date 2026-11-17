@@ -672,7 +672,7 @@ def _resolve_transcript(bundle_dir: Path):
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else "")
     parser.add_argument("bundle", nargs="?", type=Path,
                         help="rendered bundle directory")
     parser.add_argument("--system-prompt", type=Path)

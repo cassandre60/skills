@@ -52,8 +52,8 @@ local instructions file. It is not an independent policy document.
   python3 scripts/generate_readme.py --check
   ```
 - CI (`.github/workflows/check.yml`) runs the three checks above plus the
-  `skills/autonomous-improvement` test suite. The full suite is CI's job, not
-  a local reflex.
+  `skills/context-optimization`, `skills/autonomous-improvement`, and
+  `fleet-ops` test suites. The full suite is CI's job, not a local reflex.
 
 ## Lessons Learned
 
@@ -72,6 +72,8 @@ local instructions file. It is not an independent policy document.
 - [2026-10-23, glm-5.3-flash-free] The session's `rtk` shell wrapper mangles `$SHA:path`-style expansions in `git show`/`git cat-file` arguments — use `git cat-file -p <sha>:<path>` or literal rev paths (`origin/main:...`), never bare shell-expanded paths with `git show`. Verified by: `git show $sha:AGENTS.md` returning wrong output while the unexpanded form worked.
 - [2026-10-24, GLM-5.3-Flash via ZCode desktop] `scripts/check_skills.py` resolves every backticked path inside a skill's markdown relative to that skill's directory — repo-root files (`scripts/check_skills.py`, `.github/workflows/check.yml`) must stay UNBACKTICKED in skill docs or CI fails with "referenced path does not exist in skill". Verified by: SPEC.md's first push went red on exactly that; green after unbackticking the three repo-level mentions.
 - [2026-10-24, GLM-5.3-Flash via ZCode desktop] Under the ZCode desktop AppImage harness, Bash spawns python with `sys.executable` pointing at the ZCode AppImage (the leaked `APPIMAGE`/`APPDIR` env vars), so `tests/support.py`'s `script()`/gh-stub children run ZCode instead of the target script — every stub-based test fails on green code with ZCode startup logs in the child's stdout. Run the suite as `zsh -c 'exec -a /usr/bin/python3.14 /usr/bin/python3.14 -m unittest discover -s skills/autonomous-improvement/tests -p test_v2.py'`. Verified by: `FleetClaimPublishTests` failing with `CALLS: []` and ZCode logs under plain `python3`, green with identical code under `exec -a` (`/proc/self/exe` was correct; only `sys.executable` was poisoned).
+- [2026-10-25, GLM-5.3-Flash via ZCode desktop] `scripts/generate_readme.py` counts UNTRACKED files on disk: regenerating in a dirty checkout bakes local-only files (e.g. the plan brief, repomix output) into the LAYOUT block and CI fails with "stale". Regenerate from a clean clone (or `git clean -nd`-verify first) whenever the checkout carries untracked non-dot files. Verified by: main CI red on a polluted regen, green after committing the clean-clone's output.
+- [2026-10-25, GLM-5.3-Flash via ZCode desktop] A parallel ZCode session switches branches inside shared worktrees (it took over a remeasure worktree mid-run); long-running jobs need isolated `/tmp` worktrees with absolute output paths, and subagents that die on provider errors should have written their tests FIRST so the contract survives. Verified by: first remeasure's records lost; second attempt in `/tmp` unaffected.
 
 ---
 
@@ -353,6 +355,3 @@ already exists** — update/dedupe rather than duplicate.
 - Nowhere else: never add attribution to repo files, docs, code, comments, or
   command examples inside docs — use a placeholder or omit it there and stamp
   only when actually running `git commit` / `gh`.
-
-- [2026-10-25, GLM-5.3-Flash via ZCode desktop] `scripts/generate_readme.py` counts UNTRACKED files on disk: regenerating in a dirty checkout bakes local-only files (e.g. the plan brief, repomix output) into the LAYOUT block and CI fails with "stale". Regenerate from a clean clone (or `git clean -nd`-verify first) whenever the checkout carries untracked non-dot files. Verified by: main CI red on a polluted regen, green after committing the clean-clone's output.
-- [2026-10-25, GLM-5.3-Flash via ZCode desktop] A parallel ZCode session switches branches inside shared worktrees (it took over a remeasure worktree mid-run); long-running jobs need isolated `/tmp` worktrees with absolute output paths, and subagents that die on provider errors should have written their tests FIRST so the contract survives. Verified by: first remeasure's records lost; second attempt in `/tmp` unaffected.

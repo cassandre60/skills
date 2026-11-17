@@ -20,10 +20,12 @@ Safety properties
 
 Usage
 -----
-  OMNIROUTE_API_KEY=sk-... ./sync-limits.py \
+  GATEWAY_API_KEY=sk-... ./sync-limits.py \
       --base-url http://localhost:20128/v1 \
       --config ~/.config/opencode/opencode.json \
       --provider omniroute
+
+(`OMNIROUTE_API_KEY` is also accepted as a fallback when `GATEWAY_API_KEY` is unset.)
 
 If --config is omitted, defaults to ~/.config/opencode/opencode.json.
 OpenCode keys to update are the provider's model keys in both the singular `provider` block and
@@ -42,27 +44,27 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-SECONDS_PER_DAY = 86400
-
-
-def fetch_catalog(base_url: str, api_key: str, timeout: int) -> dict[str, tuple[int, int]]:
+def fetch_catalog(
+    base_url: str, api_key: str, timeout: int
+) -> dict[str, tuple[int | None, int | None]]:
     url = base_url.rstrip("/") + "/models"
-    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {api_key}"})
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    req = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         payload = json.load(resp)
 
     entries = payload.get("data", payload) if isinstance(payload, dict) else payload
-    catalog: dict[str, tuple[int, int]] = {}
+    catalog: dict[str, tuple[int | None, int | None]] = {}
     for item in entries or []:
         if not isinstance(item, dict):
             continue
         model_id = item.get("id")
         if not model_id:
             continue
-        ctx = item.get("context_length") or item.get("max_context_window_tokens")
-        out = item.get("max_output_tokens")
-        ctx = ctx if isinstance(ctx, int) and ctx > 0 else None
-        out = out if isinstance(out, int) and out > 0 else None
+        raw_ctx = item.get("context_length") or item.get("max_context_window_tokens")
+        raw_out = item.get("max_output_tokens")
+        ctx = raw_ctx if isinstance(raw_ctx, int) and not isinstance(raw_ctx, bool) and raw_ctx > 0 else None
+        out = raw_out if isinstance(raw_out, int) and not isinstance(raw_out, bool) and raw_out > 0 else None
         catalog[model_id] = (ctx, out)
     return catalog
 
@@ -91,9 +93,14 @@ def main() -> int:
         print("error: --base-url or GATEWAY_BASE_URL is required", file=sys.stderr)
         return 2
 
-    api_key = args.api_key or os.environ.get("GATEWAY_API_KEY", "")
+    api_key = (
+        args.api_key
+        or os.environ.get("GATEWAY_API_KEY")
+        or os.environ.get("OMNIROUTE_API_KEY")
+        or ""
+    )
     if not api_key:
-        print("warning: no --api-key / GATEWAY_API_KEY; catalog fetch may be rejected",
+        print("warning: no --api-key / GATEWAY_API_KEY / OMNIROUTE_API_KEY; catalog fetch may be rejected",
               file=sys.stderr)
 
     config_path = Path(args.config).expanduser()
@@ -103,7 +110,11 @@ def main() -> int:
 
     try:
         catalog = fetch_catalog(args.base_url, api_key, args.timeout)
-    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as exc:
+    except urllib.error.HTTPError as exc:
+        print(f"error: could not read catalog: {exc}", file=sys.stderr)
+        exc.close()
+        return 2
+    except (urllib.error.URLError, TimeoutError) as exc:
         print(f"error: could not read catalog: {exc}", file=sys.stderr)
         return 2
     except (json.JSONDecodeError, OSError) as exc:
@@ -116,7 +127,7 @@ def main() -> int:
 
     config = json.loads(config_path.read_text())
 
-    updated: list[tuple[str, str, tuple[int, int]]] = []
+    updated: list[tuple[str, str, tuple[int, int | None]]] = []
     unchanged: list[str] = []
     absent: list[str] = []
     no_limits: list[str] = []
@@ -132,15 +143,15 @@ def main() -> int:
         for model_id, entry in models.items():
             if not isinstance(entry, dict):
                 continue
-            limits = entry.setdefault("limit", {})
-            ctx, out = catalog.get(model_id, (None, None))
             if model_id not in catalog:
                 absent.append(f"{section}:{model_id}")
                 continue
+            ctx, out = catalog.get(model_id, (None, None))
             if ctx is None:
                 # In the catalog, but the gateway publishes no context limit for it.
                 no_limits.append(f"{section}:{model_id}")
                 continue
+            limits = entry.setdefault("limit", {})
             before = (limits.get("context"), limits.get("output"))
             # A catalog may publish context but not output. In that case keep whatever the
             # config already has - otherwise the comparison below never matches and the

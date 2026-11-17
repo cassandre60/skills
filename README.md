@@ -55,6 +55,7 @@ skills/
     assets/     # 11 files
     references/ # 13 files
     scripts/    # 9 files
+    tests/      # 1 file
   autonomous-improvement/
     SKILL.md
     CHANGELOG-v2.md
@@ -76,6 +77,7 @@ skills/
     TROUBLESHOOTING.md
     references/ # 8 files
     scripts/    # 4 files
+    tests/      # 1 file
   context-optimization/
     SKILL.md
     FIELD-NOTES.md
@@ -89,6 +91,7 @@ skills/
     README.md
     assets/  # 1 file
     scripts/ # 1 file
+    tests/   # 1 file
   mobile-app-to-web-demo/
     SKILL.md
 ```

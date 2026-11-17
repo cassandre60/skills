@@ -459,7 +459,7 @@ def print_summary(results: typing.List[typing.Dict[str, typing.Any]]) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0] if __doc__ else "")
     parser.add_argument("--deterministic", action="store_true", help="run script-level checks (default action)")
     parser.add_argument("--case", action="append", dest="cases", help="limit to one case id (repeatable)")
     parser.add_argument("--list", action="store_true", help="list each case's deterministic checks")
