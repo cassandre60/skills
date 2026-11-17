@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import subprocess
 import sys
@@ -18,8 +17,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-DEFAULT_CONFIG_PATH = Path(".upstream/config.json")
-DEFAULT_LEDGER_PATH = Path(".upstream/ledger.json")
+DEFAULT_CONFIG_REL = Path(".upstream/config.json")
+DEFAULT_LEDGER_REL = Path(".upstream/ledger.json")
 
 
 def run_git(args: List[str], cwd: Optional[Path] = None) -> str:
@@ -31,6 +30,32 @@ def run_git(args: List[str], cwd: Optional[Path] = None) -> str:
         check=True,
     )
     return res.stdout.strip()
+
+
+def resolve_repo_root(cwd: Optional[Path] = None) -> Path:
+    base = (cwd or Path.cwd()).resolve()
+    try:
+        top = run_git(["rev-parse", "--show-toplevel"], cwd=base)
+        if top:
+            return Path(top).resolve()
+    except (subprocess.CalledProcessError, OSError):
+        pass
+    return base
+
+
+def _commit_exists(sha: str, repo_root: Path) -> bool:
+    try:
+        run_git(["cat-file", "-e", f"{sha}^{{commit}}"], cwd=repo_root)
+        return True
+    except subprocess.CalledProcessError:
+        return False
+
+
+def _is_shallow_repo(repo_root: Path) -> bool:
+    try:
+        return run_git(["rev-parse", "--is-shallow-repository"], cwd=repo_root) == "true"
+    except subprocess.CalledProcessError:
+        return False
 
 
 def extract_pr_number(title: str) -> Optional[int]:
@@ -46,7 +71,7 @@ def extract_pr_number(title: str) -> Optional[int]:
     return None
 
 
-def load_config(path: Path = DEFAULT_CONFIG_PATH) -> Dict[str, Any]:
+def load_config(path: Path) -> Dict[str, Any]:
     if not path.exists():
         return {
             "upstream_repo": "",
@@ -69,7 +94,7 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> Dict[str, Any]:
         return json.load(f)
 
 
-def load_ledger(path: Path = DEFAULT_LEDGER_PATH) -> Dict[str, Any]:
+def load_ledger(path: Path) -> Dict[str, Any]:
     if not path.exists():
         return {
             "version": 1,
@@ -83,7 +108,7 @@ def load_ledger(path: Path = DEFAULT_LEDGER_PATH) -> Dict[str, Any]:
         return json.load(f)
 
 
-def save_ledger(ledger: Dict[str, Any], path: Path = DEFAULT_LEDGER_PATH) -> None:
+def save_ledger(ledger: Dict[str, Any], path: Path) -> None:
     commits = ledger.get("commits", {})
     candidates = sum(1 for c in commits.values() if c.get("status") == "CANDIDATE")
     applied = sum(1 for c in commits.values() if c.get("status") == "APPLIED")
@@ -166,8 +191,10 @@ def classify_commit(
 
 
 def cmd_sync(args: argparse.Namespace, repo_root: Path) -> int:
-    config = load_config(DEFAULT_CONFIG_PATH)
-    ledger = load_ledger(DEFAULT_LEDGER_PATH)
+    config_path = repo_root / DEFAULT_CONFIG_REL
+    ledger_path = repo_root / DEFAULT_LEDGER_REL
+    config = load_config(config_path)
+    ledger = load_ledger(ledger_path)
 
     upstream_repo = config.get("upstream_repo") or ledger.get("upstream_repo")
     if not upstream_repo:
@@ -181,25 +208,48 @@ def cmd_sync(args: argparse.Namespace, repo_root: Path) -> int:
 
     remotes = run_git(["remote"], cwd=repo_root).split()
     if "upstream" not in remotes:
-        print(f"Adding remote 'upstream' pointing to https://github.com/{upstream_repo}.git")
-        run_git(["remote", "add", "upstream", f"https://github.com/{upstream_repo}.git"], cwd=repo_root)
+        remote_url = (
+            upstream_repo
+            if ("://" in upstream_repo or upstream_repo.startswith("/"))
+            else f"https://github.com/{upstream_repo}.git"
+        )
+        print(f"Adding remote 'upstream' pointing to {remote_url}")
+        run_git(["remote", "add", "upstream", remote_url], cwd=repo_root)
         run_git(["remote", "set-url", "--push", "upstream", "no_push"], cwd=repo_root)
 
     upstream_branch = config.get("upstream_branch", "main")
+    refspec = f"+refs/heads/{upstream_branch}:refs/remotes/upstream/{upstream_branch}"
     if args.fetch:
         print(f"Fetching upstream {upstream_branch} (depth: {args.depth})...")
-        run_git(["fetch", f"--depth={args.depth}", "upstream", upstream_branch, "--no-tags"], cwd=repo_root)
+        run_git(["fetch", f"--depth={args.depth}", "upstream", refspec, "--no-tags"], cwd=repo_root)
+
+    if not _commit_exists(base_sha, repo_root) and args.fetch and _is_shallow_repo(repo_root):
+        for step in (100, 200, 500, 1000):
+            print(f"Base commit {base_sha[:9]} not found in shallow history. Fetching deeper (+{step})...")
+            try:
+                run_git(["fetch", f"--deepen={step}", "upstream", refspec, "--no-tags"], cwd=repo_root)
+            except subprocess.CalledProcessError as exc:
+                print(f"Error: failed to deepen upstream history: {exc.stderr.strip()}", file=sys.stderr)
+                return 1
+            if _commit_exists(base_sha, repo_root):
+                break
+
+    if not _commit_exists(base_sha, repo_root):
+        print(
+            f"Error: Base commit '{base_sha}' not found in local git history "
+            f"(fetch more history or verify base_sha in .upstream/config.json).",
+            file=sys.stderr,
+        )
+        return 1
 
     try:
-        run_git(["rev-parse", "--verify", base_sha], cwd=repo_root)
-    except subprocess.CalledProcessError:
-        print(f"Base commit {base_sha[:9]} not found in shallow history. Fetching deeper...")
-        run_git(["fetch", "--deepen=100", "upstream", upstream_branch, "--no-tags"], cwd=repo_root)
-
-    rev_list = run_git(
-        ["rev-list", "--reverse", f"{base_sha}..upstream/{upstream_branch}"],
-        cwd=repo_root,
-    )
+        rev_list = run_git(
+            ["rev-list", "--reverse", f"{base_sha}..upstream/{upstream_branch}"],
+            cwd=repo_root,
+        )
+    except subprocess.CalledProcessError as exc:
+        print(f"Error: failed to list commits in {base_sha}..upstream/{upstream_branch}: {exc.stderr.strip()}", file=sys.stderr)
+        return 1
     shas = [s.strip() for s in rev_list.split() if s.strip()]
 
     if not shas:
@@ -253,7 +303,7 @@ def cmd_sync(args: argparse.Namespace, repo_root: Path) -> int:
     ledger["upstream_repo"] = upstream_repo
     ledger["last_synced_sha"] = latest_sha
     ledger["last_synced_date"] = datetime.now(timezone.utc).isoformat()
-    save_ledger(ledger, DEFAULT_LEDGER_PATH)
+    save_ledger(ledger, ledger_path)
 
     print("\n--- Sync Summary ---")
     print(f"Total new commits processed: {len(shas)}")
@@ -261,7 +311,7 @@ def cmd_sync(args: argparse.Namespace, repo_root: Path) -> int:
     print(f"  - Applied: {new_applied}")
     print(f"  - Skipped (cut/chore/deleted): {new_skipped}")
     print(f"Latest synced commit: {latest_sha[:9]}")
-    print(f"Ledger saved to {DEFAULT_LEDGER_PATH}")
+    print(f"Ledger saved to {ledger_path}")
 
     if new_candidates > 0:
         print(f"\nRun `python3 {sys.argv[0]} candidates` to inspect active candidates.")
@@ -269,8 +319,8 @@ def cmd_sync(args: argparse.Namespace, repo_root: Path) -> int:
 
 
 def cmd_status(args: argparse.Namespace, repo_root: Path) -> int:
-    config = load_config(DEFAULT_CONFIG_PATH)
-    ledger = load_ledger(DEFAULT_LEDGER_PATH)
+    config = load_config(repo_root / DEFAULT_CONFIG_REL)
+    ledger = load_ledger(repo_root / DEFAULT_LEDGER_REL)
     stats = ledger.get("stats", {})
     last_sha = ledger.get("last_synced_sha") or config.get("base_sha", "unknown")
     last_date = ledger.get("last_synced_date", "never")
@@ -295,8 +345,8 @@ def cmd_status(args: argparse.Namespace, repo_root: Path) -> int:
 
 
 def cmd_candidates(args: argparse.Namespace, repo_root: Path) -> int:
-    config = load_config(DEFAULT_CONFIG_PATH)
-    ledger = load_ledger(DEFAULT_LEDGER_PATH)
+    config = load_config(repo_root / DEFAULT_CONFIG_REL)
+    ledger = load_ledger(repo_root / DEFAULT_LEDGER_REL)
     upstream_repo = config.get("upstream_repo") or ledger.get("upstream_repo", "")
     candidates = [c for c in ledger.get("commits", {}).values() if c.get("status") == "CANDIDATE"]
 
@@ -344,7 +394,8 @@ def cmd_candidates(args: argparse.Namespace, repo_root: Path) -> int:
 
 
 def cmd_mark(args: argparse.Namespace, repo_root: Path) -> int:
-    ledger = load_ledger(DEFAULT_LEDGER_PATH)
+    ledger_path = repo_root / DEFAULT_LEDGER_REL
+    ledger = load_ledger(ledger_path)
     commits = ledger.setdefault("commits", {})
     target = args.target
 
@@ -371,7 +422,7 @@ def cmd_mark(args: argparse.Namespace, repo_root: Path) -> int:
     if args.notes:
         entry["notes"] = args.notes
 
-    save_ledger(ledger, DEFAULT_LEDGER_PATH)
+    save_ledger(ledger, ledger_path)
     print(f"Updated {match_key} ({entry.get('title')}): {old_status} -> {args.status}")
     return 0
 
@@ -405,7 +456,7 @@ def main() -> int:
         parser.print_help()
         return 0
 
-    repo_root = Path.cwd()
+    repo_root = resolve_repo_root()
     if args.command == "sync":
         return cmd_sync(args, repo_root)
     elif args.command == "status":

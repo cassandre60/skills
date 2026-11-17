@@ -89,6 +89,7 @@ skills/
     README.md
     assets/  # 1 file
     scripts/ # 1 file
+    tests/   # 1 file
   mobile-app-to-web-demo/
     SKILL.md
 ```
