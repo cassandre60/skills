@@ -8,6 +8,7 @@ Schema: survey/1.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -316,6 +317,38 @@ def check_security(root: Path) -> tuple[float, dict[str, Any]]:
     return 0.0, {}
 
 
+def _blob_hash9(path: Path) -> str | None:
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return None
+    return hashlib.sha1(f"blob {len(raw)}\0".encode() + raw).hexdigest()[:9]
+
+
+def _audited_targets_at_current_hash(root: Path, ledger_path: Path) -> set[str]:
+    """Targets whose newest non-EXAMPLE ledger row is SOUND/COMPLETED at current blob hash."""
+    if not ledger_path.is_file():
+        return set()
+    try:
+        from ledger import parse_ledger
+    except ImportError:
+        return set()
+    newest: dict[str, Any] = {}
+    for row in parse_ledger(ledger_path):
+        key = (row.date or "0000-00-00", -row.line_index)
+        cur = newest.get(row.target)
+        if cur is None or key > (cur.date or "0000-00-00", -cur.line_index):
+            newest[row.target] = row
+    audited: set[str] = set()
+    for target, row in newest.items():
+        if row.status not in ("COMPLETED", "SOUND"):
+            continue
+        live_hash = _blob_hash9(root / target)
+        if live_hash and row.source_hash == live_hash:
+            audited.add(target)
+    return audited
+
+
 def check_adversarial(root: Path, cfg: dict[str, Any]) -> tuple[float, dict[str, Any]]:
     """Check for test smells via stream_b_scan.py."""
     scan_script = SCRIPT_DIR / "stream_b_scan.py"
@@ -328,10 +361,10 @@ def check_adversarial(root: Path, cfg: dict[str, Any]) -> tuple[float, dict[str,
             candidates = data if isinstance(data, list) else data.get("candidates", [])
             ledger_path = root / cfg.get("ledger_path", "docs/AUTONOMOUS_WORK_LEDGER.md")
             if candidates and ledger_path.is_file():
-                l_text = ledger_path.read_text(encoding="utf-8", errors="replace")
+                audited_set = _audited_targets_at_current_hash(root, ledger_path)
                 candidates = [
                     c for c in candidates
-                    if not (isinstance(c, dict) and c.get("file") and _is_file_audited_in_ledger(l_text, c["file"]))
+                    if not (isinstance(c, dict) and c.get("file") in audited_set)
                 ]
             if candidates:
                 return 1.0, {"smell_count": len(candidates)}
@@ -356,19 +389,6 @@ def _is_test_cmd_green(root: Path, test_cmd: list[str]) -> bool:
     return code == 0
 
 
-def _is_file_audited_in_ledger(ledger_text: str, rel_path: str) -> bool:
-    """Check if rel_path is recorded in the ledger with SOUND or COMPLETED status."""
-    for line in ledger_text.splitlines():
-        if f"`{rel_path}`" in line or f" {rel_path} " in line:
-            parts = [p.strip() for p in line.split("|")]
-            # Table columns: | Date | Stream | Target File | Content Hash | Status | ...
-            if len(parts) >= 6:
-                status = parts[5].strip().upper()
-                if "SOUND" in status or "COMPLETED" in status:
-                    return True
-    return False
-
-
 def check_mutation(
     root: Path, cfg: dict[str, Any], has_cfg_file: bool
 ) -> tuple[float, bool, dict[str, Any]]:
@@ -383,11 +403,10 @@ def check_mutation(
         return 0.0, False, {}
 
     # Check ledger coverage: if all candidate files are already audited
-    # with SOUND or COMPLETED status.
+    # with SOUND or COMPLETED status at their current blob hash.
     ledger_path = root / cfg.get("ledger_path", "docs/AUTONOMOUS_WORK_LEDGER.md")
     if ledger_path.is_file():
-        l_text = ledger_path.read_text(encoding="utf-8", errors="replace")
-        # Check files matching candidates.A.include
+        audited_set = _audited_targets_at_current_hash(root, ledger_path)
         all_audited = True
         has_any_candidate = False
         for inc_glob in cand_a:
@@ -395,7 +414,7 @@ def check_mutation(
                 if f.is_file():
                     has_any_candidate = True
                     rel = str(f.relative_to(root))
-                    if not _is_file_audited_in_ledger(l_text, rel):
+                    if rel not in audited_set:
                         all_audited = False
                         break
             if not all_audited:

@@ -37,10 +37,16 @@ class SurveySignalsTests(unittest.TestCase):
             repo / "src" / "core_logic.py", "def compute(x):\n    return x * 2\n"
         )
         # Ledger has src/app.py audited
+        import hashlib
+
+        raw_app = (repo / "src" / "app.py").read_bytes()
+        app_h = hashlib.sha1(f"blob {len(raw_app)}\0".encode() + raw_app).hexdigest()[:9]
+        raw_test = (repo / "tests" / "test_app.py").read_bytes()
+        test_h = hashlib.sha1(f"blob {len(raw_test)}\0".encode() + raw_test).hexdigest()[:9]
         ledger = repo / "docs" / "AUTONOMOUS_WORK_LEDGER.md"
         ledger.write_text(
             support.ledger_text(
-                support.row("src/app.py", "aa11bb"),
+                support.row("src/app.py", f"{app_h}:{test_h}"),
             ),
             encoding="utf-8",
         )
@@ -295,6 +301,88 @@ class SurveySignalsTests(unittest.TestCase):
         self.assertIn("adversarial", picks, f"adversarial missing from picks: {picks}")
         self.assertGreaterEqual(picks["adversarial"]["score"], 0.25)
         self.assertGreaterEqual(picks["adversarial"]["signals"].get("smell_count", 0), 1)
+
+    def test_adversarial_ignores_summary_spoofing_and_stale_or_superseded_rows(self) -> None:
+        import hashlib
+
+        def blob9(p: Path) -> str:
+            raw = p.read_bytes()
+            return hashlib.sha1(f"blob {len(raw)}\0".encode() + raw).hexdigest()[:9]
+
+        repo, _ = support.python_repo(self.tmp, name="advledger")
+        vac_path = repo / "tests" / "test_vacuous.py"
+        support.write(
+            vac_path,
+            "import time\n\ndef test_sleepy_vacuous():\n    time.sleep(0.2)\n    assert True\n",
+        )
+        ledger = repo / "docs" / "AUTONOMOUS_WORK_LEDGER.md"
+        app_h = blob9(repo / "src" / "app.py")
+
+        # 1. Mentioning `tests/test_vacuous.py` in src/app.py's Summary column must NOT suppress adversarial
+        ledger.write_text(
+            support.ledger_text(
+                support.row(
+                    "src/app.py",
+                    f"{app_h}:-",
+                    status="COMPLETED",
+                    pr="#1",
+                    summary="audited alongside `tests/test_vacuous.py`",
+                ),
+            ),
+            encoding="utf-8",
+        )
+        support.commit(repo, "spoofed summary row")
+        p1 = json.loads(self.survey(repo).stdout)
+        picks1 = {p["tool"]: p for p in p1.get("picks", [])}
+        self.assertIn("adversarial", picks1, "Summary mention spoofed ledger filter!")
+        self.assertGreaterEqual(picks1["adversarial"]["score"], 0.25)
+
+        # 2. Recording a real SOUND row at matching blob hash suppresses the triaged file
+        vac_h1 = blob9(vac_path)
+        ledger.write_text(
+            support.ledger_text(
+                support.row("tests/test_vacuous.py", f"{vac_h1}:-", status="SOUND", date="2026-02-01"),
+                support.row("src/app.py", f"{app_h}:-", status="SOUND", date="2026-02-01"),
+            ),
+            encoding="utf-8",
+        )
+        support.commit(repo, "record sound row")
+        p2 = json.loads(self.survey(repo).stdout)
+        picks2 = {p["tool"]: p for p in p2.get("picks", [])}
+        self.assertEqual(picks2["adversarial"]["score"], 0.0)
+
+        # 3. Editing tests/test_vacuous.py invalidates the old hash -> adversarial fires again
+        support.write(
+            vac_path,
+            "import time\n\ndef test_sleepy_vacuous():\n    time.sleep(0.3)\n    assert True\n",
+        )
+        support.commit(repo, "modify vacuous test without re-auditing")
+        p3 = json.loads(self.survey(repo).stdout)
+        picks3 = {p["tool"]: p for p in p3.get("picks", [])}
+        self.assertGreaterEqual(picks3["adversarial"]["score"], 0.25)
+        self.assertFalse(p3.get("saturated"))
+
+        # 4. Newer SUPERSEDED row overrides older SOUND row even at current hash
+        vac_h2 = blob9(vac_path)
+        ledger.write_text(
+            support.ledger_text(
+                support.row("tests/test_vacuous.py", f"{vac_h2}:-", status="SUPERSEDED", date="2026-02-03"),
+                support.row("tests/test_vacuous.py", f"{vac_h2}:-", status="SOUND", date="2026-02-02"),
+                support.row("src/app.py", f"{app_h}:-", status="SOUND", date="2026-02-01"),
+            ),
+            encoding="utf-8",
+        )
+        support.commit(repo, "supersede sound row")
+        p4 = json.loads(self.survey(repo).stdout)
+        picks4 = {p["tool"]: p for p in p4.get("picks", [])}
+        self.assertGreaterEqual(picks4["adversarial"]["score"], 0.25)
+
+    def test_evals_runner_cli_runs_with_stripped_docstrings_flag(self) -> None:
+        proc = support.run(
+            [support.PYTHON, "-OO", str(SKILL_ROOT / "evals" / "run.py"), "--list"],
+            cwd=SKILL_ROOT,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
 
 
 if __name__ == "__main__":

@@ -18,9 +18,12 @@ BASE="${1:-}"; CMD="${2:-}"; HEAD_REF="${3:-HEAD}"
 if [[ -z "$BASE" || -z "$CMD" ]]; then
   echo "usage: $0 BASE_REF \"TEST COMMAND\" [HEAD_REF]" >&2; exit 2
 fi
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
+  echo "error: not inside a git repository" >&2; exit 2; }
+cd "$REPO_ROOT"
 REGEX="${TEST_PATH_REGEX:-(^|/)(tests?|__tests__|spec|specs|integration_test)(/|$)|(_test|_spec|\.test|\.spec)\.|(^|/)test_[^/]*$}"
 
-mapfile -t TEST_FILES < <(git diff --name-only --diff-filter=AM --no-renames "$BASE...$HEAD_REF" | grep -E "$REGEX" || true)
+mapfile -t TEST_FILES < <(git -c core.quotePath=false diff --name-only --diff-filter=AM --no-renames "$BASE...$HEAD_REF" | grep -E "$REGEX" || true)
 if [[ ${#TEST_FILES[@]} -eq 0 ]]; then
   echo "FAIL: the change adds or modifies no test files; a bug fix must ship a regression test." >&2
   exit 1
@@ -33,6 +36,7 @@ HEAD_LOG="$(mktemp)"
 cleanup() {
   git worktree remove --force "$WT_BASE" >/dev/null 2>&1 || rm -rf "$WT_BASE"
   git worktree remove --force "$WT_HEAD" >/dev/null 2>&1 || rm -rf "$WT_HEAD"
+  git worktree prune >/dev/null 2>&1 || true
   rm -f "$HEAD_LOG"
 }
 trap cleanup EXIT

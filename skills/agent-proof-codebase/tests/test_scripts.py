@@ -168,6 +168,38 @@ class AgentProofScriptsTests(unittest.TestCase):
         )
         self.assertEqual(ratchet_fail.returncode, 1)
 
+    def test_fail_to_pass_handles_non_ascii_paths_and_subdir_cwd(self) -> None:
+        repo = self.tmp / "unicode_repo"
+        _init_repo(repo)
+        (repo / "sub").mkdir()
+        (repo / "calc.py").write_text("def val():\n    return 0\n", encoding="utf-8")
+        _git(repo, "add", "calc.py")
+        _git(repo, "commit", "-m", "base")
+
+        _git(repo, "checkout", "-b", "fix/unicode")
+        (repo / "calc.py").write_text("def val():\n    return 1\n", encoding="utf-8")
+        test_rel = Path("tests") / "nested dir" / "test_café.py"
+        (repo / test_rel).parent.mkdir(parents=True, exist_ok=True)
+        (repo / test_rel).write_text(
+            "from calc import val\nassert val() == 1\n",
+            encoding="utf-8",
+        )
+        _git(repo, "add", ".")
+        _git(repo, "commit", "-m", "fix with unicode test path")
+
+        cmd = f'PYTHONPATH=. {sys.executable} "tests/nested dir/test_café.py"'
+        env = dict(os.environ)
+        env["EXPECT_PATTERN"] = "AssertionError"
+        proc = subprocess.run(
+            ["bash", str(SCRIPTS / "fail_to_pass_check.sh"), "main", cmd],
+            cwd=repo / "sub",
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, f"stdout={proc.stdout}\nstderr={proc.stderr}")
+
 
 if __name__ == "__main__":
     unittest.main()
