@@ -76,6 +76,7 @@ skills/
     TROUBLESHOOTING.md
     references/ # 8 files
     scripts/    # 4 files
+    tests/      # 1 file
   context-optimization/
     SKILL.md
     FIELD-NOTES.md

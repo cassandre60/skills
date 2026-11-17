@@ -122,12 +122,15 @@ def validate_key(key: str, base_url: str, list_path: str, timeout: int,
     except urllib.error.HTTPError as exc:
         body = ""
         try:
-            body = exc.read().decode(errors="replace")[:200]
+            body = " ".join(exc.read().decode(errors="replace").split())[:200]
         except Exception:
             pass
+        finally:
+            exc.close()
+        suffix = f": {body}" if body else ""
         if exc.code == 429:
-            return {"ok": False, "why": "rate-limited", "detail": exc.code, "ms": 0}
-        return {"ok": False, "why": "rejected", "detail": f"HTTP {exc.code}", "ms": 0}
+            return {"ok": False, "why": "rate-limited", "detail": f"HTTP 429{suffix}", "ms": 0}
+        return {"ok": False, "why": "rejected", "detail": f"HTTP {exc.code}{suffix}", "ms": 0}
     except Exception as exc:  # timeout, DNS, TLS...
         return {"ok": False, "why": "error", "detail": type(exc).__name__, "ms": 0}
 
@@ -277,11 +280,11 @@ def upsert_gateway_group(config_path: Path, provider: str, group_name: str,
     if base_url:
         new_item.append(f'          "base-url": "{base_url}"')
     new_item.extend(kept)
-    new_item.append(f'          "keys":')
+    new_item.append('          "keys":')
     for k in keys:
         new_item.append(f'            - "api-key": "{k}"')
     if models is not None:
-        new_item.append(f'          "models":')
+        new_item.append('          "models":')
         for upstream, alias in models:
             new_item.append(f'            - "name": "{upstream}"')
             if alias:
@@ -346,7 +349,9 @@ def probe(base_url: str, api_key: str, model: str, timeout: int) -> str:
             return "OK"
         return f"no choices: {str(data)[:80]}"
     except urllib.error.HTTPError as exc:
-        return f"HTTP {exc.code}"
+        code = exc.code
+        exc.close()
+        return f"HTTP {code}"
     except Exception as exc:
         return type(exc).__name__
 
@@ -484,7 +489,7 @@ def main() -> int:
         else:
             print(f"  opencode: {opencode_config}   models {', '.join(args.models)}")
     else:
-        print(f"  opencode: unchanged (no --model given)")
+        print("  opencode: unchanged (no --model given)")
 
     if not args.apply:
         print("\nre-run with --apply to write")
@@ -531,7 +536,7 @@ def main() -> int:
                 shutil.copy2(backup, path)
             return 1
 
-    for path, backup in backups:
+    for _path, backup in backups:
         print(f"backup: {backup}")
 
     # ---- 5b. structural self-check -----------------------------------------
