@@ -197,6 +197,70 @@ class TrackerTemplateTests(unittest.TestCase):
         self.assertNotIn("Traceback (most recent call last)", proc.stderr)
         self.assertIn("Error:", proc.stderr)
 
+    def test_shallow_sync_when_base_sha_already_in_fork_objects_does_not_drop_commits(self) -> None:
+        upstream = self.tmp / "upstream"
+        _init_repo(upstream)
+        _commit_file(upstream, "src/core.py", "v = 1\n", "feat: c1 (#1)")
+        c2 = _commit_file(upstream, "src/core.py", "v = 2\n", "fix: c2 (#2)")
+
+        # Clone fork directly at c2 so c2 ALREADY exists in fork/.git/objects!
+        fork = self.tmp / "fork"
+        subprocess.run(
+            ["git", "clone", f"file://{upstream}", str(fork)],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        _git(fork, "config", "user.name", "Fork Maintainer")
+        _git(fork, "config", "user.email", "fork@example.com")
+        _git(fork, "remote", "add", "upstream", f"file://{upstream}")
+
+        # Advance upstream by 5 commits (greater than --depth=2)
+        expected_shas = []
+        for step in range(3, 8):
+            sha = _commit_file(
+                upstream, "src/core.py", f"v = {step}\n", f"fix: step {step} (#{step})"
+            )
+            expected_shas.append(sha)
+
+        cfg_dir = fork / ".upstream"
+        cfg_dir.mkdir(parents=True, exist_ok=True)
+        (cfg_dir / "config.json").write_text(
+            json.dumps(
+                {
+                    "upstream_repo": "owner/upstream",
+                    "upstream_branch": "main",
+                    "base_sha": c2,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        proc = self._run_tracker(fork, "sync", "--depth", "2")
+        self.assertEqual(proc.returncode, 0, f"stdout={proc.stdout}\nstderr={proc.stderr}")
+
+        ledger = json.loads((cfg_dir / "ledger.json").read_text(encoding="utf-8"))
+        self.assertEqual(ledger["stats"]["total"], 5, f"dropped commits! ledger={ledger}")
+        for sha in expected_shas:
+            entry = ledger["commits"].get(sha[:9])
+            self.assertIsNotNone(entry, f"missing commit {sha[:9]}")
+            self.assertEqual(entry["all_files"], ["src/core.py"])
+            self.assertEqual(entry["status"], "CANDIDATE")
+
+    def test_invalid_base_sha_rejects_flag_injection(self) -> None:
+        fork = self.tmp / "fork"
+        _init_repo(fork)
+        _commit_file(fork, "src/app.py", "a = 1\n", "init")
+        cfg_dir = fork / ".upstream"
+        cfg_dir.mkdir(parents=True, exist_ok=True)
+        (cfg_dir / "config.json").write_text(
+            json.dumps({"upstream_repo": "owner/upstream", "base_sha": "--help"}),
+            encoding="utf-8",
+        )
+        proc = self._run_tracker(fork, "sync", "--no-fetch")
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("Invalid base_sha", proc.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

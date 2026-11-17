@@ -58,6 +58,14 @@ def _is_shallow_repo(repo_root: Path) -> bool:
         return False
 
 
+def _is_ancestor(ancestor: str, descendant: str, repo_root: Path) -> bool:
+    try:
+        run_git(["merge-base", "--is-ancestor", ancestor, descendant], cwd=repo_root)
+        return True
+    except subprocess.CalledProcessError:
+        return False
+
+
 def extract_pr_number(title: str) -> Optional[int]:
     match = re.search(r"\(#(\d+)\)", title)
     if match:
@@ -205,6 +213,9 @@ def cmd_sync(args: argparse.Namespace, repo_root: Path) -> int:
     if not base_sha:
         print("Error: No base_sha found in ledger or config. Run init first.", file=sys.stderr)
         return 1
+    if not isinstance(base_sha, str) or not re.fullmatch(r"[0-9a-fA-F]{4,40}", base_sha):
+        print(f"Error: Invalid base_sha '{base_sha}' (expected 4..40 hex characters).", file=sys.stderr)
+        return 1
 
     remotes = run_git(["remote"], cwd=repo_root).split()
     if "upstream" not in remotes:
@@ -218,21 +229,32 @@ def cmd_sync(args: argparse.Namespace, repo_root: Path) -> int:
         run_git(["remote", "set-url", "--push", "upstream", "no_push"], cwd=repo_root)
 
     upstream_branch = config.get("upstream_branch", "main")
+    upstream_ref = f"upstream/{upstream_branch}"
     refspec = f"+refs/heads/{upstream_branch}:refs/remotes/upstream/{upstream_branch}"
     if args.fetch:
         print(f"Fetching upstream {upstream_branch} (depth: {args.depth})...")
-        run_git(["fetch", f"--depth={args.depth}", "upstream", refspec, "--no-tags"], cwd=repo_root)
+        try:
+            run_git(["fetch", f"--depth={args.depth}", "upstream", refspec, "--no-tags"], cwd=repo_root)
+        except subprocess.CalledProcessError as exc:
+            print(f"Error: failed to fetch upstream {upstream_branch}: {exc.stderr.strip()}", file=sys.stderr)
+            return 1
 
-    if not _commit_exists(base_sha, repo_root) and args.fetch and _is_shallow_repo(repo_root):
-        for step in (100, 200, 500, 1000):
-            print(f"Base commit {base_sha[:9]} not found in shallow history. Fetching deeper (+{step})...")
+    if args.fetch and _is_shallow_repo(repo_root) and not _is_ancestor(base_sha, upstream_ref, repo_root):
+        for step in (100, 200, 500, 1000, 2000):
+            print(f"Base commit {base_sha[:9]} disconnected in shallow history. Fetching deeper (+{step})...")
             try:
                 run_git(["fetch", f"--deepen={step}", "upstream", refspec, "--no-tags"], cwd=repo_root)
             except subprocess.CalledProcessError as exc:
                 print(f"Error: failed to deepen upstream history: {exc.stderr.strip()}", file=sys.stderr)
                 return 1
-            if _commit_exists(base_sha, repo_root):
+            if _is_ancestor(base_sha, upstream_ref, repo_root):
                 break
+        if _is_shallow_repo(repo_root) and not _is_ancestor(base_sha, upstream_ref, repo_root):
+            print("Shallow history still disconnected; fetching full unshallow history...")
+            try:
+                run_git(["fetch", "--unshallow", "upstream", refspec, "--no-tags"], cwd=repo_root)
+            except subprocess.CalledProcessError:
+                pass
 
     if not _commit_exists(base_sha, repo_root):
         print(
@@ -241,14 +263,21 @@ def cmd_sync(args: argparse.Namespace, repo_root: Path) -> int:
             file=sys.stderr,
         )
         return 1
+    if _is_shallow_repo(repo_root) and not _is_ancestor(base_sha, upstream_ref, repo_root):
+        print(
+            f"Error: Base commit '{base_sha}' is not connected to '{upstream_ref}' in shallow history "
+            f"(run `git fetch --unshallow upstream` or increase --depth).",
+            file=sys.stderr,
+        )
+        return 1
 
     try:
         rev_list = run_git(
-            ["rev-list", "--reverse", f"{base_sha}..upstream/{upstream_branch}"],
+            ["rev-list", "--reverse", f"{base_sha}..{upstream_ref}"],
             cwd=repo_root,
         )
     except subprocess.CalledProcessError as exc:
-        print(f"Error: failed to list commits in {base_sha}..upstream/{upstream_branch}: {exc.stderr.strip()}", file=sys.stderr)
+        print(f"Error: failed to list commits in {base_sha}..{upstream_ref}: {exc.stderr.strip()}", file=sys.stderr)
         return 1
     shas = [s.strip() for s in rev_list.split() if s.strip()]
 
@@ -271,7 +300,10 @@ def cmd_sync(args: argparse.Namespace, repo_root: Path) -> int:
         subject = run_git(["log", "-1", "--format=%s", sha], cwd=repo_root)
         author = run_git(["log", "-1", "--format=%an", sha], cwd=repo_root)
         date = run_git(["log", "-1", "--format=%cI", sha], cwd=repo_root)
-        files_raw = run_git(["diff-tree", "--no-commit-id", "--name-only", "-r", sha], cwd=repo_root)
+        files_raw = run_git(
+            ["-c", "core.quotePath=false", "diff-tree", "--root", "--no-commit-id", "--name-only", "-r", sha],
+            cwd=repo_root,
+        )
         files = [f.strip() for f in files_raw.splitlines() if f.strip()]
 
         status, category, surviving_files = classify_commit(sha, subject, files, config, repo_root)
