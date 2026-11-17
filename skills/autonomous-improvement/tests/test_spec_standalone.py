@@ -73,6 +73,18 @@ def _classify(token):
 
 
 class SpecStandaloneTests(unittest.TestCase):
+    def test_spec_row_ids_are_unique(self):
+        seen: dict[str, int] = {}
+        duplicates: list[str] = []
+        for idx, (row_id, _enforcement, _proof) in enumerate(_rows(), 1):
+            if row_id in seen:
+                duplicates.append(
+                    f"duplicate SPEC rule id {row_id} (rows {seen[row_id]} and {idx})"
+                )
+            else:
+                seen[row_id] = idx
+        self.assertEqual([], duplicates, "\n".join(duplicates))
+
     def test_spec_row_paths_resolve_standalone(self):
         problems = []
         for row_id, enforcement, proof in _rows():

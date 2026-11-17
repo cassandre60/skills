@@ -19,6 +19,7 @@ Usage:
     python3 scripts/generate_readme.py --check  # exit 1 if README.md is stale
 """
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -90,27 +91,64 @@ def render_skills_table() -> str:
     return header + "\n" + "\n".join(rows)
 
 
+def _git_tracked_skill_files(root: Path) -> set[Path] | None:
+    """Return resolved paths of git-tracked files under skills/, or None outside git."""
+    try:
+        proc = subprocess.run(
+            ["git", "ls-files", "-z", "skills"],
+            cwd=root,
+            capture_output=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    if proc.returncode != 0 or not proc.stdout:
+        return None
+    entries = proc.stdout.decode("utf-8", errors="surrogateescape").split("\0")
+    tracked = {(root / rel).resolve() for rel in entries if rel}
+    return {p for p in tracked if p.is_file()}
+
+
 def render_layout() -> str:
+    tracked = _git_tracked_skill_files(ROOT)
     out = ["skills/"]
     for skill_dir in sorted(p for p in SKILLS_DIR.iterdir() if p.is_dir()):
         if skill_dir.name.startswith("."):
             continue
+        skill_resolved = skill_dir.resolve()
+        if tracked is not None and not any(skill_resolved in f.parents for f in tracked):
+            continue
         out.append(f"  {skill_dir.name}/")
         top_files = sorted(
-            p.name for p in skill_dir.iterdir() if p.is_file() and not p.name.startswith(".")
+            p.name
+            for p in skill_dir.iterdir()
+            if p.is_file()
+            and not p.name.startswith(".")
+            and (tracked is None or p.resolve() in tracked)
         )
         # Entry point first: it is the file the table links to.
         top_files = sorted(top_files, key=lambda n: (n != "SKILL.md", n))
         out.extend(f"    {n}" for n in top_files)
-        subdirs = sorted(p for p in skill_dir.iterdir() if p.is_dir())
-        subdirs = [p for p in subdirs if not p.name.startswith(".")]
-        width = max([len(p.name) + 1 for p in subdirs] + [0])
-        for sub in subdirs:
+        raw_subdirs = sorted(
+            p for p in skill_dir.iterdir() if p.is_dir() and not p.name.startswith(".")
+        )
+        subdir_counts: list[tuple[Path, int]] = []
+        for sub in raw_subdirs:
             count = sum(
-                1 for p in sub.rglob("*") if p.is_file() and not any(
-                    part.startswith(".") or part == "__pycache__" for part in p.relative_to(sub).parts
+                1
+                for p in sub.rglob("*")
+                if p.is_file()
+                and (tracked is None or p.resolve() in tracked)
+                and not any(
+                    part.startswith(".") or part == "__pycache__"
+                    for part in p.relative_to(sub).parts
                 )
             )
+            if tracked is not None and count == 0:
+                continue
+            subdir_counts.append((sub, count))
+        width = max([len(sub.name) + 1 for sub, _ in subdir_counts] + [0])
+        for sub, count in subdir_counts:
             noun = "file" if count == 1 else "files"
             out.append(f"    {(sub.name + '/').ljust(width)} # {count} {noun}")
     return "```\n" + "\n".join(out) + "\n```"

@@ -32,6 +32,9 @@ SECRET_PATTERNS = [
     (re.compile(r"sk-[a-zA-Z0-9_-]{20,}"), "OpenAI/gateway API key pattern"),
     (re.compile(r"ghp_[a-zA-Z0-9]{30,}"), "GitHub personal access token"),
     (re.compile(r"github_pat_[a-zA-Z0-9_]{60,}"), "Fine-grained GitHub token"),
+    (re.compile(r"AIza[0-9A-Za-z_-]{35}"), "Google/Gemini API key"),
+    (re.compile(r"AKIA[0-9A-Z]{16}"), "AWS access key ID"),
+    (re.compile(r"glpat-[0-9A-Za-z_-]{20,}"), "GitLab personal access token"),
 ]
 
 # Eval fixtures may deliberately hold fake credentials so scanners can be
@@ -101,9 +104,9 @@ def _is_ignored_rel_path(path: Path, skill_dir: Path) -> bool:
     )
 
 
-def check_secrets(skill_dir: Path, issues: list):
-    for path in skill_dir.rglob("*"):
-        if not path.is_file() or _is_ignored_rel_path(path, skill_dir):
+def check_secrets(base_dir: Path, issues: list):
+    for path in base_dir.rglob("*"):
+        if not path.is_file() or _is_ignored_rel_path(path, base_dir):
             continue
         try:
             content = path.read_text(encoding="utf-8", errors="ignore")
@@ -114,13 +117,16 @@ def check_secrets(skill_dir: Path, issues: list):
             for line in content.splitlines()[:5]
         ):
             continue
+        rel_display = path.relative_to(ROOT) if ROOT in path.parents else path
         for pattern, label in SECRET_PATTERNS:
             if pattern.search(content):
-                issues.append(f"{path.relative_to(ROOT)}: possible leaked credential ({label})")
+                issues.append(f"{rel_display}: possible leaked credential ({label})")
 
 def check_relative_references(skill_dir: Path, issues: list):
     """Ensure explicit relative path references inside skill files point to real targets."""
-    path_pattern = re.compile(r"`((?:references|scripts|assets)/[a-zA-Z0-9_\-\./]+)`")
+    path_pattern = re.compile(
+        r"`((?:references|scripts|assets|fleet-ops|evals)/[a-zA-Z0-9_\-\./]+)`"
+    )
     link_pattern = re.compile(r"\[(?:[^\]]+)\]\((?!https?://|#|mailto:)([^\)]+)\)")
 
     for path in skill_dir.rglob("*.md"):
@@ -142,9 +148,10 @@ def check_relative_references(skill_dir: Path, issues: list):
         # Check backtick path mentions like `references/foo.md` or `scripts/bar.py`
         for match in path_pattern.finditer(content):
             target_str = match.group(1).strip()
+            if target_str.endswith((".example", ".template", ".local.json")):
+                continue
             resolved = (skill_dir / target_str).resolve()
             if not resolved.exists():
-                # Allow examples/templates that end in .example / .template
                 issues.append(
                     f"{path.relative_to(ROOT)}: referenced path `{target_str}` does not exist in skill"
                 )
@@ -169,6 +176,10 @@ def main():
         check_frontmatter(skill_dir, skill_md, issues)
         check_secrets(skill_dir, issues)
         check_relative_references(skill_dir, issues)
+
+    for extra_dir in (ROOT / "docs", ROOT / "scripts"):
+        if extra_dir.is_dir():
+            check_secrets(extra_dir, issues)
 
     if issues:
         print("Skill check failed:\n")
