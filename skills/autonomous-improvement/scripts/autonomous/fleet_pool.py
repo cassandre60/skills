@@ -59,6 +59,21 @@ def _keep_matches(model_id: str, keep: Dict[str, Any]) -> bool:
     return True
 
 
+_PREFERENCE_ORDER = {"preferred": 0, "standard": 1, "fallback": 2}
+
+
+def _preference_rank(preference: str) -> int:
+    """Ladder rank within a tier: preferred first, then standard, then fallback."""
+    return _PREFERENCE_ORDER.get(preference, 1)
+
+
+def _pref_matches(model_id: str, name: str) -> bool:
+    """A preference names a model: the exact id, or the id carrying any
+    '/'-prefix. Owner-facing lists (e.g. ChessSRS's) carry bare names of
+    prefixed ids like `opencode/beam-free`."""
+    return model_id == name or model_id.endswith("/" + name)
+
+
 def _resolve_model_pool(
     cfg: Dict[str, Any]
 ) -> Tuple[List[str], List[Dict[str, str]], List[str]]:
@@ -68,7 +83,9 @@ def _resolve_model_pool(
     premium model the owner did not list is unreachable. Dynamic sources are
     mechanisms configured by the owner, never hardcoded lists. Returns
     (ordered ids, annotations, warnings); free tier first, then premium in
-    listed order.
+    listed order, and within each tier preferred before standard before
+    fallback. Preferences come from `entries[].preference` (static) and
+    `dynamic[].model_preferences.preferred`/`.fallback` (dynamic).
     """
     pool = (cfg.get("fleet") or {}).get("model_pool") or {}
     if not isinstance(pool, dict):
@@ -77,15 +94,56 @@ def _resolve_model_pool(
     warnings: List[str] = []
     free: List[str] = []
     premium: List[str] = []
+    prefs: Dict[str, str] = {}
 
-    def add(entry_id: str, tier: str, source: str, note: str = "") -> None:
+    def add(
+        entry_id: str,
+        tier: str,
+        source: str,
+        note: str = "",
+        preference: str = "standard",
+    ) -> None:
         if any(a["id"] == entry_id for a in annotations):
             return
-        record = {"id": entry_id, "tier": tier, "source": source}
+        if preference not in _PREFERENCE_ORDER:
+            warnings.append(
+                f"model_pool entry {entry_id!r}: invalid preference {preference!r}; "
+                "use preferred, standard, or fallback"
+            )
+            preference = "standard"
+        record: Dict[str, str] = {
+            "id": entry_id,
+            "tier": tier,
+            "source": source,
+            "preference": preference,
+        }
         if note:
             record["note"] = note
         annotations.append(record)
+        prefs[entry_id] = preference
         (free if tier == "free" else premium).append(entry_id)
+
+    def dynamic_preference(entry_id: str, src: Dict[str, Any]) -> str:
+        """Preference from `dynamic[].model_preferences.preferred`/`.fallback`:
+        an entry in the preferred list beats one in the fallback list;
+        anything else (or no preference data) is standard."""
+        pref_map = src.get("model_preferences")
+        if not isinstance(pref_map, dict):
+            return "standard"
+        for key, value in (("preferred", "preferred"), ("fallback", "fallback")):
+            names = pref_map.get(key)
+            if not isinstance(names, (list, tuple)):
+                warnings.append(
+                    f"dynamic source {src.get('source')!r}: model_preferences.{key} "
+                    "must be a list of model ids; ignored"
+                )
+                continue
+            if any(
+                isinstance(name, str) and _pref_matches(entry_id, name)
+                for name in names
+            ):
+                return value
+        return "standard"
 
     for entry in pool.get("entries") or []:
         if not isinstance(entry, dict) or not entry.get("id"):
@@ -96,6 +154,7 @@ def _resolve_model_pool(
             str(entry.get("tier") or "premium"),
             "static",
             str(entry.get("note") or ""),
+            preference=str(entry.get("preference") or "standard"),
         )
 
     for src in pool.get("dynamic") or []:
@@ -112,11 +171,19 @@ def _resolve_model_pool(
                 continue
             for entry_id in _opencode_model_ids(warnings):
                 if _keep_matches(entry_id, keep):
-                    add(entry_id, "free", f"dynamic:{name}")
+                    add(
+                        entry_id,
+                        "free",
+                        f"dynamic:{name}",
+                        preference=dynamic_preference(entry_id, src),
+                    )
         else:
             warnings.append(f"unknown dynamic source {name!r}; skipped")
 
-    return free + premium, annotations, warnings
+    def by_preference(ids: List[str]) -> List[str]:
+        return sorted(ids, key=lambda eid: _preference_rank(prefs.get(eid, "standard")))
+
+    return by_preference(free) + by_preference(premium), annotations, warnings
 
 
 def cmd_pool(args: argparse.Namespace) -> int:
@@ -164,6 +231,8 @@ def cmd_pool(args: argparse.Namespace) -> int:
         )
     for record in annotations:
         line = f"{record['id']}  tier={record['tier']}  source={record['source']}"
+        if record.get("preference"):
+            line += f"  pref={record['preference']}"
         if record.get("note"):
             line += f"  note={record['note']}"
         eprint(line)

@@ -396,7 +396,8 @@ class SourceGuard:
             self._previous[signum] = signal.signal(signum, self._on_signal)
         atexit.register(self.restore)
         # Ready marker after the backup is in place so tests/tools can detect
-        # mutations can begin. Prevents vacuous-abort assertions in the SIGTERM/SIGKILL tests.
+        # mutations can begin. Prevents vacuous-abort assertions in the
+        # SIGTERM/SIGKILL tests.
         self.ready.write_text("ready\n", encoding="utf-8")
         atexit.register(lambda: self.ready.unlink(missing_ok=True))
         return self

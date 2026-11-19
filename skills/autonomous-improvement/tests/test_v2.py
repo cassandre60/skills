@@ -5332,7 +5332,101 @@ class ModelPoolTests(RepoTestCase):
         self.assertEqual(ladder.returncode, 0, ladder.stdout + ladder.stderr)
         self.assertEqual(ladder.stdout.split(), ["x/y"])
         payload = self.pool_json(repo, env, "show")
-        self.assertEqual(payload["entries"], [{"id": "x/y", "tier": "premium", "source": "static"}])
+        expected_entry = {
+            "id": "x/y",
+            "tier": "premium",
+            "source": "static",
+            "preference": "standard",
+        }
+        self.assertEqual(payload["entries"], [expected_entry])
+
+    def test_pool_ladder_orders_preferred_standard_fallback_within_tier(self):
+        repo, env = self.stage(
+            {
+                "fleet": {
+                    "model_pool": {
+                        "entries": [
+                            {"id": "std", "tier": "free"},
+                            {"id": "fb", "tier": "free", "preference": "fallback"},
+                            {"id": "pref", "tier": "free", "preference": "preferred"},
+                            {"id": "prd", "tier": "premium", "preference": "preferred"},
+                            {"id": "pstd", "tier": "premium"},
+                            {"id": "pfb", "tier": "premium", "preference": "fallback"},
+                        ]
+                    }
+                }
+            }
+        )
+        payload = self.pool_json(repo, env, "show")
+        self.assertEqual(payload["warnings"], [])
+        # Free tier first; within each tier: preferred, standard, fallback.
+        self.assertEqual(payload["ladder"], ["pref", "std", "fb", "prd", "pstd", "pfb"])
+
+    MODELS_STUB_PREFS = (
+        "#!/bin/sh\n"
+        "printf '%s\\n' opencode/a-free opencode/beam-free "
+        "opencode/b-free opencode/c-free\n"
+    )
+
+    def test_pool_dynamic_model_preferences_order_the_ladder(self):
+        repo, env = self.stage(
+            {
+                "fleet": {
+                    "model_pool": {
+                        "dynamic": [
+                            {
+                                "source": "opencode-models",
+                                "keep": {"provider": "opencode"},
+                                "model_preferences": {
+                                    "preferred": ["beam-free"],
+                                    "fallback": ["b-free"],
+                                },
+                            }
+                        ]
+                    }
+                }
+            },
+            opencode_stub=self.MODELS_STUB_PREFS,
+        )
+        payload = self.pool_json(repo, env, "show")
+        self.assertEqual(payload["warnings"], [])
+        # beam-free matches the prefixed id via suffix; b-free is fallback;
+        # a-free/c-free stay standard.
+        self.assertEqual(
+            payload["ladder"],
+            [
+                "opencode/beam-free",
+                "opencode/a-free",
+                "opencode/c-free",
+                "opencode/b-free",
+            ],
+        )
+        prefs = {a["id"]: a["preference"] for a in payload["entries"]}
+        self.assertEqual(
+            prefs,
+            {
+                "opencode/a-free": "standard",
+                "opencode/beam-free": "preferred",
+                "opencode/b-free": "fallback",
+                "opencode/c-free": "standard",
+            },
+        )
+
+    def test_pool_invalid_preference_warns_and_defaults_to_standard(self):
+        repo, env = self.stage(
+            {
+                "fleet": {
+                    "model_pool": {
+                        "entries": [{"id": "x", "tier": "free", "preference": "bogus"}]
+                    }
+                }
+            }
+        )
+        payload = self.pool_json(repo, env, "show")
+        self.assertEqual(len(payload["warnings"]), 1)
+        self.assertIn("invalid preference", payload["warnings"][0])
+        self.assertEqual(payload["ladder"], ["x"])
+        self.assertEqual(payload["entries"][0]["preference"], "standard")
 
     def test_pool_dynamic_source_without_keep_rules_keeps_nothing(self):
         repo, env = self.stage(

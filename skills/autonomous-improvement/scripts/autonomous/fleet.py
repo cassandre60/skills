@@ -1404,6 +1404,12 @@ def cmd_wake(args: argparse.Namespace) -> int:
                     )
                     record["model"] = model or None
                     launched = True
+                    # Note the launched model in the prompt the run sees.
+                    with open(prompt_file, "a", encoding="utf-8") as handle:
+                        handle.write(
+                            f"\nModel launched for this wake: "
+                            f"{record['model'] or 'default'}\n"
+                        )
                     break
                 if OUTAGE_PATTERN.search(combined_out):
                     eprint(
@@ -1446,6 +1452,7 @@ def cmd_wake(args: argparse.Namespace) -> int:
     print(
         f"[*] Wake recorded: {record['action']}"
         + (f" ({', '.join(brain['reasons'])})" if brain["reasons"] else "")
+        + (f"; model: {record['model']}" if record.get("model") else "")
     )
     return exit_code
 
