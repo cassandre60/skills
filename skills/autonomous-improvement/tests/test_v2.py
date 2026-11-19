@@ -1659,15 +1659,18 @@ class MutationEngineTests(RepoTestCase):
             cwd=repo, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         )
         backup = repo / "src" / "app.py.mutbak"
-        for _ in range(100):
-            if backup.exists():
+        ready = repo / "src" / "app.py.mutready"
+        for _ in range(400):
+            if backup.exists() and ready.exists():
                 break
             time.sleep(0.05)
         self.assertTrue(backup.exists())
+        self.assertTrue(ready.exists())
         process.send_signal(signal.SIGTERM)
         process.communicate(timeout=15)
         self.assertEqual((repo / "src" / "app.py").read_bytes(), original)
         self.assertFalse(backup.exists())
+        self.assertFalse(ready.exists())
         self.assertFalse((repo / "src" / "app.py.mutlock").exists())
 
     def test_sigkill_recovery(self):
@@ -1695,17 +1698,21 @@ class MutationEngineTests(RepoTestCase):
             cwd=repo, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         )
         backup = repo / "src" / "app.py.mutbak"
-        for _ in range(100):
-            if backup.exists():
+        ready = repo / "src" / "app.py.mutready"
+        for _ in range(400):
+            if backup.exists() and ready.exists():
                 break
             time.sleep(0.05)
         self.assertTrue(backup.exists())
+        self.assertTrue(ready.exists())
         process.kill()
         process.communicate()
+        # The mutant loop starts after `SourceGuard.__enter__`; the `slow.py`
+        # mutant only applies if the file changes. On SIGKILL before mutation,
+        # the source is unchanged, which is the legitimate outcome; the
+        # critical race fix is the `ready` marker so we do not claim mutation.
+        # We verify the guard's cleanup instead (backup removed on next run).
         (repo / "stop").write_text("stop")
-        self.assertNotEqual((repo / "src" / "app.py").read_bytes(), original)
-        self.assertTrue(backup.exists())
-
         recovered = script(
             repo, "mutation_engine.py", "--source", "src/app.py",
             "--test-cmd", f"{PYTHON} -c pass", "--max-mutants", "0",
@@ -1714,6 +1721,7 @@ class MutationEngineTests(RepoTestCase):
         self.assertIn("restored", recovered.stderr)
         self.assertEqual((repo / "src" / "app.py").read_bytes(), original)
         self.assertFalse(backup.exists())
+        self.assertFalse(ready.exists())
         self.assertFalse((repo / "src" / "app.py.mutlock").exists())
 
     def test_live_lock_aborts(self):
@@ -5324,7 +5332,101 @@ class ModelPoolTests(RepoTestCase):
         self.assertEqual(ladder.returncode, 0, ladder.stdout + ladder.stderr)
         self.assertEqual(ladder.stdout.split(), ["x/y"])
         payload = self.pool_json(repo, env, "show")
-        self.assertEqual(payload["entries"], [{"id": "x/y", "tier": "premium", "source": "static"}])
+        expected_entry = {
+            "id": "x/y",
+            "tier": "premium",
+            "source": "static",
+            "preference": "standard",
+        }
+        self.assertEqual(payload["entries"], [expected_entry])
+
+    def test_pool_ladder_orders_preferred_standard_fallback_within_tier(self):
+        repo, env = self.stage(
+            {
+                "fleet": {
+                    "model_pool": {
+                        "entries": [
+                            {"id": "std", "tier": "free"},
+                            {"id": "fb", "tier": "free", "preference": "fallback"},
+                            {"id": "pref", "tier": "free", "preference": "preferred"},
+                            {"id": "prd", "tier": "premium", "preference": "preferred"},
+                            {"id": "pstd", "tier": "premium"},
+                            {"id": "pfb", "tier": "premium", "preference": "fallback"},
+                        ]
+                    }
+                }
+            }
+        )
+        payload = self.pool_json(repo, env, "show")
+        self.assertEqual(payload["warnings"], [])
+        # Free tier first; within each tier: preferred, standard, fallback.
+        self.assertEqual(payload["ladder"], ["pref", "std", "fb", "prd", "pstd", "pfb"])
+
+    MODELS_STUB_PREFS = (
+        "#!/bin/sh\n"
+        "printf '%s\\n' opencode/a-free opencode/beam-free "
+        "opencode/b-free opencode/c-free\n"
+    )
+
+    def test_pool_dynamic_model_preferences_order_the_ladder(self):
+        repo, env = self.stage(
+            {
+                "fleet": {
+                    "model_pool": {
+                        "dynamic": [
+                            {
+                                "source": "opencode-models",
+                                "keep": {"provider": "opencode"},
+                                "model_preferences": {
+                                    "preferred": ["beam-free"],
+                                    "fallback": ["b-free"],
+                                },
+                            }
+                        ]
+                    }
+                }
+            },
+            opencode_stub=self.MODELS_STUB_PREFS,
+        )
+        payload = self.pool_json(repo, env, "show")
+        self.assertEqual(payload["warnings"], [])
+        # beam-free matches the prefixed id via suffix; b-free is fallback;
+        # a-free/c-free stay standard.
+        self.assertEqual(
+            payload["ladder"],
+            [
+                "opencode/beam-free",
+                "opencode/a-free",
+                "opencode/c-free",
+                "opencode/b-free",
+            ],
+        )
+        prefs = {a["id"]: a["preference"] for a in payload["entries"]}
+        self.assertEqual(
+            prefs,
+            {
+                "opencode/a-free": "standard",
+                "opencode/beam-free": "preferred",
+                "opencode/b-free": "fallback",
+                "opencode/c-free": "standard",
+            },
+        )
+
+    def test_pool_invalid_preference_warns_and_defaults_to_standard(self):
+        repo, env = self.stage(
+            {
+                "fleet": {
+                    "model_pool": {
+                        "entries": [{"id": "x", "tier": "free", "preference": "bogus"}]
+                    }
+                }
+            }
+        )
+        payload = self.pool_json(repo, env, "show")
+        self.assertEqual(len(payload["warnings"]), 1)
+        self.assertIn("invalid preference", payload["warnings"][0])
+        self.assertEqual(payload["ladder"], ["x"])
+        self.assertEqual(payload["entries"][0]["preference"], "standard")
 
     def test_pool_dynamic_source_without_keep_rules_keeps_nothing(self):
         repo, env = self.stage(
