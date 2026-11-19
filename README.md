@@ -26,6 +26,7 @@ Or copy the folder you want into wherever your agent reads skills from
 | **[context-optimization](./skills/context-optimization/SKILL.md)** | Measure where an agent's per-turn context tokens go and cut what the machine owns — bill one model turn's fixed cost (skill catalog, instruction baseline files, harness catalogs, tool declarations, date/env tail) from any capture source, then prove every saving with a fresh successful capture. Levers — park or prune skills, compress instruction files, remove duplicates, pick lite model/thinking variants, keep the cacheable prefix stable. Sources — CLIProxyAPI request-log captures (find captures, verify the logging switch, render a readable transcript/system-prompt/raw bundle), raw OpenAI-compatible request/response JSON pairs from any gateway or session log, or already-rendered system-prompt and transcript Markdown. Use when someone asks why a trivial prompt costs 15K tokens or 40 seconds, which skills or instructions dominate context, how to trim agent context and prove the saving, where CLIProxyAPI logs are, why logging-to-file is not capturing request bodies, how to read a v1-chat-completions or error-v1-chat-completions capture, how to extract a system prompt or model reply from proxy logs, or how to diagnose request-log, auth-dir, and management log settings. |
 | **[fork-upstream-sync](./skills/fork-upstream-sync/SKILL.md)** | Track, audit, filter, and synchronize changes from an upstream repository into a fork with a machine-readable negative ledger and 0-token deterministic pre-filtering. Use whenever working in a git fork, syncing updates from parent/upstream repos, backporting upstream commits or PRs, triaging upstream diffs, setting up automated weekly upstream alerts, or when an agent keeps re-auditing already-rejected upstream changes due to state amnesia. |
 | **[mobile-app-to-web-demo](./skills/mobile-app-to-web-demo/SKILL.md)** | Port a real mobile app into an interactive demo embedded in a web page, generated from the app's own code so it cannot drift. Use when a user wants a site to show a working demo of their mobile app (Android/iOS/Flutter/React Native), complains the demo "doesn't look like the app", or asks to embed the real app in a website. |
+| **[phone-debugging](./skills/phone-debugging/SKILL.md)** | Diagnose a phone that will not connect, transfer files, charge, pair, or talk to Linux desktop tools — especially Android USB/MTP, ADB, fastboot, Bluetooth, Wi-Fi, and desktop integration. Use when the phone is missing from Thunar, Dolphin, or another file manager, `lsusb` sees it but no volume mounts, `gio mount` fails with "Unable to open MTP device", `mtp-detect` reports the USB interface is busy, `adb devices` shows `unauthorized` or no device, charging is unreliable, Bluetooth pairing fails, or KDE Connect, LocalSend, scrcpy, or a hotspot cannot be discovered. |
 <!-- SKILLS:END -->
 
 ## What the first two have in common
@@ -93,6 +94,8 @@ skills/
     scripts/ # 1 file
     tests/   # 1 file
   mobile-app-to-web-demo/
+    SKILL.md
+  phone-debugging/
     SKILL.md
 ```
 <!-- LAYOUT:END -->
