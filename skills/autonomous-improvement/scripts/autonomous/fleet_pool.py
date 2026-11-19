@@ -69,8 +69,8 @@ def _preference_rank(preference: str) -> int:
 
 def _pref_matches(model_id: str, name: str) -> bool:
     """A preference names a model: the exact id, or the id carrying any
-    '/'-prefix. Owner-facing lists (e.g. ChessSRS's) carry bare names of
-    prefixed ids like `opencode/beam-free`."""
+    '/'-prefix. Owner-facing lists carry bare names of prefixed ids like
+    `opencode/beam-free`."""
     return model_id == name or model_id.endswith("/" + name)
 
 
