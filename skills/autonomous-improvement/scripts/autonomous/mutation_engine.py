@@ -373,6 +373,7 @@ class SourceGuard:
         self.path = path
         self.bak = Path(str(path) + ".mutbak")
         self.lock = Path(str(path) + ".mutlock")
+        self.ready = Path(str(path) + ".mutready")
         self._previous: Dict[int, Any] = {}
 
     def _on_signal(self, signum: int, frame: Any) -> None:
@@ -394,6 +395,10 @@ class SourceGuard:
         for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
             self._previous[signum] = signal.signal(signum, self._on_signal)
         atexit.register(self.restore)
+        # Ready marker after the backup is in place so tests/tools can detect
+        # mutations can begin. Prevents vacuous-abort assertions in the SIGTERM/SIGKILL tests.
+        self.ready.write_text("ready\n", encoding="utf-8")
+        atexit.register(lambda: self.ready.unlink(missing_ok=True))
         return self
 
     def restore(self) -> None:
@@ -401,6 +406,7 @@ class SourceGuard:
             self.path.write_bytes(self.bak.read_bytes())
             self.bak.unlink(missing_ok=True)
             self.lock.unlink(missing_ok=True)
+        self.ready.unlink(missing_ok=True)
 
     def __exit__(self, *exc: Any) -> bool:
         self.restore()
@@ -412,7 +418,9 @@ class SourceGuard:
 def recover_stale(path: Path) -> bool:
     bak = Path(str(path) + ".mutbak")
     lock = Path(str(path) + ".mutlock")
+    ready = Path(str(path) + ".mutready")
     if not bak.exists() and not lock.exists():
+        ready.unlink(missing_ok=True)
         return False
     if lock.exists():
         try:
@@ -425,9 +433,11 @@ def recover_stale(path: Path) -> bool:
         path.write_bytes(bak.read_bytes())
         bak.unlink()
         lock.unlink(missing_ok=True)
+        ready.unlink(missing_ok=True)
         print(f"[!] restored {path} from stale backup", file=sys.stderr)
         return True
     lock.unlink(missing_ok=True)
+    ready.unlink(missing_ok=True)
     return False
 
 

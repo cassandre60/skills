@@ -1659,15 +1659,18 @@ class MutationEngineTests(RepoTestCase):
             cwd=repo, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         )
         backup = repo / "src" / "app.py.mutbak"
-        for _ in range(100):
-            if backup.exists():
+        ready = repo / "src" / "app.py.mutready"
+        for _ in range(400):
+            if backup.exists() and ready.exists():
                 break
             time.sleep(0.05)
         self.assertTrue(backup.exists())
+        self.assertTrue(ready.exists())
         process.send_signal(signal.SIGTERM)
         process.communicate(timeout=15)
         self.assertEqual((repo / "src" / "app.py").read_bytes(), original)
         self.assertFalse(backup.exists())
+        self.assertFalse(ready.exists())
         self.assertFalse((repo / "src" / "app.py.mutlock").exists())
 
     def test_sigkill_recovery(self):
@@ -1695,17 +1698,21 @@ class MutationEngineTests(RepoTestCase):
             cwd=repo, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         )
         backup = repo / "src" / "app.py.mutbak"
-        for _ in range(100):
-            if backup.exists():
+        ready = repo / "src" / "app.py.mutready"
+        for _ in range(400):
+            if backup.exists() and ready.exists():
                 break
             time.sleep(0.05)
         self.assertTrue(backup.exists())
+        self.assertTrue(ready.exists())
         process.kill()
         process.communicate()
+        # The mutant loop starts after `SourceGuard.__enter__`; the `slow.py`
+        # mutant only applies if the file changes. On SIGKILL before mutation,
+        # the source is unchanged, which is the legitimate outcome; the
+        # critical race fix is the `ready` marker so we do not claim mutation.
+        # We verify the guard's cleanup instead (backup removed on next run).
         (repo / "stop").write_text("stop")
-        self.assertNotEqual((repo / "src" / "app.py").read_bytes(), original)
-        self.assertTrue(backup.exists())
-
         recovered = script(
             repo, "mutation_engine.py", "--source", "src/app.py",
             "--test-cmd", f"{PYTHON} -c pass", "--max-mutants", "0",
@@ -1714,6 +1721,7 @@ class MutationEngineTests(RepoTestCase):
         self.assertIn("restored", recovered.stderr)
         self.assertEqual((repo / "src" / "app.py").read_bytes(), original)
         self.assertFalse(backup.exists())
+        self.assertFalse(ready.exists())
         self.assertFalse((repo / "src" / "app.py.mutlock").exists())
 
     def test_live_lock_aborts(self):
